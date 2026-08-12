@@ -14,6 +14,7 @@ import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE
 import type { RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
+import { threadEventKey, threadEventPrefix } from "./event-key.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, Store, type Message } from "./store.ts";
@@ -129,8 +130,14 @@ function broadcast(payload: unknown) {
 // ── server-side event folding (upstream's ingestion worker, miniature) ──
 // The canonical stream is the source of truth; the persisted transcript
 // and every client view are projections of it.
-const toolMessageByItem = new Map<string, string>(); // itemId -> messageId
-const askMessageByRequest = new Map<string, string>(); // requestId -> messageId
+const toolMessageByItem = new Map<string, string>(); // threadId + itemId -> messageId
+const askMessageByRequest = new Map<string, string>(); // threadId + requestId -> messageId
+
+function clearThreadEventState(threadId: string) {
+  const prefix = threadEventPrefix(threadId);
+  for (const key of toolMessageByItem.keys()) if (key.startsWith(prefix)) toolMessageByItem.delete(key);
+  for (const key of askMessageByRequest.keys()) if (key.startsWith(prefix)) askMessageByRequest.delete(key);
+}
 
 bus.subscribe((event: RuntimeEvent) => {
   broadcast({ kind: "runtime", event });
@@ -153,13 +160,14 @@ bus.subscribe((event: RuntimeEvent) => {
       if (event.itemType === "assistant_text") {
         pushMessage({ role: "bot", kind: "text", text: event.text });
       } else if (event.itemType === "tool" && event.itemId) {
-        const messageId = toolMessageByItem.get(event.itemId);
+        const key = threadEventKey(event.threadId, event.itemId);
+        const messageId = toolMessageByItem.get(key);
         if (messageId) {
           const patched = store.patchMessage(event.threadId, messageId, {
             tool: { name: store.messagesFor(event.threadId).find((m) => m.id === messageId)?.tool?.name ?? "tool", ok: event.ok },
           });
           if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
-          toolMessageByItem.delete(event.itemId);
+          toolMessageByItem.delete(key);
         }
         // the bot just finished acting — refresh its screen preview now
         pokeScreenPoller(bot.id);
@@ -168,7 +176,7 @@ bus.subscribe((event: RuntimeEvent) => {
     case "item.started":
       if (event.itemType === "tool") {
         const message = pushMessage({ role: "bot", kind: "activity", tool: { name: event.title ?? "tool" } });
-        if (event.itemId) toolMessageByItem.set(event.itemId, message.id);
+        if (event.itemId) toolMessageByItem.set(threadEventKey(event.threadId, event.itemId), message.id);
       }
       break;
     case "request.opened": {
@@ -183,11 +191,12 @@ bus.subscribe((event: RuntimeEvent) => {
           requestId: event.requestId,
         },
       });
-      if (event.requestId) askMessageByRequest.set(event.requestId, message.id);
+      if (event.requestId) askMessageByRequest.set(threadEventKey(event.threadId, event.requestId), message.id);
       break;
     }
     case "request.resolved": {
-      const messageId = event.requestId ? askMessageByRequest.get(event.requestId) : null;
+      const key = event.requestId ? threadEventKey(event.threadId, event.requestId) : null;
+      const messageId = key ? askMessageByRequest.get(key) : null;
       if (messageId) {
         const existing = store.messagesFor(event.threadId).find((m) => m.id === messageId);
         if (existing?.card && !existing.card.answered) {
@@ -196,7 +205,7 @@ bus.subscribe((event: RuntimeEvent) => {
           });
           if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
         }
-        if (event.requestId) askMessageByRequest.delete(event.requestId);
+        if (key) askMessageByRequest.delete(key);
       }
       break;
     }
@@ -210,6 +219,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (frame) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
       store.patchBot(bot.id, { busy: false, unread: true });
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
+      clearThreadEventState(event.threadId);
       break;
     }
   }
@@ -422,6 +432,14 @@ async function reloadProviders() {
   await registry.disposeAll();
   await registry.load(instanceConfigs(cfg));
   bus.attach(registry.instances());
+  // disposeAll terminates old turns after the bus is detached, so their
+  // completion events cannot clear persisted UI state for us.
+  for (const bot of store.bots) {
+    if (!bot.busy) continue;
+    store.patchBot(bot.id, { busy: false });
+    clearThreadEventState(bot.threadId);
+    broadcast({ kind: "bot", bot: store.bot(bot.id) });
+  }
 }
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────

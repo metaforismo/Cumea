@@ -2,7 +2,7 @@
 // --permission-prompt-tool (ported from agentcal's runPermissionProxy;
 // dedicated entry file, so there is no argv-dispatch fork-bomb hazard).
 // Forwards each ask over a unix socket to the broker living in the
-// OpenMausBot server and waits for the human's answer.
+// Cumea server and waits for the human's answer.
 //
 //   approve   — the CLI calls this for any tool use its permission mode
 //               would deny; the answer is the --permission-prompt-tool
@@ -18,7 +18,7 @@ const waiting = new Map();
 const conn = connect(socketPath);
 const dead = () => {
     for (const resolve of waiting.values()) {
-        resolve({ behavior: "deny", message: "OpenMausBot: permission broker unavailable — skip this action" });
+        resolve({ behavior: "deny", message: "Cumea: permission broker unavailable — skip this action" });
     }
     waiting.clear();
 };
@@ -48,7 +48,7 @@ const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 const TOOLS = [
     {
         name: "approve",
-        description: "Ask the OpenMausBot user whether a tool use is allowed",
+        description: "Ask the Cumea user whether a tool use is allowed",
         inputSchema: {
             type: "object",
             properties: {
@@ -84,7 +84,7 @@ async function handle(msg) {
             result: {
                 protocolVersion: msg.params?.protocolVersion ?? "2024-11-05",
                 capabilities: { tools: {} },
-                serverInfo: { name: "openmausbot-permissions", version: "1" },
+                serverInfo: { name: "cumea-permissions", version: "1" },
             },
         });
     }
@@ -125,7 +125,7 @@ async function handle(msg) {
                     updatedInput: args.input ?? {},
                     ...(answer.always && suggestions ? { updatedPermissions: suggestions } : {}),
                 }
-                : { behavior: "deny", message: answer.message || "Denied from OpenMausBot" });
+                : { behavior: "deny", message: answer.message || "Denied from Cumea" });
         return send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text }] } });
     }
     if (String(msg.method ?? "").startsWith("notifications/"))

@@ -24,15 +24,21 @@ const MODELS = {
         { id: "gpt-5.4", label: "GPT-5.4" },
     ],
 };
+const DEFAULT_RPC_TIMEOUT_MS = 60_000;
 function decodeConfig(raw) {
     const o = (raw ?? {});
+    if (o.rpcTimeoutMs !== undefined &&
+        (typeof o.rpcTimeoutMs !== "number" || !Number.isInteger(o.rpcTimeoutMs) || o.rpcTimeoutMs < 100 || o.rpcTimeoutMs > 300_000)) {
+        throw new Error("codex: rpcTimeoutMs must be an integer between 100 and 300000");
+    }
     return {
         cli: typeof o.cli === "string" ? o.cli : "codex",
         fullAuto: o.fullAuto === true,
+        rpcTimeoutMs: o.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
     };
 }
 const QUESTION_TIMEOUT_NOTE = "No answer was given — use your best judgment.";
-const DENY_TIMEOUT_NOTE = "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+const DENY_TIMEOUT_NOTE = "Cumea: nobody answered this permission request in time. Skip this action and finish what you can without it.";
 export const CodexDriver = {
     driverKind: DRIVER_KIND,
     metadata: { displayName: "Codex", supportsMultipleInstances: true },
@@ -82,7 +88,13 @@ export const CodexDriver = {
             };
             const request = (method, params) => new Promise((resolve, reject) => {
                 const id = nextId++;
-                rpcPending.set(id, { resolve, reject });
+                const timer = setTimeout(() => {
+                    if (!rpcPending.delete(id))
+                        return;
+                    reject(new Error(`${method} timed out after ${config.rpcTimeoutMs}ms`));
+                }, config.rpcTimeoutMs);
+                timer.unref?.();
+                rpcPending.set(id, { resolve, reject, timer });
                 send({ jsonrpc: "2.0", id, method, params });
             });
             const stop = () => {
@@ -101,9 +113,11 @@ export const CodexDriver = {
                     return;
                 state.settled = true;
                 for (const finish of [...asks.values()])
-                    finish("deny", "OpenMausBot: the turn ended");
-                for (const p of rpcPending.values())
+                    finish("deny", "Cumea: the turn ended");
+                for (const p of rpcPending.values()) {
+                    clearTimeout(p.timer);
                     p.reject(new Error("turn settled"));
+                }
                 rpcPending.clear();
                 active.delete(threadId);
                 emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost: null });
@@ -232,6 +246,7 @@ export const CodexDriver = {
                 }
             };
             let buf = "";
+            child.stdout.setEncoding("utf8");
             child.stdout.on("data", (chunk) => {
                 buf += chunk;
                 let nl;
@@ -252,6 +267,7 @@ export const CodexDriver = {
                         const pend = rpcPending.get(msg.id);
                         if (pend) {
                             rpcPending.delete(msg.id);
+                            clearTimeout(pend.timer);
                             msg.error ? pend.reject(new Error(msg.error.message ?? JSON.stringify(msg.error))) : pend.resolve(msg.result);
                         }
                     }
@@ -288,7 +304,7 @@ export const CodexDriver = {
             // handshake + kickoff; any refusal surfaces as failure, not a hang
             (async () => {
                 try {
-                    await request("initialize", { clientInfo: { name: "openmausbot", version: "1" } });
+                    await request("initialize", { clientInfo: { name: "cumea", version: "1" } });
                     send({ jsonrpc: "2.0", method: "initialized", params: {} });
                     const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
                     let codexThreadId = null;

@@ -2,9 +2,10 @@
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
 // one). messages-<threadId>.json holds the folded transcript.
-import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { readFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
+import { writeFileAtomic } from "./atomic.js";
 import { newId } from "./contracts.js";
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const messagesFile = (threadId) => join(DATA_DIR, `messages-${threadId}.json`);
@@ -35,7 +36,13 @@ export function mentionedBots(text, peers) {
         if (at > 0 && !/\s/.test(text[at - 1]))
             continue; // user@host, not a tag
         const rest = lower.slice(at + 1);
-        const hit = candidates.find((p) => rest.startsWith(p.name.toLowerCase()));
+        const hit = candidates.find((p) => {
+            const name = p.name.toLowerCase();
+            if (!rest.startsWith(name))
+                return false;
+            const next = rest.slice(name.length, name.length + 1);
+            return !next || !/[\p{L}\p{N}_]/u.test(next);
+        });
         if (hit && !found.includes(hit))
             found.push(hit);
     }
@@ -64,7 +71,7 @@ export class Store {
             b.busy = false;
     }
     saveBots() {
-        writeFileSync(BOTS_FILE, JSON.stringify(this.bots, null, 2));
+        writeFileAtomic(BOTS_FILE, JSON.stringify(this.bots, null, 2));
     }
     messagesFor(threadId) {
         let list = this.messages.get(threadId);
@@ -83,7 +90,7 @@ export class Store {
         const full = { id: newId(), at: Date.now(), ...message };
         const list = this.messagesFor(threadId);
         list.push(full);
-        writeFileSync(messagesFile(threadId), JSON.stringify(list, null, 2));
+        writeFileAtomic(messagesFile(threadId), JSON.stringify(list, null, 2));
         return full;
     }
     patchMessage(threadId, messageId, patch) {
@@ -92,7 +99,7 @@ export class Store {
         if (idx === -1)
             return null;
         list[idx] = { ...list[idx], ...patch, card: patch.card ?? list[idx].card };
-        writeFileSync(messagesFile(threadId), JSON.stringify(list, null, 2));
+        writeFileAtomic(messagesFile(threadId), JSON.stringify(list, null, 2));
         return list[idx];
     }
     bot(id) {
@@ -158,6 +165,6 @@ export class Store {
         if (this.bots.length)
             return;
         const bot = this.createBot();
-        this.patchBot(bot.id, { name: "Milind", color: "blue" });
+        this.patchBot(bot.id, { name: "Guide", color: "blue" });
     }
 }

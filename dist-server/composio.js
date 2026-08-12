@@ -22,7 +22,7 @@ function parseMcpResponse(text) {
 }
 export async function composioTool(cfg, name, args) {
     if (!cfg.composio?.key) {
-        throw new Error('no Composio key configured — add {"composio":{"key":"ck_…"}} to ~/.openmausbot/config.json');
+        throw new Error('no Composio key configured — add {"composio":{"key":"ck_…"}} to ~/.cumea/config.json');
     }
     const res = await fetch(cfg.composio.url || CONNECT_URL, {
         method: "POST",

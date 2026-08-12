@@ -35,7 +35,7 @@ export function createAcpDriver(support) {
     const DRIVER_KIND = support.driverKind;
     const SOURCE = support.nativeSource;
     const decodeConfig = decodeAcpConfig(support.defaultCli);
-    const DENY_TIMEOUT_NOTE = "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+    const DENY_TIMEOUT_NOTE = "Cumea: nobody answered this permission request in time. Skip this action and finish what you can without it.";
     return {
         driverKind: DRIVER_KIND,
         metadata: { displayName: support.displayName, supportsMultipleInstances: true },
@@ -271,6 +271,7 @@ export function createAcpDriver(support) {
                     }
                 };
                 let buf = "";
+                child.stdout.setEncoding("utf8");
                 child.stdout.on("data", (chunk) => {
                     buf += chunk;
                     let nl;

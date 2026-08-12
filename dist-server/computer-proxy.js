@@ -12,8 +12,8 @@
 //
 // stdout is the MCP channel — never console.log here.
 const BOX_API = "https://ascii.dev/api/box/v1";
-const boxId = process.env.OGB_BOX_ID ?? "";
-const token = process.env.OGB_BOX_TOKEN ?? "";
+const boxId = process.env.CUMEA_BOX_ID ?? "";
+const token = process.env.CUMEA_BOX_TOKEN ?? "";
 async function runOnBox(command, timeoutMs = 60_000) {
     const res = await fetch(`${BOX_API}/boxes/${boxId}/commands`, {
         method: "POST",
@@ -53,7 +53,7 @@ const X = "export DISPLAY=${DISPLAY:-:0}; ";
 const SHOT_WIDTH = 1280;
 const SHOT_CMD = [
     "export DISPLAY=${DISPLAY:-:0}",
-    "f=/tmp/ogb-shot.png",
+    "f=/tmp/cumea-shot.png",
     'scrot -o "$f" 2>/dev/null || import -window root "$f" 2>/dev/null || ffmpeg -y -f x11grab -i "$DISPLAY" -frames:v 1 "$f" >/dev/null 2>&1',
     `command -v convert >/dev/null && convert "$f" -resize ${SHOT_WIDTH}x "$f" 2>/dev/null || true`,
     'test -s "$f" && echo captured',
@@ -135,7 +135,7 @@ async function call(id, name, args) {
         if (!/captured/.test(out.stdout)) {
             return text(id, `screenshot failed: ${out.stderr.slice(0, 200) || "capture produced no file"}`, true);
         }
-        const data = await readBoxFile("/tmp/ogb-shot.png");
+        const data = await readBoxFile("/tmp/cumea-shot.png");
         if (!data)
             return text(id, "screenshot failed: could not read the frame back", true);
         return send({
@@ -219,7 +219,7 @@ async function handle(msg) {
             result: {
                 protocolVersion: msg.params?.protocolVersion ?? "2024-11-05",
                 capabilities: { tools: {} },
-                serverInfo: { name: "openmausbot-computer", version: "2" },
+                serverInfo: { name: "cumea-computer", version: "2" },
             },
         });
     }
