@@ -11,9 +11,9 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import type { MausColor, MausExpression, MausMotion } from "@/lib/mascot";
+import type { CumeaColor, CumeaExpression, CumeaMotion } from "@/lib/mascot";
 
-export type { MausColor } from "@/lib/mascot";
+export type { CumeaColor } from "@/lib/mascot";
 
 export interface OptionCardData {
   title: string;
@@ -51,8 +51,8 @@ export interface Bot {
   title: string;
   description: string;
   notifications: boolean;
-  color: MausColor;
-  mascotExpression?: MausExpression | null;
+  color: CumeaColor;
+  mascotExpression?: CumeaExpression | null;
   unread: boolean;
   busy?: boolean;
   modelSelection: ModelSelection;
@@ -106,7 +106,7 @@ interface AppState {
   mascotMotion: {
     botId: string;
     nonce: number;
-    kind: Exclude<MausMotion, "none">;
+    kind: Exclude<CumeaMotion, "none">;
   } | null;
 }
 
@@ -138,7 +138,7 @@ type Action =
   | { type: "togglePlugins"; open?: boolean }
   | { type: "toggleComputer"; open?: boolean }
   | { type: "toggleAppSettings"; open?: boolean }
-  | { type: "previewMascotMotion"; botId: string; kind: Exclude<MausMotion, "none"> }
+  | { type: "previewMascotMotion"; botId: string; kind: Exclude<CumeaMotion, "none"> }
   | {
       type: "updateBot";
       botId: string;
@@ -157,7 +157,7 @@ function updateBot(state: AppState, botId: string, fn: (b: Bot) => Bot): AppStat
 function withMascotMotion(
   state: AppState,
   botId: string,
-  kind: Exclude<MausMotion, "none">,
+  kind: Exclude<CumeaMotion, "none">,
 ): AppState {
   return {
     ...state,

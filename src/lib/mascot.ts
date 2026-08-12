@@ -1,4 +1,4 @@
-export const MAUS_COLOR_NAMES = [
+export const CUMEA_COLOR_NAMES = [
   "green",
   "blue",
   "red",
@@ -11,9 +11,9 @@ export const MAUS_COLOR_NAMES = [
   "coral",
 ] as const;
 
-export type MausColor = (typeof MAUS_COLOR_NAMES)[number];
+export type CumeaColor = (typeof CUMEA_COLOR_NAMES)[number];
 
-export const MAUS_COLORS: Record<MausColor, string> = {
+export const CUMEA_COLORS: Record<CumeaColor, string> = {
   green: "#009957",
   blue: "#377FE6",
   red: "#D94B52",
@@ -26,7 +26,7 @@ export const MAUS_COLORS: Record<MausColor, string> = {
   coral: "#E5634E",
 };
 
-export const MAUS_EXPRESSIONS = [
+export const CUMEA_EXPRESSIONS = [
   "deadpan",
   "friendly",
   "focused",
@@ -39,9 +39,9 @@ export const MAUS_EXPRESSIONS = [
   "mischievous",
 ] as const;
 
-export type MausExpression = (typeof MAUS_EXPRESSIONS)[number];
+export type CumeaExpression = (typeof CUMEA_EXPRESSIONS)[number];
 
-export const MAUS_MOTIONS = [
+export const CUMEA_MOTIONS = [
   "arrive",
   "switch",
   "customize",
@@ -56,7 +56,7 @@ export const MAUS_MOTIONS = [
   "failure",
 ] as const;
 
-export type MausMotion = "none" | (typeof MAUS_MOTIONS)[number];
+export type CumeaMotion = "none" | (typeof CUMEA_MOTIONS)[number];
 
 type MascotMessage = {
   kind: string;
@@ -67,7 +67,7 @@ export type MascotBotProfile = {
   name: string;
   title?: string;
   description?: string;
-  mascotExpression?: MausExpression | null;
+  mascotExpression?: CumeaExpression | null;
   busy?: boolean;
   unread?: boolean;
   messages?: MascotMessage[];
@@ -78,7 +78,7 @@ export type MascotBotProfile = {
  * The keyword groups deliberately overlap as little as possible so a bot's
  * visual identity stays stable while its title and description are edited.
  */
-export function expressionForBot(bot: MascotBotProfile): MausExpression {
+export function expressionForBot(bot: MascotBotProfile): CumeaExpression {
   if (bot.mascotExpression) return bot.mascotExpression;
 
   const last = bot.messages?.[bot.messages.length - 1];
