@@ -14,7 +14,6 @@
     "dev:desktop": "electron .",
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
-    "identity:check": "node scripts/check-identity.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",

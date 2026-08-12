@@ -97,7 +97,6 @@ The browser UI runs on `http://127.0.0.1:5199`; the local harness uses
 pnpm typecheck
 pnpm test
 pnpm build
-pnpm identity:check
 ```
 
 The CI matrix runs type checking and tests on macOS, Ubuntu, and Windows, plus a production UI build
