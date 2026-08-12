@@ -9,22 +9,22 @@
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
 // the harness when it builds the integration:
-//   OMB_HARNESS_URL  base URL of the harness (http://127.0.0.1:8799)
-//   OMB_BOT_ID       the calling bot's id (excluded from list_bots; sender)
-//   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
-//   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
+//   CUMEA_HARNESS_URL  base URL of the harness (http://127.0.0.1:8799)
+//   CUMEA_BOT_ID       the calling bot's id (excluded from list_bots; sender)
+//   CUMEA_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
+//   CUMEA_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
 import readline from "node:readline";
 
-const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
-const BOT_ID = process.env.OMB_BOT_ID ?? "";
-const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
-const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
+const HARNESS = process.env.CUMEA_HARNESS_URL ?? "http://127.0.0.1:8799";
+const BOT_ID = process.env.CUMEA_BOT_ID ?? "";
+const TOKEN = process.env.CUMEA_COMMS_TOKEN ?? "";
+const DEPTH = Number(process.env.CUMEA_TURN_DEPTH ?? "0") || 0;
 
 const TOOLS = [
   {
     name: "list_bots",
     description:
-      "List the other bots (agents) in this OpenMausBot workspace you can message, with their model and whether they're busy. Call this before ask_bot to discover who's available.",
+      "List the other bots (agents) in this Cumea workspace you can message, with their model and whether they're busy. Call this before ask_bot to discover who's available.",
     inputSchema: { type: "object", properties: {} },
   },
   {
@@ -92,7 +92,7 @@ async function handle(msg: Json) {
       ok(id, {
         protocolVersion: (params.protocolVersion as string) ?? "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "opengrokbot-agents", version: "0.1.0" },
+        serverInfo: { name: "cumea-agents", version: "0.1.0" },
       });
       return;
     case "notifications/initialized":

@@ -29,11 +29,11 @@ const api = async (method: string, path: string, body?: unknown): Promise<{ stat
 };
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "omb-api-test-"));
+  home = mkdtempSync(join(tmpdir(), "cumea-api-test-"));
   // a fleet of exactly one unknown driver: no CLI probes, no network
-  mkdirSync(join(home, ".openmausbot"), { recursive: true });
+  mkdirSync(join(home, ".cumea"), { recursive: true });
   writeFileSync(
-    join(home, ".openmausbot", "config.json"),
+    join(home, ".cumea", "config.json"),
     JSON.stringify({ instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } } }),
   );
 
@@ -44,7 +44,7 @@ beforeAll(async () => {
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
-      OMB_PORT: String(PORT),
+      CUMEA_PORT: String(PORT),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -78,8 +78,28 @@ describe("harness HTTP API", () => {
   it("identifies itself on /api/health", async () => {
     const { status, body } = await api("GET", "/api/health");
     expect(status).toBe(200);
-    expect(body.app).toBe("openmausbot");
+    expect(body.app).toBe("cumea");
     expect(typeof body.pid).toBe("number");
+  });
+
+  it("rejects state-changing requests from foreign browser origins", async () => {
+    const res = await fetch(`${BASE}/api/bots`, {
+      method: "POST",
+      headers: { origin: "https://attacker.example", "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "origin not allowed" });
+  });
+
+  it("returns a bounded client error for malformed JSON", async () => {
+    const res = await fetch(`${BASE}/api/config`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: "{",
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid JSON body" });
   });
 
   it("seeds one starter bot with its greeting", async () => {

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Check, AlertTriangle, Loader2, Mic } from "lucide-react";
 import { MausAvatar } from "./Avatar";
-import { identifyEmail, setEmailGateDone, track } from "@/lib/analytics";
+import { setOnboardingDone } from "@/lib/onboarding";
 
-// Three-step first-run onboarding: who you are (email), what's installed
+// Three-step first-run onboarding: local profile, what's installed
 // (live engine checks from the harness), what the app may use (TCC).
 // Every check is skippable — onboarding must never brick the app.
 
@@ -50,11 +50,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [email, setEmail] = useState("");
   const [instances, setInstances] = useState<InstanceRow[] | null>(null);
   const [perms, setPerms] = useState<{ mic: string } | null>(null);
-  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
+  const valid = !email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
 
   const saveProfile = () => {
-    identifyEmail(email.trim().toLowerCase());
-    // persisted server-side (~/.openmausbot/config.json) — the sidebar
+    // Persisted only on this device (~/.cumea/config.json) — the sidebar
     // footer reads it back through /api/config
     void fetch("/api/config", {
       method: "PUT",
@@ -65,7 +64,6 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   };
 
   useEffect(() => {
-    track("onboarding_step", { step });
     if (step === 1 && !instances) {
       fetch("/api/instances")
         .then((r) => r.json())
@@ -73,7 +71,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         .catch(() => setInstances([]));
     }
     if (step === 2 && isElectron) {
-      const poll = () => window.ogb?.permStatus?.().then(setPerms).catch(() => {});
+      const poll = () => window.cumea?.permStatus?.().then(setPerms).catch(() => {});
       poll();
       // keep polling — the user may grant in System Settings and come back
       const t = setInterval(poll, 2000);
@@ -82,11 +80,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   }, [step, instances]);
 
   const finish = () => {
-    track("onboarding_completed", {
-      engines_available: instances?.filter((i) => i.snapshot.state === "available").length ?? -1,
-      mic: perms?.mic ?? "n/a",
-    });
-    setEmailGateDone("submitted");
+    setOnboardingDone();
     onDone();
   };
 
@@ -101,10 +95,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         {step === 0 && (
           <div className="flex flex-col items-center">
             <MausAvatar color="green" expression="friendly" size={72} />
-            <h1 className="mt-4 text-[20px] font-semibold text-ink">Welcome to OpenMausBot</h1>
+            <h1 className="mt-4 text-[20px] font-semibold text-ink">Welcome to Cumea</h1>
             <p className="mt-1.5 text-center text-[14px] leading-relaxed text-ink-secondary">
-              Bots that do real work on their own computer. Tell us who you are
-              and we&rsquo;ll let you know when big things ship.
+              A council of agents that can do real work. Your profile and
+              conversations stay on this device.
             </p>
             <input
               autoFocus
@@ -119,7 +113,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && valid && saveProfile()}
-              placeholder="you@example.com"
+              placeholder="Email (optional)"
               className="mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
             />
             <button
@@ -131,7 +125,6 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             </button>
             <button
               onClick={() => {
-                track("email_skipped");
                 setStep(1);
               }}
               className="mt-3 text-[12px] text-ink-secondary hover:text-ink"
@@ -221,7 +214,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   <Check size={16} className="shrink-0 text-[#38d591]" />
                 ) : perms?.mic === "denied" || perms?.mic === "restricted" ? (
                   <button
-                    onClick={() => window.ogb?.permOpenSettings?.("mic")}
+                    onClick={() => window.cumea?.permOpenSettings?.("mic")}
                     className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
                   >
                     Open Settings
@@ -229,7 +222,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 ) : (
                   <button
                     onClick={() =>
-                      window.ogb?.permRequestMic?.().then(() => window.ogb?.permStatus?.().then(setPerms))
+                      window.cumea?.permRequestMic?.().then(() => window.cumea?.permStatus?.().then(setPerms))
                     }
                     className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
                   >
@@ -244,7 +237,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   which is the moment the user has context for the dialog. */}
             </div>
             <button onClick={finish} className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white">
-              Start using OpenMausBot
+              Start using Cumea
             </button>
             <button onClick={finish} className="mt-3 text-[12px] text-ink-secondary hover:text-ink">
               Skip for now

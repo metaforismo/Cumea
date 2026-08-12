@@ -58,7 +58,7 @@ posixOnly("ClaudeDriver turns (fake CLI)", () => {
   beforeEach(() => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
-    scratch = mkdtempSync(join(tmpdir(), "omb-claude-test-"));
+    scratch = mkdtempSync(join(tmpdir(), "cumea-claude-test-"));
   });
 
   afterEach(async () => {

@@ -18,6 +18,7 @@ import {
 import { useStore, type Bot } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
 import { cn } from "@/lib/cn";
+import { openExternalUrl } from "@/lib/external-url";
 
 async function api(path: string, init?: RequestInit): Promise<any> {
   const res = await fetch(path, { headers: { "content-type": "application/json" }, ...init });
@@ -55,7 +56,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     setPolledFrame(null);
     setLocalFrame(null);
     setError(null);
-    const isElectron = Boolean(window.ogb);
+    const isElectron = Boolean(window.cumea);
     if (bot.computer === "off") {
       setPhase("off");
       return;
@@ -127,12 +128,12 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   // the user denied — surface the Settings repair path instead of spinning.
   const [localMisses, setLocalMisses] = useState(0);
   useEffect(() => {
-    if (phase !== "local" || !window.ogb) return;
+    if (phase !== "local" || !window.cumea) return;
     let alive = true;
     setLocalMisses(0);
     const shoot = async () => {
       try {
-        const url = await window.ogb!.screenFrame();
+        const url = await window.cumea!.screenFrame();
         if (alive && url) setLocalFrame(url);
         else if (alive) setLocalMisses((n) => n + 1);
       } catch {
@@ -165,7 +166,9 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     api(`/api/bots/${bot.id}/computer/${kind}`, { method: "POST" })
       .then((result) => {
         // the join URL's stream token rotates — always freshly minted, never cached
-        if (kind === "join" && result.joinUrl) window.open(result.joinUrl);
+        if (kind === "join" && result.joinUrl && !openExternalUrl(result.joinUrl)) {
+          throw new Error("The computer URL was blocked because it is not a trusted web URL.");
+        }
         if (kind === "sleep") setBoxState("archived");
       })
       .catch((e) => setError(e.message))
@@ -230,7 +233,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               </span>
               {phase === "local" && localMisses >= 3 && (
                 <button
-                  onClick={() => window.ogb?.permOpenSettings?.("screen")}
+                  onClick={() => window.cumea?.permOpenSettings?.("screen")}
                   className="mt-1 rounded-lg bg-raised px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
                 >
                   Open Settings

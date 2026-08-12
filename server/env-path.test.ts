@@ -13,7 +13,7 @@ const posixIt = it.skipIf(process.platform === "win32");
 
 describe("augmentedPath", () => {
   afterEach(() => {
-    delete process.env.OMB_EXTRA_PATH;
+    delete process.env.CUMEA_EXTRA_PATH;
     resetPathCacheForTests();
   });
 
@@ -21,16 +21,16 @@ describe("augmentedPath", () => {
     resetPathCacheForTests();
     const path = augmentedPath();
     const firstExisting = (process.env.PATH ?? "").split(delimiter).filter(Boolean)[0];
-    // OMB_EXTRA_PATH is unset here, so the inherited PATH leads
+    // CUMEA_EXTRA_PATH is unset here, so the inherited PATH leads
     expect(path.split(delimiter)[0]).toBe(firstExisting);
   });
 
-  it("prepends OMB_EXTRA_PATH and dedupes", () => {
-    process.env.OMB_EXTRA_PATH = ["/tmp/omb-extra", "/tmp/omb-extra"].join(delimiter);
+  it("prepends CUMEA_EXTRA_PATH and dedupes", () => {
+    process.env.CUMEA_EXTRA_PATH = ["/tmp/cumea-extra", "/tmp/cumea-extra"].join(delimiter);
     resetPathCacheForTests();
     const parts = augmentedPath().split(delimiter);
-    expect(parts[0]).toBe("/tmp/omb-extra");
-    expect(parts.filter((p) => p === "/tmp/omb-extra")).toHaveLength(1);
+    expect(parts[0]).toBe("/tmp/cumea-extra");
+    expect(parts.filter((p) => p === "/tmp/cumea-extra")).toHaveLength(1);
   });
 
   posixIt("includes nvm bin dirs from the home dir, newest node first", () => {
@@ -52,14 +52,14 @@ describe("augmentedPath", () => {
   posixIt("makes a CLI in a known install dir spawnable despite a bare PATH", async () => {
     const bin = join(homedir(), ".local", "bin");
     mkdirSync(bin, { recursive: true });
-    const fake = join(bin, "omb-fake-cli");
+    const fake = join(bin, "cumea-fake-cli");
     writeFileSync(fake, "#!/bin/sh\necho found-me\n");
     chmodSync(fake, 0o755);
     resetPathCacheForTests();
 
     const stdout = await new Promise<string>((resolve, reject) => {
       execFile(
-        "omb-fake-cli",
+        "cumea-fake-cli",
         [],
         // bare GUI-style PATH + our augmentation — the augmentation must win
         { env: { PATH: augmentedPath() } },

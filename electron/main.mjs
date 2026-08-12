@@ -10,6 +10,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 let SERVER_PORT = 8799;
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+function isSafeExternalUrl(raw) {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname));
+  } catch {
+    return false;
+  }
+}
 
 // Packaged: the harness server ships in Resources (compiled JS, zero deps)
 // and runs on Electron's own Node via utilityProcess. It serves the built
@@ -24,8 +34,8 @@ async function startServerOn(port) {
   const proc = utilityProcess.fork(entry, [], {
     env: {
       ...process.env,
-      OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
-      OMB_PORT: String(port),
+      CUMEA_STATIC_DIR: path.join(process.resourcesPath, "ui"),
+      CUMEA_PORT: String(port),
     },
     stdio: "inherit",
   });
@@ -43,7 +53,7 @@ async function startServerOn(port) {
       const res = await fetch(`http://127.0.0.1:${port}/api/health`);
       if (res.ok) {
         const body = await res.json().catch(() => null);
-        if (body?.app === "openmausbot" && body.pid === proc.pid && body.static) return proc;
+        if (body?.app === "cumea" && body.pid === proc.pid && body.static) return proc;
         break; // someone else owns this port — try the next one
       }
     } catch {
@@ -77,7 +87,7 @@ async function startServerPackaged() {
 const ERROR_PAGE =
   "data:text/html;charset=utf-8," +
   encodeURIComponent(
-    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your Mac.</p></div></body>`,
+    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">◉</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the agent server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen Cumea — if it keeps happening, restart your Mac.</p></div></body>`,
   );
 
 function createWindow() {
@@ -97,8 +107,17 @@ function createWindow() {
   });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (isSafeExternalUrl(url)) void shell.openExternal(url).catch(() => {});
     return { action: "deny" };
+  });
+
+  win.webContents.on("will-navigate", (event, url) => {
+    const allowedOrigin = app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin;
+    try {
+      if (new URL(url).origin === allowedOrigin) return;
+    } catch {}
+    event.preventDefault();
+    if (isSafeExternalUrl(url)) void shell.openExternal(url).catch(() => {});
   });
 
   if (app.isPackaged) {
@@ -151,9 +170,8 @@ ipcMain.handle("perm:open-settings", (_event, pane) => {
     screen: "Privacy_ScreenCapture",
     speech: "Privacy_SpeechRecognition",
   };
-  return shell.openExternal(
-    `x-apple.systempreferences:com.apple.preference.security?${panes[pane] ?? "Privacy"}`,
-  );
+  const target = Object.hasOwn(panes, pane) ? panes[pane] : "Privacy";
+  return shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${target}`);
 });
 
 ipcMain.handle("speech:start", (event) => {
@@ -195,15 +213,26 @@ app.on("window-all-closed", () => {
 
 // EMBEDDING.md lifecycle rule: defer the first quit until the embedded
 // daemon's async cleanup completes — it can't run after the host exits.
-let cuaCleanedUp = false;
+let quitCleanupStarted = false;
+let quitCleanupDone = false;
 app.on("before-quit", (e) => {
-  if (cuaCleanedUp) return;
+  if (quitCleanupDone) return;
   e.preventDefault();
+  if (quitCleanupStarted) return;
+  quitCleanupStarted = true;
   try {
     serverProc?.kill();
   } catch {}
-  stopCua().finally(() => {
-    cuaCleanedUp = true;
+  stopSpeech();
+  const timeout = new Promise((resolve) => {
+    const timer = setTimeout(resolve, 2500);
+    timer.unref?.();
+  });
+  Promise.race([
+    stopCua().catch((error) => console.error("[cua] stop failed:", error)),
+    timeout,
+  ]).finally(() => {
+    quitCleanupDone = true;
     app.quit();
   });
 });

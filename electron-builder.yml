@@ -1,6 +1,6 @@
-appId: com.openmausbot.app
-productName: OpenMausBot
-artifactName: OpenMausBot-${version}-${arch}.${ext}
+appId: io.github.metaforismo.cumea
+productName: Cumea
+artifactName: Cumea-${version}-${arch}.${ext}
 
 directories:
   buildResources: build
@@ -40,12 +40,12 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
-    NSMicrophoneUsageDescription: OpenMausBot uses the microphone for voice dictation into the composer.
-    NSSpeechRecognitionUsageDescription: OpenMausBot transcribes your voice on-device to type messages for you.
+    NSMicrophoneUsageDescription: Cumea uses the microphone for voice dictation into the composer.
+    NSSpeechRecognitionUsageDescription: Cumea transcribes your voice on-device to type messages for you.
   # Notarization runs manually after the build (notarytool + staple),
   # mirroring the BlueyLite ship_release.sh flow.
   notarize: false
 
 dmg:
   sign: true
-  artifactName: OpenMausBot-${version}.dmg
+  artifactName: Cumea-${version}.dmg

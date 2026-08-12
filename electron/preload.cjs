@@ -1,8 +1,8 @@
 // Renderer bridge. contextIsolation stays on; the renderer only ever sees
-// this narrow surface (window.ogb), never Node or ipcRenderer itself.
+// this narrow surface (window.cumea), never Node or ipcRenderer itself.
 const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("ogb", {
+contextBridge.exposeInMainWorld("cumea", {
   /** One frame of this Mac's screen as a data: URL (Screen Recording TCC). */
   screenFrame: () => ipcRenderer.invoke("screen:frame"),
   speechStart: () => ipcRenderer.invoke("speech:start"),

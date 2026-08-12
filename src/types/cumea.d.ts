@@ -3,7 +3,7 @@ export {};
 
 declare global {
   interface Window {
-    ogb?: {
+    cumea?: {
       screenFrame(): Promise<string | null>;
       speechStart(): Promise<void>;
       speechStop(): Promise<void>;

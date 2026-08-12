@@ -1,4 +1,3 @@
-import { track } from "@/lib/analytics";
 import { useEffect, useState } from "react";
 import {
   BellDot,
@@ -22,7 +21,7 @@ import { cn } from "@/lib/cn";
 
 const isElectron = navigator.userAgent.includes("Electron");
 
-/** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */
+/** "Ada Lovelace" → "AL", "ada" → "A", "you@x.dev" → "Y", unset → "?" */
 function profileInitials(profile?: { name?: string; email?: string }): string {
   const name = profile?.name?.trim();
   if (name) {
@@ -219,7 +218,7 @@ export function Sidebar() {
           </div>
         )}
         <button
-          onClick={() => { track("bot_created"); dispatch({ type: "newBot" }); }}
+          onClick={() => dispatch({ type: "newBot" })}
           className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
           title="New bot"

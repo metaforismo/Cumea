@@ -1,7 +1,8 @@
-// Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
+// Config + data dirs. One file, ~/.cumea/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -20,22 +21,20 @@ export interface AppConfig {
   instances?: InstanceConfigMap;
 }
 
-export const DATA_DIR = join(homedir(), ".openmausbot");
-const LEGACY_DATA_DIR = join(homedir(), ".opengrokbot");
+export const DATA_DIR = join(homedir(), ".cumea");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
 
 export function ensureDirs() {
-  // one-time migration from the pre-rename data dir — bots, transcripts,
-  // config and keys all carry over
-  if (!existsSync(DATA_DIR) && existsSync(LEGACY_DATA_DIR)) {
+  for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR]) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
     try {
-      renameSync(LEGACY_DATA_DIR, DATA_DIR);
-    } catch {
-      /* cross-device or busy — fall through to a fresh dir */
-    }
+      chmodSync(dir, 0o700);
+    } catch {}
   }
-  for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR]) mkdirSync(dir, { recursive: true });
+  try {
+    chmodSync(join(DATA_DIR, "config.json"), 0o600);
+  } catch {}
 }
 
 export function loadConfig(): AppConfig {
@@ -51,7 +50,7 @@ export function loadConfig(): AppConfig {
   return cfg;
 }
 
-/** Merge a partial config into ~/.openmausbot/config.json (secrets never
+/** Merge a partial config into ~/.cumea/config.json (secrets never
  * echoed back — callers report configured-or-not booleans only). */
 export function saveConfig(patch: Partial<AppConfig>): void {
   const p = join(DATA_DIR, "config.json");
@@ -67,7 +66,17 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     }
   }
   mkdirSync(DATA_DIR, { recursive: true });
-  writeFileSync(p, JSON.stringify(disk, null, 2));
+  const temp = `${p}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temp, JSON.stringify(disk, null, 2), { mode: 0o600 });
+    renameSync(temp, p);
+    chmodSync(p, 0o600);
+  } catch (error) {
+    try {
+      unlinkSync(temp);
+    } catch {}
+    throw error;
+  }
 }
 
 // Default fleet: one instance per built-in driver (upstream
@@ -78,9 +87,9 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // The default `grok` instance rides the `grokAgent` driver, not the API-key
   // one: like claude and codex it needs no credential from us, just the CLI
   // installed and logged in (it shows up unavailable otherwise). The API-key
-  // `grok` driver stays registered but out of the default fleet — that key is
-  // a credential Milind doesn't want to manage; an `instances` entry brings
-  // it back anytime.
+  // `grok` driver stays registered but out of the default fleet so an API key
+  // never silently changes billing behavior; an explicit `instances` entry
+  // enables it.
   const map: InstanceConfigMap =
     cfg.instances && Object.keys(cfg.instances).length
       ? cfg.instances

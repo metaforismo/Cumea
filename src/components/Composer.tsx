@@ -1,4 +1,3 @@
-import { track } from "@/lib/analytics";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Mic, Square } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
@@ -60,7 +59,6 @@ export function Composer({ bot }: { bot: Bot }) {
   const send = () => {
     if (!text.trim() || bot.busy) return;
     dispatch({ type: "send", botId: bot.id, text: text.trim() });
-    track("message_sent", { driver: bot.modelSelection?.instanceId });
     setText("");
   };
 
@@ -68,7 +66,7 @@ export function Composer({ bot }: { bot: Bot }) {
   // helper runs; the final transcript stays in the box, ready to edit/send
   useEffect(() => {
     if (!recording) return;
-    const bridge = window.ogb;
+    const bridge = window.cumea;
     if (!bridge) {
       setRecording(false);
       return;
@@ -97,7 +95,7 @@ export function Composer({ bot }: { bot: Bot }) {
   }, [recording]);
 
   const toggleMic = () => {
-    if (!window.ogb) {
+    if (!window.cumea) {
       setSpeechError("Voice input needs the desktop app — run pnpm dev:desktop.");
       return;
     }

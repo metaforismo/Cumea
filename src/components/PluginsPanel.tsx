@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw, X } from "lucide-react";
 import { api, useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { openExternalUrl } from "@/lib/external-url";
 
 interface ToolkitCard {
   slug: string;
@@ -79,7 +80,7 @@ export function PluginsPanel() {
     setError(null);
     api(`/api/connectors/${slug}/authorize`, { method: "POST" })
       .then(({ url }) => {
-        window.open(url);
+        if (!openExternalUrl(url)) throw new Error("The authorization URL was blocked because it is not a trusted web URL.");
         // the user finishes OAuth in the browser; poll a few times to catch it
         let tries = 0;
         const timer = setInterval(() => {

@@ -69,10 +69,10 @@ beforeAll(async () => {
   child = spawn(process.execPath, [PROXY], {
     env: {
       ...process.env,
-      OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`,
-      OMB_BOT_ID: "bot-asker",
-      OMB_COMMS_TOKEN: TOKEN,
-      OMB_TURN_DEPTH: "0",
+      CUMEA_HARNESS_URL: `http://127.0.0.1:${stubPort}`,
+      CUMEA_BOT_ID: "bot-asker",
+      CUMEA_COMMS_TOKEN: TOKEN,
+      CUMEA_TURN_DEPTH: "0",
     },
     stdio: ["pipe", "pipe", "inherit"],
   });

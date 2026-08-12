@@ -34,7 +34,7 @@ export default defineConfig({
     // talks to /api — clients hold no transports
     proxy: {
       "/api": {
-        target: `http://127.0.0.1:${process.env.OGB_PORT || 8799}`,
+        target: `http://127.0.0.1:${process.env.CUMEA_PORT || 8799}`,
       },
     },
   },

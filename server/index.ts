@@ -1,11 +1,11 @@
-// OpenMausBot server — the harness host. Clients hold no transports
+// Cumea server — the harness host. Clients hold no transports
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { dirname, extname, join } from "node:path";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import * as box from "./box.ts";
@@ -18,8 +18,8 @@ import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, Store, type Message } from "./store.ts";
 
-const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
-const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
+const PORT = Number(process.env.CUMEA_PORT || 8799);
+const STATIC_DIR = process.env.CUMEA_STATIC_DIR || null;
 const MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -61,10 +61,10 @@ function agentsIntegration(botId: string, depth: number) {
     args: [agentsProxyPath],
     env: {
       ...AGENTS_NODE_FLAG,
-      OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
-      OMB_BOT_ID: botId,
-      OMB_COMMS_TOKEN: COMMS_TOKEN,
-      OMB_TURN_DEPTH: String(depth),
+      CUMEA_HARNESS_URL: `http://127.0.0.1:${PORT}`,
+      CUMEA_BOT_ID: botId,
+      CUMEA_COMMS_TOKEN: COMMS_TOKEN,
+      CUMEA_TURN_DEPTH: String(depth),
     },
   };
 }
@@ -264,11 +264,11 @@ function stopScreenPoller(botId: string): Frame | null {
 }
 
 // Local computer-use contract written by Electron main on startup
-// (~/Library/Application Support/OpenMausBot/cua-connection.json). Read
+// (~/Library/Application Support/Cumea/cua-connection.json). Read
 // fresh each turn — Electron may restart or permissions may change.
 function readCuaConnection(): { command: string; args: string[]; env: Record<string, string> } | null {
   // new name first; pre-rename desktop builds used the old directory
-  for (const dir of ["OpenMausBot", "openmausbot", "OpenGrokBot", "opengrokbot"]) {
+  for (const dir of ["Cumea"]) {
     try {
       const p = join(homedir(), "Library", "Application Support", dir, "cua-connection.json");
       const conn = JSON.parse(readFileSync(p, "utf8"));
@@ -307,7 +307,7 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
     .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! }));
 
   const persona = [
-    `You are ${bot.name}, a personal bot in OpenMausBot.`,
+    `You are ${bot.name}, a personal bot in Cumea.`,
     bot.title && `Role: ${bot.title}.`,
     bot.description && `About: ${bot.description}`,
   ]
@@ -427,26 +427,68 @@ async function reloadProviders() {
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 function json(res: ServerResponse, status: number, body: unknown) {
   const data = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json" });
+  res.writeHead(status, { ...SECURITY_HEADERS, "content-type": "application/json" });
   res.end(data);
 }
 
 function readBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
     let data = "";
+    let done = false;
+    const fail = (error: Error) => {
+      if (done) return;
+      done = true;
+      reject(error);
+    };
     req.on("data", (c) => {
+      if (done) return;
       data += c;
-      if (data.length > 1_000_000) reject(new Error("body too large"));
+      if (Buffer.byteLength(data, "utf8") > 1_000_000) fail(Object.assign(new Error("body too large"), { status: 413 }));
     });
     req.on("end", () => {
+      if (done) return;
       try {
-        resolve(data ? JSON.parse(data) : {});
+        const body = data ? JSON.parse(data) : {};
+        done = true;
+        resolve(body);
       } catch {
-        reject(new Error("invalid JSON body"));
+        fail(Object.assign(new Error("invalid JSON body"), { status: 400 }));
       }
     });
-    req.on("error", reject);
+    req.on("error", (error) => fail(error));
   });
+}
+
+const SECURITY_HEADERS = {
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+  "x-frame-options": "DENY",
+  "cross-origin-resource-policy": "same-origin",
+};
+const DOCUMENT_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https:",
+  "connect-src 'self' http://127.0.0.1:8799 http://127.0.0.1:5199 http://localhost:8799 http://localhost:5199 ws://127.0.0.1:5199 ws://localhost:5199",
+  "font-src 'self' data:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+function requestOriginAllowed(req: IncomingMessage, method: string): boolean {
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return true;
+  const origin = req.headers.origin;
+  if (!origin) return true; // native app, CLI, and internal agent helpers
+  try {
+    const url = new URL(origin);
+    const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+    return url.protocol === "http:" && loopback && [String(PORT), "5199"].includes(url.port);
+  } catch {
+    return false;
+  }
 }
 
 const server = createServer(async (req, res) => {
@@ -454,6 +496,7 @@ const server = createServer(async (req, res) => {
   const path = url.pathname;
   const method = req.method ?? "GET";
   try {
+    if (!requestOriginAllowed(req, method)) return json(res, 403, { error: "origin not allowed" });
     // ── internal peer-agent comms (localhost + shared token only) ──────
     // The agents-proxy (spawned inside a bot's agent process) calls these to
     // discover peers and hand a message to one. Not part of the public API.
@@ -492,7 +535,7 @@ const server = createServer(async (req, res) => {
           });
           broadcast({ kind: "message", threadId: from.threadId, message: note });
         }
-        const prefixed = `[Message from @${fromName}, another bot in this OpenMausBot workspace. Reply to them.]\n\n${message}`;
+        const prefixed = `[Message from @${fromName}, another bot in this Cumea workspace. Reply to them.]\n\n${message}`;
         const reply = await askBotAndWait(toBotId, prefixed, depth);
         return json(res, 200, { botName: target.name, text: reply });
       }
@@ -502,6 +545,7 @@ const server = createServer(async (req, res) => {
     // ── events stream ──
     if (method === "GET" && path === "/api/events") {
       res.writeHead(200, {
+        ...SECURITY_HEADERS,
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
         connection: "keep-alive",
@@ -612,7 +656,7 @@ const server = createServer(async (req, res) => {
     // child proves it is OURS by echoing its pid (a stray dev server has
     // the same API shape but a different pid)
     if (method === "GET" && path === "/api/health") {
-      return json(res, 200, { app: "openmausbot", pid: process.pid, static: Boolean(STATIC_DIR) });
+      return json(res, 200, { app: "cumea", pid: process.pid, static: Boolean(STATIC_DIR) });
     }
 
     // ── provider instances (model picker) ──
@@ -682,19 +726,26 @@ const server = createServer(async (req, res) => {
     }
 
     // packaged app: the server serves the built UI too (window → :8799 for
-    // everything, no dev proxy to die). OMB_STATIC_DIR is set by Electron.
+    // everything, no dev proxy to die). CUMEA_STATIC_DIR is set by Electron.
     if (method === "GET" && !path.startsWith("/api/") && STATIC_DIR) {
-      const safe = path === "/" ? "/index.html" : path.replace(/\.\./g, "");
-      const file = join(STATIC_DIR, safe);
+      const root = resolve(STATIC_DIR);
+      const candidate = path === "/" ? "/index.html" : path;
+      const file = resolve(root, `.${candidate}`);
+      if (file !== root && !file.startsWith(`${root}${sep}`)) return json(res, 404, { error: "not found" });
       try {
         const data = readFileSync(file);
-        res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
+        const headers: Record<string, string> = {
+          ...SECURITY_HEADERS,
+          "content-type": MIME[extname(file)] ?? "application/octet-stream",
+        };
+        if (extname(file) === ".html") headers["content-security-policy"] = DOCUMENT_CSP;
+        res.writeHead(200, headers);
         return res.end(data);
       } catch {
         // SPA fallback
         try {
           const data = readFileSync(join(STATIC_DIR, "index.html"));
-          res.writeHead(200, { "content-type": "text/html" });
+          res.writeHead(200, { ...SECURITY_HEADERS, "content-type": "text/html", "content-security-policy": DOCUMENT_CSP });
           return res.end(data);
         } catch {
           /* fall through to 404 */
@@ -710,7 +761,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`openmausbot server on http://127.0.0.1:${PORT}`);
+  console.log(`cumea server on http://127.0.0.1:${PORT}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

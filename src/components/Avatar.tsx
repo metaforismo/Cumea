@@ -6,7 +6,7 @@ import {
   type MausMotion,
 } from "@/lib/mascot";
 
-// Exact SupaMaus mascot silhouette from the website's
+// Exact Cumea oracle mascot silhouette from the website's
 // components/v2/MascotSlot.js. The geometry and tilt remain faithful to that
 // source; app avatars use a larger borderless flat fill.
 const BODY =

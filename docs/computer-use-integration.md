@@ -1,6 +1,6 @@
-# Computer use & browser use in OpenMausBot
+# Computer use & browser use in Cumea
 
-Decision doc, 2026-08-12. How bots in OpenMausBot get local computer use and
+Decision doc, 2026-08-12. How bots in Cumea get local computer use and
 browser use, out of the box, with no separate installs. Based on a survey of
 OSS chat-app MCP hosts, macOS control servers, browser-automation stacks, and
 the local `cua` / `axstream` code on this machine.
@@ -10,7 +10,7 @@ the local `cua` / `axstream` code on this machine.
 ```
 Electron main process
 ├── EmbeddedCuaDriverHost  ──spawns──▶  cua-driver (bundled Rust binary, Resources/)
-│     one TCC prompt, named OpenMausBot          │ unix socket (private)
+│     one TCC prompt, named Cumea          │ unix socket (private)
 ├── WebContentsView pool (embedded browser, persist: partitions per bot)
 │     driven via webContents.debugger (CDP) — zero-install browser use
 └── server/ harness (drivers spawn agent CLIs with --mcp-config)
@@ -33,7 +33,7 @@ Electron main process
 
 ## Computer use: CUA only — bundle cua-driver, spawn from Electron main
 
-**Decision (Milind, 2026-08-12): CUA is the ONLY computer-use provider.
+**Current decision (2026-08-12): CUA is the only computer-use provider.
 No cliclick, no robotjs/nut.js, no Python computer-server, no fallbacks.**
 Everything that touches the user's screen/mouse/keyboard goes through the
 bundled `cua-driver` binary. Alternatives evaluated and rejected:
@@ -48,8 +48,8 @@ bundled `cua-driver` binary. Alternatives evaluated and rejected:
 
 1. **Spawn from the Electron main process, never from the server/gateway
    layer.** macOS TCC attributes a spawned child to its "responsible process".
-   Spawned from Electron main → the grant is OpenMausBot's, users see ONE
-   prompt named OpenMausBot, and the bundled driver inherits it. Spawned from
+   Spawned from Electron main → the grant is Cumea's, users see ONE
+   prompt named Cumea, and the bundled driver inherits it. Spawned from
    a Node gateway/daemon → the identity silently becomes the gateway's and
    `check_permissions` cannot detect the misattribution. The harness must ask
    Electron main for the driver socket path over IPC, not spawn the driver.
@@ -66,7 +66,7 @@ bundled `cua-driver` binary. Alternatives evaluated and rejected:
 
 ### Packaging
 
-- Ship the binary at `OpenMausBot.app/Contents/Resources/cua-driver`,
+- Ship the binary at `Cumea.app/Contents/Resources/cua-driver`,
   **outside the ASAR**, executable bit preserved (electron-builder
   `extraResources`).
 - **Re-sign it with our Team ID** before signing + notarizing the app (the
@@ -100,7 +100,7 @@ So the harness just adds one entry to a bot's `--mcp-config`:
 { "mcpServers": { "computer": {
     "command": "<cua-driver binary>",
     "args": ["mcp", "--embedded", "--socket", "<socketPath>"],
-    "env": { "CUA_DRIVER_EMBEDDED": "1", "CUA_DRIVER_HOST_BUNDLE_ID": "com.opengrokbot.app" }
+    "env": { "CUA_DRIVER_EMBEDDED": "1", "CUA_DRIVER_HOST_BUNDLE_ID": "io.github.metaforismo.cumea" }
 } } }
 ```
 

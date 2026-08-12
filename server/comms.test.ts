@@ -27,21 +27,21 @@ describe("mentionedBots", () => {
   const peers = [
     { id: "1", name: "New Bot" },
     { id: "2", name: "New Bot 2" },
-    { id: "3", name: "Milind" },
+    { id: "3", name: "Ada" },
     { id: "4", name: "Ghost", hidden: true },
   ];
   it("matches a tag at a word start, case-insensitively", () => {
-    expect(mentionedBots("hey @milind, look", peers).map((b) => b.id)).toEqual(["3"]);
-    expect(mentionedBots("@Milind first thing", peers).map((b) => b.id)).toEqual(["3"]);
+    expect(mentionedBots("hey @ada, look", peers).map((b) => b.id)).toEqual(["3"]);
+    expect(mentionedBots("@Ada first thing", peers).map((b) => b.id)).toEqual(["3"]);
   });
   it("prefers the longest name so prefixes never half-match", () => {
     expect(mentionedBots("ask @New Bot 2 about it", peers).map((b) => b.id)).toEqual(["2"]);
   });
   it("dedupes repeats and collects multiple bots", () => {
-    expect(mentionedBots("@Milind and @New Bot and @Milind", peers).map((b) => b.id)).toEqual(["3", "1"]);
+    expect(mentionedBots("@Ada and @New Bot and @Ada", peers).map((b) => b.id)).toEqual(["3", "1"]);
   });
   it("ignores emails, hidden bots, and mid-word @", () => {
-    expect(mentionedBots("mail milind@milind.dev please", peers)).toEqual([]);
+    expect(mentionedBots("mail ada@example.dev please", peers)).toEqual([]);
     expect(mentionedBots("@Ghost around?", peers)).toEqual([]);
   });
 });
@@ -62,10 +62,10 @@ posixOnly("comms e2e (fake ACP fleet)", () => {
 
   beforeAll(async () => {
     chmodSync(FAKE_CLI, 0o755);
-    home = mkdtempSync(join(tmpdir(), "omb-comms-test-"));
-    mkdirSync(join(home, ".openmausbot"), { recursive: true });
+    home = mkdtempSync(join(tmpdir(), "cumea-comms-test-"));
+    mkdirSync(join(home, ".cumea"), { recursive: true });
     writeFileSync(
-      join(home, ".openmausbot", "config.json"),
+      join(home, ".cumea", "config.json"),
       JSON.stringify({
         instances: {
           grok: {
@@ -83,7 +83,7 @@ posixOnly("comms e2e (fake ACP fleet)", () => {
         ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
         HOME: home,
         USERPROFILE: home,
-        OMB_PORT: String(PORT),
+        CUMEA_PORT: String(PORT),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
