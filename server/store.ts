@@ -9,7 +9,7 @@ import { DATA_DIR } from "./config.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
 
-export type MausColor =
+export type CumeaColor =
   | "green"
   | "blue"
   | "red"
@@ -21,7 +21,7 @@ export type MausColor =
   | "teal"
   | "coral";
 
-export type MausExpression =
+export type CumeaExpression =
   | "deadpan"
   | "friendly"
   | "focused"
@@ -64,8 +64,8 @@ export interface BotRecord {
   title: string;
   description: string;
   notifications: boolean;
-  color: MausColor;
-  mascotExpression?: MausExpression | null;
+  color: CumeaColor;
+  mascotExpression?: CumeaExpression | null;
   unread: boolean;
   modelSelection: ModelSelection;
   /** provider-native continuation per instance (e.g. claude session id) */
@@ -82,7 +82,7 @@ export interface BotRecord {
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
 
-const COLORS: MausColor[] = [
+const COLORS: CumeaColor[] = [
   "green",
   "blue",
   "red",

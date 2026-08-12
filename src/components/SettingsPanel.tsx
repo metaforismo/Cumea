@@ -1,12 +1,12 @@
 import { ChevronLeft, X } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
-import { MausAvatar } from "./Avatar";
+import { CumeaAvatar } from "./Avatar";
 import {
   expressionForBot,
-  MAUS_COLORS,
-  MAUS_COLOR_NAMES,
-  MAUS_EXPRESSIONS,
-  MAUS_MOTIONS,
+  CUMEA_COLORS,
+  CUMEA_COLOR_NAMES,
+  CUMEA_EXPRESSIONS,
+  CUMEA_MOTIONS,
 } from "@/lib/mascot";
 import { ModelPicker } from "./ModelPicker";
 import { cn } from "@/lib/cn";
@@ -60,7 +60,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
 
       <div className="flex-1 overflow-y-auto px-5 pb-5">
         <div className="flex justify-center py-5">
-          <MausAvatar
+          <CumeaAvatar
             color={bot.color}
             expression={activeExpression}
             size={112}
@@ -88,7 +88,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                 Expression
               </div>
               <div className="grid grid-cols-5 gap-2">
-                {MAUS_EXPRESSIONS.map((expression) => (
+                {CUMEA_EXPRESSIONS.map((expression) => (
                   <button
                     key={expression}
                     onClick={() => patch({ mascotExpression: expression })}
@@ -99,7 +99,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                     title={expression}
                     aria-label={`Use ${expression} expression`}
                   >
-                    <MausAvatar color={bot.color} expression={expression} size={42} />
+                    <CumeaAvatar color={bot.color} expression={expression} size={42} />
                   </button>
                 ))}
               </div>
@@ -108,7 +108,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                 Color
               </div>
               <div className="flex flex-wrap gap-2.5">
-                {MAUS_COLOR_NAMES.map((color) => (
+                {CUMEA_COLOR_NAMES.map((color) => (
                   <button
                     key={color}
                     onClick={() => patch({ color })}
@@ -116,7 +116,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                       "size-8 rounded-full border-2 border-transparent transition-transform hover:scale-110",
                       bot.color === color && "ring-2 ring-accent-border ring-offset-2 ring-offset-card",
                     )}
-                    style={{ backgroundColor: MAUS_COLORS[color] }}
+                    style={{ backgroundColor: CUMEA_COLORS[color] }}
                     title={color}
                     aria-label={`Use ${color} mascot color`}
                   />
@@ -127,7 +127,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                 Motion preview
               </div>
               <div className="grid grid-cols-3 gap-2">
-                {MAUS_MOTIONS.map((motion) => (
+                {CUMEA_MOTIONS.map((motion) => (
                   <button
                     key={motion}
                     onClick={() => dispatch({ type: "previewMascotMotion", botId: bot.id, kind: motion })}

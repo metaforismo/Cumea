@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Check, Loader2, Monitor, Square, X } from "lucide-react";
 import { useStore, formatTime, type Bot, type Message } from "@/state/store";
-import { MausAvatar } from "./Avatar";
+import { CumeaAvatar } from "./Avatar";
 import { expressionForBot } from "@/lib/mascot";
 import { OptionCard } from "./OptionCard";
 import { Composer } from "./Composer";
@@ -159,7 +159,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           className="flex items-center gap-2.5 rounded-lg px-1.5 py-1 hover:bg-raised/50"
           title="Bot settings"
         >
-          <MausAvatar
+          <CumeaAvatar
             color={bot.color}
             expression={expressionForBot(bot)}
             size={28}

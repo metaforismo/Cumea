@@ -15,7 +15,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useStore, formatTime, type Bot } from "@/state/store";
-import { MausAvatar, InitialsAvatar } from "./Avatar";
+import { CumeaAvatar, InitialsAvatar } from "./Avatar";
 import { expressionForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 
@@ -161,7 +161,7 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
         selected ? "bg-raised" : "hover:bg-raised/50",
       )}
     >
-      <MausAvatar
+      <CumeaAvatar
         color={bot.color}
         expression={expressionForBot(bot)}
         size={44}

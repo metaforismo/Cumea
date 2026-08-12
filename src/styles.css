@@ -65,240 +65,240 @@ body {
 /* Cumea oracle vector motion. The fast horizontal compression is the edge-on
    moment of a turn; face parallax, surface lighting, and orbiting vector marks
    sell the 3D rotation without duplicate silhouettes, raster frames, or WebGL. */
-.maus-character,
-.maus-orbit,
-.maus-face,
-.maus-solid,
-.maus-eyes,
-.maus-fx {
+.cumea-character,
+.cumea-orbit,
+.cumea-face,
+.cumea-solid,
+.cumea-eyes,
+.cumea-fx {
   transform-box: view-box;
   transform-origin: 100px 100px;
 }
 
-.maus-orbit,
-.maus-fx {
+.cumea-orbit,
+.cumea-fx {
   opacity: 0;
 }
 
-.maus-character {
+.cumea-character {
   transform-style: preserve-3d;
 }
 
-.maus-bevel,
-.maus-rim-light {
+.cumea-bevel,
+.cumea-rim-light {
   pointer-events: none;
 }
 
-.maus-specular {
+.cumea-specular {
   opacity: 0.3;
 }
 
-.maus-eyes {
-  transform: translate(var(--maus-eye-x), var(--maus-eye-y));
+.cumea-eyes {
+  transform: translate(var(--cumea-eye-x), var(--cumea-eye-y));
   transition: transform 150ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.maus-fx {
+.cumea-fx {
   pointer-events: none;
 }
 
-.maus-ribbon,
-.maus-burst-ray {
+.cumea-ribbon,
+.cumea-burst-ray {
   fill: none;
   stroke-linecap: round;
 }
 
-.maus-ribbon {
+.cumea-ribbon {
   stroke-width: 4;
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
 }
 
-.maus-ribbon--two { stroke-width: 2.4; }
-.maus-ribbon--three { stroke-width: 3; }
+.cumea-ribbon--two { stroke-width: 2.4; }
+.cumea-ribbon--three { stroke-width: 3; }
 
-.maus-burst-dot,
-.maus-burst-ray,
-.maus-ellipsis-dot {
+.cumea-burst-dot,
+.cumea-burst-ray,
+.cumea-ellipsis-dot {
   transform-box: fill-box;
   transform-origin: center;
 }
 
-.maus-burst-ray {
+.cumea-burst-ray {
   stroke-width: 3;
 }
 
-.maus-speed-line {
+.cumea-speed-line {
   fill: none;
-  stroke: var(--maus-color);
+  stroke: var(--cumea-color);
   stroke-linecap: round;
   stroke-width: 3.5px;
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
 }
 
-.maus-speed-line--two {
+.cumea-speed-line--two {
   stroke: #fcfcfc;
   stroke-width: 2.5px;
 }
 
-.maus-motion--arrive .maus-character {
-  animation: maus-arrive 940ms cubic-bezier(0.2, 0.82, 0.22, 1) both;
+.cumea-motion--arrive .cumea-character {
+  animation: cumea-arrive 940ms cubic-bezier(0.2, 0.82, 0.22, 1) both;
 }
 
-.maus-motion--switch .maus-character {
-  animation: maus-switch 760ms cubic-bezier(0.2, 0.74, 0.16, 1) both;
+.cumea-motion--switch .cumea-character {
+  animation: cumea-switch 760ms cubic-bezier(0.2, 0.74, 0.16, 1) both;
 }
 
-.maus-motion--customize .maus-character {
-  animation: maus-customize 720ms cubic-bezier(0.18, 0.78, 0.2, 1) both;
+.cumea-motion--customize .cumea-character {
+  animation: cumea-customize 720ms cubic-bezier(0.18, 0.78, 0.2, 1) both;
 }
 
-.maus-motion--switch .maus-face,
-.maus-motion--customize .maus-face {
-  animation: maus-face-parallax 760ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+.cumea-motion--switch .cumea-face,
+.cumea-motion--customize .cumea-face {
+  animation: cumea-face-parallax 760ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-.maus-motion--arrive .maus-face {
-  animation-name: maus-face-arrive;
+.cumea-motion--arrive .cumea-face {
+  animation-name: cumea-face-arrive;
   animation-duration: 940ms;
 }
 
-.maus-motion--arrive .maus-specular,
-.maus-motion--switch .maus-specular,
-.maus-motion--customize .maus-specular,
-.maus-motion--success .maus-specular,
-.maus-motion--celebrate .maus-specular {
-  animation: maus-specular-sweep 760ms ease-out both;
+.cumea-motion--arrive .cumea-specular,
+.cumea-motion--switch .cumea-specular,
+.cumea-motion--customize .cumea-specular,
+.cumea-motion--success .cumea-specular,
+.cumea-motion--celebrate .cumea-specular {
+  animation: cumea-specular-sweep 760ms ease-out both;
 }
 
-.maus-motion--arrive .maus-specular { animation-duration: 940ms; }
+.cumea-motion--arrive .cumea-specular { animation-duration: 940ms; }
 
-.maus-motion--arrive .maus-orbit,
-.maus-motion--switch .maus-orbit,
-.maus-motion--customize .maus-orbit {
-  animation: maus-orbit-turn 760ms cubic-bezier(0.24, 0.76, 0.3, 1) both;
+.cumea-motion--arrive .cumea-orbit,
+.cumea-motion--switch .cumea-orbit,
+.cumea-motion--customize .cumea-orbit {
+  animation: cumea-orbit-turn 760ms cubic-bezier(0.24, 0.76, 0.3, 1) both;
 }
 
-.maus-motion--arrive .maus-orbit {
+.cumea-motion--arrive .cumea-orbit {
   animation-duration: 940ms;
 }
 
-.maus-motion--arrive .maus-speed-line,
-.maus-motion--switch .maus-speed-line,
-.maus-motion--customize .maus-speed-line {
-  animation: maus-line-draw 760ms ease-out both;
+.cumea-motion--arrive .cumea-speed-line,
+.cumea-motion--switch .cumea-speed-line,
+.cumea-motion--customize .cumea-speed-line {
+  animation: cumea-line-draw 760ms ease-out both;
 }
 
-.maus-motion--arrive .maus-speed-line {
+.cumea-motion--arrive .cumea-speed-line {
   animation-duration: 940ms;
 }
 
-.maus-motion--arrive .maus-orbit-dot,
-.maus-motion--switch .maus-orbit-dot,
-.maus-motion--customize .maus-orbit-dot {
+.cumea-motion--arrive .cumea-orbit-dot,
+.cumea-motion--switch .cumea-orbit-dot,
+.cumea-motion--customize .cumea-orbit-dot {
   transform-box: fill-box;
   transform-origin: center;
-  animation: maus-dot-pop 760ms ease-out both;
+  animation: cumea-dot-pop 760ms ease-out both;
 }
 
-.maus-motion--arrive .maus-orbit-dot {
+.cumea-motion--arrive .cumea-orbit-dot {
   animation-duration: 940ms;
 }
 
-.maus-orbit-dot--two { animation-delay: 45ms !important; }
-.maus-orbit-dot--three { animation-delay: 85ms !important; }
+.cumea-orbit-dot--two { animation-delay: 45ms !important; }
+.cumea-orbit-dot--three { animation-delay: 85ms !important; }
 
-.maus-motion--alert .maus-character {
-  animation: maus-alert-body 1050ms cubic-bezier(0.18, 0.78, 0.18, 1) both;
+.cumea-motion--alert .cumea-character {
+  animation: cumea-alert-body 1050ms cubic-bezier(0.18, 0.78, 0.18, 1) both;
 }
 
-.maus-motion--alert .maus-fx--alert {
-  animation: maus-alert-symbol 1050ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+.cumea-motion--alert .cumea-fx--alert {
+  animation: cumea-alert-symbol 1050ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-.maus-motion--thinking .maus-character {
-  animation: maus-thinking-body 1300ms cubic-bezier(0.2, 0.76, 0.18, 1) both;
+.cumea-motion--thinking .cumea-character {
+  animation: cumea-thinking-body 1300ms cubic-bezier(0.2, 0.76, 0.18, 1) both;
 }
 
-.maus-motion--thinking .maus-fx--ellipsis {
-  animation: maus-ellipsis-stage 1300ms ease-in-out both;
+.cumea-motion--thinking .cumea-fx--ellipsis {
+  animation: cumea-ellipsis-stage 1300ms ease-in-out both;
 }
 
-.maus-motion--thinking .maus-ellipsis-dot {
-  animation: maus-ellipsis-dot 1300ms ease-in-out both;
+.cumea-motion--thinking .cumea-ellipsis-dot {
+  animation: cumea-ellipsis-dot 1300ms ease-in-out both;
 }
 
-.maus-motion--thinking .maus-ellipsis-dot--two { animation-delay: 70ms; }
-.maus-motion--thinking .maus-ellipsis-dot--three { animation-delay: 140ms; }
+.cumea-motion--thinking .cumea-ellipsis-dot--two { animation-delay: 70ms; }
+.cumea-motion--thinking .cumea-ellipsis-dot--three { animation-delay: 140ms; }
 
-.maus-motion--working .maus-character {
-  animation: maus-working-body 1150ms ease-in-out infinite;
+.cumea-motion--working .cumea-character {
+  animation: cumea-working-body 1150ms ease-in-out infinite;
 }
 
-.maus-motion--working .maus-orbit {
-  animation: maus-working-orbit 1150ms linear infinite;
+.cumea-motion--working .cumea-orbit {
+  animation: cumea-working-orbit 1150ms linear infinite;
 }
 
-.maus-motion--working .maus-orbit-dot {
-  animation: maus-working-dot 1150ms ease-in-out infinite;
+.cumea-motion--working .cumea-orbit-dot {
+  animation: cumea-working-dot 1150ms ease-in-out infinite;
 }
 
-.maus-motion--launch .maus-character {
-  animation: maus-launch-body 1180ms cubic-bezier(0.2, 0.8, 0.18, 1) both;
+.cumea-motion--launch .cumea-character {
+  animation: cumea-launch-body 1180ms cubic-bezier(0.2, 0.8, 0.18, 1) both;
 }
 
-.maus-motion--launch .maus-fx--ribbons {
-  animation: maus-ribbon-stage 1180ms ease-out both;
+.cumea-motion--launch .cumea-fx--ribbons {
+  animation: cumea-ribbon-stage 1180ms ease-out both;
 }
 
-.maus-motion--launch .maus-ribbon {
-  animation: maus-ribbon-draw 1180ms ease-out both;
+.cumea-motion--launch .cumea-ribbon {
+  animation: cumea-ribbon-draw 1180ms ease-out both;
 }
 
-.maus-motion--success .maus-character {
-  animation: maus-success-body 900ms cubic-bezier(0.18, 0.8, 0.2, 1) both;
+.cumea-motion--success .cumea-character {
+  animation: cumea-success-body 900ms cubic-bezier(0.18, 0.8, 0.2, 1) both;
 }
 
-.maus-motion--celebrate .maus-character {
-  animation: maus-celebrate-body 1250ms cubic-bezier(0.2, 0.82, 0.18, 1) both;
+.cumea-motion--celebrate .cumea-character {
+  animation: cumea-celebrate-body 1250ms cubic-bezier(0.2, 0.82, 0.18, 1) both;
 }
 
-.maus-motion--celebrate .maus-fx--burst {
-  animation: maus-burst-stage 1250ms ease-out both;
+.cumea-motion--celebrate .cumea-fx--burst {
+  animation: cumea-burst-stage 1250ms ease-out both;
 }
 
-.maus-motion--celebrate .maus-burst-dot,
-.maus-motion--celebrate .maus-burst-ray {
-  animation: maus-burst-piece 1250ms ease-out both;
+.cumea-motion--celebrate .cumea-burst-dot,
+.cumea-motion--celebrate .cumea-burst-ray {
+  animation: cumea-burst-piece 1250ms ease-out both;
 }
 
-.maus-motion--celebrate .maus-burst-dot--one { --maus-burst-x: -34px; --maus-burst-y: -27px; }
-.maus-motion--celebrate .maus-burst-dot--two { --maus-burst-x: 38px; --maus-burst-y: -19px; }
-.maus-motion--celebrate .maus-burst-dot--three { --maus-burst-x: 33px; --maus-burst-y: 31px; }
-.maus-motion--celebrate .maus-burst-dot--four { --maus-burst-x: -39px; --maus-burst-y: 22px; }
+.cumea-motion--celebrate .cumea-burst-dot--one { --cumea-burst-x: -34px; --cumea-burst-y: -27px; }
+.cumea-motion--celebrate .cumea-burst-dot--two { --cumea-burst-x: 38px; --cumea-burst-y: -19px; }
+.cumea-motion--celebrate .cumea-burst-dot--three { --cumea-burst-x: 33px; --cumea-burst-y: 31px; }
+.cumea-motion--celebrate .cumea-burst-dot--four { --cumea-burst-x: -39px; --cumea-burst-y: 22px; }
 
-.maus-motion--blink .maus-eyes {
-  animation: maus-blink-eyes 720ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+.cumea-motion--blink .cumea-eyes {
+  animation: cumea-blink-eyes 720ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-.maus-motion--surprise .maus-character {
-  animation: maus-surprise-body 820ms cubic-bezier(0.2, 0.82, 0.2, 1) both;
+.cumea-motion--surprise .cumea-character {
+  animation: cumea-surprise-body 820ms cubic-bezier(0.2, 0.82, 0.2, 1) both;
 }
 
-.maus-motion--surprise .maus-eyes {
-  animation: maus-surprise-eyes 820ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+.cumea-motion--surprise .cumea-eyes {
+  animation: cumea-surprise-eyes 820ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-.maus-motion--failure .maus-character {
-  animation: maus-failure-body 980ms cubic-bezier(0.22, 0.76, 0.2, 1) both;
+.cumea-motion--failure .cumea-character {
+  animation: cumea-failure-body 980ms cubic-bezier(0.22, 0.76, 0.2, 1) both;
 }
 
-.maus-motion--failure .maus-fx--alert {
-  animation: maus-failure-mark 980ms ease-out both;
+.cumea-motion--failure .cumea-fx--alert {
+  animation: cumea-failure-mark 980ms ease-out both;
 }
 
-@keyframes maus-arrive {
+@keyframes cumea-arrive {
   0% {
     opacity: 0;
     transform: perspective(180px) translate3d(34px, 5px, 0) rotateY(78deg) rotateZ(42deg) scale(0.28, 0.68);
@@ -322,7 +322,7 @@ body {
   }
 }
 
-@keyframes maus-switch {
+@keyframes cumea-switch {
   0% { transform: perspective(180px) translate3d(0, 0, 0) rotateY(0) rotateZ(0) scale(1); }
   13% { transform: perspective(180px) translate3d(-3px, 1px, 4px) rotateY(-12deg) rotateZ(-5deg) scale(1.08, 0.91); }
   35% { transform: perspective(180px) translate3d(8px, -2px, 10px) rotateY(76deg) rotateZ(13deg) scale(0.42, 1.06); }
@@ -332,7 +332,7 @@ body {
   100% { transform: perspective(180px) translate3d(0, 0, 0) rotateY(0) rotateZ(0) scale(1); }
 }
 
-@keyframes maus-customize {
+@keyframes cumea-customize {
   0% { transform: perspective(180px) translate3d(0, 0, 0) rotateY(0) rotateZ(0) scale(1); }
   18% { transform: perspective(180px) translate3d(-4px, 1px, 5px) rotateY(-16deg) rotateZ(-7deg) scale(1.12, 0.88); }
   38% { transform: perspective(180px) translate3d(7px, -3px, 11px) rotateY(74deg) rotateZ(12deg) scale(0.44, 1.08); }
@@ -341,7 +341,7 @@ body {
   100% { transform: perspective(180px) translate3d(0, 0, 0) rotateY(0) rotateZ(0) scale(1); }
 }
 
-@keyframes maus-face-parallax {
+@keyframes cumea-face-parallax {
   0%, 12% { opacity: 1; transform: translateX(0); }
   31% { opacity: 0.35; transform: translateX(-11px) scaleX(0.45); }
   41% { opacity: 0; transform: translateX(-16px) scaleX(0.1); }
@@ -350,13 +350,13 @@ body {
   100% { opacity: 1; transform: translateX(0) scaleX(1); }
 }
 
-@keyframes maus-face-arrive {
+@keyframes cumea-face-arrive {
   0%, 19% { opacity: 0; transform: translateX(12px) scaleX(0.2); }
   38% { opacity: 0.72; transform: translateX(5px) scaleX(0.7); }
   58%, 100% { opacity: 1; transform: translateX(0) scaleX(1); }
 }
 
-@keyframes maus-specular-sweep {
+@keyframes cumea-specular-sweep {
   0%, 100% { opacity: 0.3; translate: 0 0; }
   18% { opacity: 0.54; translate: -5px -2px; }
   38% { opacity: 0.92; translate: 34px 12px; }
@@ -364,28 +364,28 @@ body {
   78% { opacity: 0.38; translate: 4px 0; }
 }
 
-@keyframes maus-orbit-turn {
+@keyframes cumea-orbit-turn {
   0%, 8% { opacity: 0; transform: rotate(-46deg) scale(0.62); }
   25% { opacity: 0.9; }
   66% { opacity: 0.72; transform: rotate(34deg) scale(1.04); }
   100% { opacity: 0; transform: rotate(74deg) scale(1.18); }
 }
 
-@keyframes maus-line-draw {
+@keyframes cumea-line-draw {
   0%, 12% { stroke-dashoffset: 1; opacity: 0; }
   36% { stroke-dashoffset: 0.38; opacity: 0.9; }
   68% { stroke-dashoffset: 0; opacity: 0.48; }
   100% { stroke-dashoffset: -1; opacity: 0; }
 }
 
-@keyframes maus-dot-pop {
+@keyframes cumea-dot-pop {
   0%, 10% { opacity: 0; transform: scale(0.15); }
   35% { opacity: 1; transform: scale(1.15); }
   65% { opacity: 0.75; transform: scale(0.82); }
   100% { opacity: 0; transform: scale(0.1); }
 }
 
-@keyframes maus-alert-body {
+@keyframes cumea-alert-body {
   0%, 100% { opacity: 1; transform: perspective(180px) scale(1) rotateZ(0); }
   16% { transform: perspective(180px) scale(1.12, 0.86) rotateZ(-6deg); }
   34%, 57% { opacity: 0.08; transform: perspective(180px) scale(0.09, 0.82) rotateZ(2deg); }
@@ -393,13 +393,13 @@ body {
   86% { transform: perspective(180px) scale(0.96, 1.04) rotateZ(-2deg); }
 }
 
-@keyframes maus-alert-symbol {
+@keyframes cumea-alert-symbol {
   0%, 22%, 66%, 100% { opacity: 0; transform: translateY(8px) scale(0.3); }
   37% { opacity: 1; transform: translateY(-3px) scale(1.08); }
   51% { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-@keyframes maus-thinking-body {
+@keyframes cumea-thinking-body {
   0%, 100% { opacity: 1; transform: scale(1) rotateZ(0); }
   16% { transform: scale(1.08, 0.9) rotateZ(-5deg); }
   31%, 65% { opacity: 0.2; transform: translateY(2px) scale(0.13); }
@@ -407,34 +407,34 @@ body {
   90% { transform: scale(0.97, 1.03) rotateZ(-1deg); }
 }
 
-@keyframes maus-ellipsis-stage {
+@keyframes cumea-ellipsis-stage {
   0%, 19%, 73%, 100% { opacity: 0; }
   32%, 63% { opacity: 1; }
 }
 
-@keyframes maus-ellipsis-dot {
+@keyframes cumea-ellipsis-dot {
   0%, 18%, 74%, 100% { opacity: 0; transform: translateY(8px) scale(0.25); }
   35% { opacity: 1; transform: translateY(-3px) scale(1.12); }
   48%, 62% { opacity: 0.78; transform: translateY(0) scale(0.88); }
 }
 
-@keyframes maus-working-body {
+@keyframes cumea-working-body {
   0%, 100% { transform: perspective(180px) translateY(0) rotateY(-8deg) rotateZ(-2deg) scale(0.98); }
   50% { transform: perspective(180px) translateY(-3px) rotateY(12deg) rotateZ(3deg) scale(1.03); }
 }
 
-@keyframes maus-working-orbit {
+@keyframes cumea-working-orbit {
   0% { opacity: 0.18; transform: rotate(0deg) scale(0.78); }
   45% { opacity: 0.9; }
   100% { opacity: 0.18; transform: rotate(360deg) scale(1.08); }
 }
 
-@keyframes maus-working-dot {
+@keyframes cumea-working-dot {
   0%, 100% { opacity: 0.32; transform: scale(0.65); }
   50% { opacity: 1; transform: scale(1.1); }
 }
 
-@keyframes maus-launch-body {
+@keyframes cumea-launch-body {
   0%, 100% { opacity: 1; transform: translate(0, 0) rotateZ(0) scale(1); }
   16% { transform: translate(-5px, 2px) rotateZ(-9deg) scale(1.13, 0.86); }
   31% { opacity: 0.72; transform: translate(-7px, 5px) rotateZ(-16deg) scale(0.16); }
@@ -443,18 +443,18 @@ body {
   84% { transform: translate(1px, 1px) rotateZ(2deg) scale(0.97, 1.03); }
 }
 
-@keyframes maus-ribbon-stage {
+@keyframes cumea-ribbon-stage {
   0%, 16%, 72%, 100% { opacity: 0; transform: rotate(-15deg) scale(0.65); }
   32%, 58% { opacity: 0.92; transform: rotate(3deg) scale(1); }
 }
 
-@keyframes maus-ribbon-draw {
+@keyframes cumea-ribbon-draw {
   0%, 14% { opacity: 0; stroke-dashoffset: 1; }
   45% { opacity: 1; stroke-dashoffset: 0; }
   70%, 100% { opacity: 0; stroke-dashoffset: -1; }
 }
 
-@keyframes maus-success-body {
+@keyframes cumea-success-body {
   0%, 100% { transform: translateY(0) rotateZ(0) scale(1); }
   20% { transform: translateY(4px) rotateZ(-5deg) scale(1.12, 0.82); }
   46% { transform: translateY(-8px) rotateZ(5deg) scale(0.91, 1.13); }
@@ -462,7 +462,7 @@ body {
   84% { transform: translateY(-1px) scale(0.98, 1.02); }
 }
 
-@keyframes maus-celebrate-body {
+@keyframes cumea-celebrate-body {
   0%, 100% { transform: perspective(180px) translateY(0) rotateY(0) rotateZ(0) scale(1); }
   17% { transform: perspective(180px) translateY(5px) rotateY(-13deg) rotateZ(-8deg) scale(1.14, 0.84); }
   42% { transform: perspective(180px) translateY(-10px) rotateY(22deg) rotateZ(13deg) scale(0.88, 1.15); }
@@ -470,37 +470,37 @@ body {
   84% { transform: perspective(180px) translateY(-2px) rotateY(3deg) rotateZ(2deg) scale(0.98, 1.02); }
 }
 
-@keyframes maus-burst-stage {
+@keyframes cumea-burst-stage {
   0%, 16%, 82%, 100% { opacity: 0; transform: scale(0.4) rotate(-16deg); }
   34% { opacity: 1; transform: scale(1.12) rotate(4deg); }
   64% { opacity: 0.68; transform: scale(1.28) rotate(12deg); }
 }
 
-@keyframes maus-burst-piece {
+@keyframes cumea-burst-piece {
   0%, 18% { opacity: 0; transform: translate(0, 0) scale(0.25); }
-  42% { opacity: 1; transform: translate(var(--maus-burst-x, 0), var(--maus-burst-y, 0)) scale(1.12); }
-  72%, 100% { opacity: 0; transform: translate(var(--maus-burst-x, 0), var(--maus-burst-y, 0)) scale(0.4); }
+  42% { opacity: 1; transform: translate(var(--cumea-burst-x, 0), var(--cumea-burst-y, 0)) scale(1.12); }
+  72%, 100% { opacity: 0; transform: translate(var(--cumea-burst-x, 0), var(--cumea-burst-y, 0)) scale(0.4); }
 }
 
-@keyframes maus-blink-eyes {
-  0%, 20%, 48%, 72%, 100% { transform: translate(var(--maus-eye-x), var(--maus-eye-y)) scaleY(1); }
-  34%, 60% { transform: translate(var(--maus-eye-x), var(--maus-eye-y)) scaleY(0.08); }
+@keyframes cumea-blink-eyes {
+  0%, 20%, 48%, 72%, 100% { transform: translate(var(--cumea-eye-x), var(--cumea-eye-y)) scaleY(1); }
+  34%, 60% { transform: translate(var(--cumea-eye-x), var(--cumea-eye-y)) scaleY(0.08); }
 }
 
-@keyframes maus-surprise-body {
+@keyframes cumea-surprise-body {
   0%, 100% { transform: translateY(0) scale(1); }
   24% { transform: translateY(3px) scale(1.12, 0.86); }
   48% { transform: translateY(-5px) scale(0.92, 1.16); }
   72% { transform: translateY(1px) scale(1.05, 0.96); }
 }
 
-@keyframes maus-surprise-eyes {
-  0%, 100% { transform: translate(var(--maus-eye-x), var(--maus-eye-y)) scale(1); }
-  32%, 60% { transform: translate(var(--maus-eye-x), calc(var(--maus-eye-y) - 4px)) scale(1.24, 1.62); }
-  78% { transform: translate(var(--maus-eye-x), var(--maus-eye-y)) scale(0.94, 0.88); }
+@keyframes cumea-surprise-eyes {
+  0%, 100% { transform: translate(var(--cumea-eye-x), var(--cumea-eye-y)) scale(1); }
+  32%, 60% { transform: translate(var(--cumea-eye-x), calc(var(--cumea-eye-y) - 4px)) scale(1.24, 1.62); }
+  78% { transform: translate(var(--cumea-eye-x), var(--cumea-eye-y)) scale(0.94, 0.88); }
 }
 
-@keyframes maus-failure-body {
+@keyframes cumea-failure-body {
   0%, 100% { opacity: 1; transform: translate(0, 0) rotateZ(0) scale(1); }
   18% { transform: translate(-4px, 2px) rotateZ(-8deg) scale(1.08, 0.88); }
   38% { opacity: 0.82; transform: translate(5px, 3px) rotateZ(19deg) scale(0.42, 1.08); }
@@ -509,20 +509,20 @@ body {
   86% { transform: translate(-1px, 0) rotateZ(-2deg) scale(0.98, 1.02); }
 }
 
-@keyframes maus-failure-mark {
+@keyframes cumea-failure-mark {
   0%, 26%, 72%, 100% { opacity: 0; transform: translate(18px, -15px) scale(0.2); }
   43%, 58% { opacity: 1; transform: translate(18px, -15px) scale(0.42); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .maus-motion *,
-  .maus-motion {
+  .cumea-motion *,
+  .cumea-motion {
     animation: none !important;
   }
 
-  .maus-orbit {
+  .cumea-orbit {
     display: none;
   }
 
-  .maus-eyes { transform: none; }
+  .cumea-eyes { transform: none; }
 }
