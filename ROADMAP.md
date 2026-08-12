@@ -12,7 +12,8 @@ and consent come before provider count or visual expansion.
 - [x] Restrict external URL opening and renderer navigation.
 - [x] Add request-origin checks, CSP/security headers, safe static-path resolution, and bounded JSON parsing.
 - [x] Write configuration atomically with owner-only permissions.
-- [ ] Confirm the first Cumea CI matrix is green on macOS, Ubuntu, and Windows.
+- [x] Confirm the first Cumea CI matrix is green on macOS, Ubuntu, and Windows
+  ([run 31627113168](https://github.com/metaforismo/Cumea/actions/runs/31627113168)).
 - [x] Add focused regression tests for origin rejection and malformed JSON.
 - [ ] Add a raw-request regression test for encoded static traversal attempts.
 
