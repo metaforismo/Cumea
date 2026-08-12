@@ -390,6 +390,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       };
 
       let buf = "";
+      child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk) => {
         buf += chunk;
         let nl;

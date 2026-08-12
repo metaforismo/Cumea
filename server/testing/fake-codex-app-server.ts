@@ -4,7 +4,7 @@
 // initialize/thread/turn handshake, then plays a scripted turn. Like the
 // real app-server, it never exits on its own — the driver kills it.
 //
-//   FAKE_CODEX_MODE   happy (default) | approval | resume
+//   FAKE_CODEX_MODE   happy (default) | approval | resume | hang-initialize
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
@@ -60,6 +60,7 @@ process.stdin.on("data", (chunk) => {
 
     switch (msg.method) {
       case "initialize":
+        if (mode === "hang-initialize") break;
         out({ jsonrpc: "2.0", id: msg.id, result: { ok: true } });
         break;
       case "thread/resume":

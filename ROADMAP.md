@@ -11,7 +11,11 @@ and consent come before provider count or visual expansion.
 - [x] Bound desktop shutdown and stop dictation during quit.
 - [x] Restrict external URL opening and renderer navigation.
 - [x] Add request-origin checks, CSP/security headers, safe static-path resolution, and bounded JSON parsing.
-- [x] Write configuration atomically with owner-only permissions.
+- [x] Persist configuration and transcripts with unique temporary files, full-write guarantees,
+  file and directory flushes, atomic replacement, failure cleanup, and owner-only permissions.
+- [x] Scope provider-native tool and approval IDs to their thread and clear stale state on reload.
+- [x] Bound Codex JSON-RPC calls so a silent app-server cannot hang a turn forever.
+- [x] Fix connected-app OAuth polling to decide from the freshly fetched status.
 - [x] Confirm the first Cumea CI matrix is green on macOS, Ubuntu, and Windows
   ([run 31627113168](https://github.com/metaforismo/Cumea/actions/runs/31627113168)).
 - [x] Add focused regression tests for origin rejection and malformed JSON.
@@ -19,7 +23,7 @@ and consent come before provider count or visual expansion.
 
 ## P1 — usability and portability
 
-- [ ] Reimplement API-key setup guidance with provider-specific billing and privacy copy
+- [x] Reimplement API-key setup guidance with accessible provider-specific billing and data-flow copy
   ([upstream PR #27](https://github.com/milind-soni/OpenMausBot/pull/27)).
 - [ ] Rebase the Linux desktop work onto Cumea's hardened core; validate both Xorg and Wayland
   before calling it supported ([upstream PR #32](https://github.com/milind-soni/OpenMausBot/pull/32)).
@@ -28,8 +32,6 @@ and consent come before provider count or visual expansion.
   ([upstream PR #10](https://github.com/milind-soni/OpenMausBot/pull/10)).
 - [ ] Reassess the default provider fleet and authentication expectations
   ([upstream issue #28](https://github.com/milind-soni/OpenMausBot/issues/28)).
-- [ ] Harden persistence further: unique temporary files, full-write guarantees, recovery tests,
-  and crash-consistency documentation.
 - [ ] Add a privacy/settings page showing exactly which integrations are enabled and where data goes.
 
 ## P2 — extensibility

@@ -36,6 +36,8 @@ describe("mentionedBots", () => {
   });
   it("prefers the longest name so prefixes never half-match", () => {
     expect(mentionedBots("ask @New Bot 2 about it", peers).map((b) => b.id)).toEqual(["2"]);
+    expect(mentionedBots("ask @New Bottle about it", peers)).toEqual([]);
+    expect(mentionedBots("ask @Adaline about it", peers)).toEqual([]);
   });
   it("dedupes repeats and collects multiple bots", () => {
     expect(mentionedBots("@Ada and @New Bot and @Ada", peers).map((b) => b.id)).toEqual(["3", "1"]);

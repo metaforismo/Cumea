@@ -20,11 +20,12 @@ const posixOnly = describe.skipIf(process.platform === "win32");
 
 describe("CodexDriver.decodeConfig", () => {
   it("defaults to the codex binary with fullAuto off", () => {
-    expect(CodexDriver.decodeConfig({})).toEqual({ cli: "codex", fullAuto: false });
-    expect(CodexDriver.decodeConfig(undefined)).toEqual({ cli: "codex", fullAuto: false });
+    expect(CodexDriver.decodeConfig({})).toEqual({ cli: "codex", fullAuto: false, rpcTimeoutMs: 60_000 });
+    expect(CodexDriver.decodeConfig(undefined)).toEqual({ cli: "codex", fullAuto: false, rpcTimeoutMs: 60_000 });
     expect(CodexDriver.decodeConfig({ fullAuto: true }).fullAuto).toBe(true);
     // anything non-true is off — a truthy string must not enable full auto
     expect(CodexDriver.decodeConfig({ fullAuto: "yes" }).fullAuto).toBe(false);
+    expect(() => CodexDriver.decodeConfig({ rpcTimeoutMs: 99 })).toThrow(/rpcTimeoutMs/);
   });
 });
 
@@ -33,14 +34,14 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
   let recorder: EventRecorder;
   let scratch: string;
 
-  const create = async (opts: { mode?: string; fullAuto?: boolean } = {}) => {
+  const create = async (opts: { mode?: string; fullAuto?: boolean; rpcTimeoutMs?: number } = {}) => {
     if (opts.mode) process.env.FAKE_CODEX_MODE = opts.mode;
     instance = await CodexDriver.create({
       instanceId: "codex-test",
       displayName: "Codex Test",
       environment: {},
       enabled: true,
-      config: { cli: FAKE_CLI, fullAuto: opts.fullAuto ?? false },
+      config: { cli: FAKE_CLI, fullAuto: opts.fullAuto ?? false, rpcTimeoutMs: opts.rpcTimeoutMs ?? 60_000 },
     });
     recorder = recordEvents(instance.adapter);
   };
@@ -165,13 +166,24 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
     await recorder.until((e) => e.type === "turn.completed");
   });
 
+  it("fails a turn when the app-server leaves an RPC unanswered", async () => {
+    await create({ mode: "hang-initialize", rpcTimeoutMs: 100 });
+    await instance.adapter.sendTurn({ threadId: "t-timeout", text: "go" });
+
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false, stopReason: "rpc_error" });
+    expect(recorder.events.find((e) => e.type === "runtime.error")).toMatchObject({
+      message: "initialize timed out after 100ms",
+    });
+  });
+
   it("a missing binary surfaces as a failed turn, and snapshot says unavailable", async () => {
     instance = await CodexDriver.create({
       instanceId: "codex-missing",
       displayName: undefined,
       environment: {},
       enabled: true,
-      config: { cli: join(scratch, "does-not-exist"), fullAuto: false },
+      config: { cli: join(scratch, "does-not-exist"), fullAuto: false, rpcTimeoutMs: 60_000 },
     });
     recorder = recordEvents(instance.adapter);
 

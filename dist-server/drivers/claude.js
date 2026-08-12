@@ -41,8 +41,8 @@ const PERM_PROXY_PATH = proxyPath("permission-proxy");
 // in the packaged app process.execPath is the Electron binary — this env
 // makes it behave as plain node for the spawned MCP proxies (harmless in dev)
 const NODE_ENV_FLAG = { ELECTRON_RUN_AS_NODE: "1" };
-const DENY_TIMEOUT_NOTE = "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
-const QUESTION_TIMEOUT_NOTE = "OpenMausBot: nobody answered in time. Use your best judgment and continue.";
+const DENY_TIMEOUT_NOTE = "Cumea: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+const QUESTION_TIMEOUT_NOTE = "Cumea: nobody answered in time. Use your best judgment and continue.";
 /** One human-readable line for an ask — what the card subtitle shows. */
 function askSummary(ask) {
     const input = ask.input ?? {};
@@ -106,9 +106,14 @@ function createPermissionBroker(opts) {
             }
         });
     });
+    const ready = new Promise((resolve, reject) => {
+        server.once("listening", resolve);
+        server.once("error", reject);
+    });
     server.on("error", () => { });
     server.listen(opts.socketPath);
     return {
+        ready,
         answer(askId, behavior, message) {
             const p = pending.get(askId);
             if (!p)
@@ -122,9 +127,9 @@ function createPermissionBroker(opts) {
         close() {
             for (const p of [...pending.values()]) {
                 if (p.ask.kind === "question")
-                    p.finish("answer", "OpenMausBot: the turn is ending — wrap up.", "shutdown");
+                    p.finish("answer", "Cumea: the turn is ending — wrap up.", "shutdown");
                 else
-                    p.finish("deny", "OpenMausBot: the turn ended", "shutdown");
+                    p.finish("deny", "Cumea: the turn ended", "shutdown");
             }
             try {
                 server.close();
@@ -221,8 +226,8 @@ export const ClaudeDriver = {
                     args: [PROXY_PATH],
                     env: {
                         ...NODE_ENV_FLAG,
-                        OGB_BOX_ID: turn.integrations.computer.boxId,
-                        OGB_BOX_TOKEN: turn.integrations.computer.token,
+                        CUMEA_BOX_ID: turn.integrations.computer.boxId,
+                        CUMEA_BOX_TOKEN: turn.integrations.computer.token,
                     },
                 };
                 allowed.push("mcp__computer");
@@ -259,9 +264,16 @@ export const ClaudeDriver = {
                         source: resolved.source,
                     }),
                 });
-                args.push("--permission-prompt-tool", "mcp__ogb__approve");
-                mcpServers.ogb = { command: process.execPath, args: [PERM_PROXY_PATH, socketPath], env: { ...NODE_ENV_FLAG } };
-                allowed.push("mcp__ogb");
+                try {
+                    await broker.ready;
+                }
+                catch (error) {
+                    broker.close();
+                    throw error;
+                }
+                args.push("--permission-prompt-tool", "mcp__cumea__approve");
+                mcpServers.cumea = { command: process.execPath, args: [PERM_PROXY_PATH, socketPath], env: { ...NODE_ENV_FLAG } };
+                allowed.push("mcp__cumea");
             }
             if (Object.keys(mcpServers).length) {
                 args.push("--mcp-config", JSON.stringify({ mcpServers }));
@@ -341,6 +353,7 @@ export const ClaudeDriver = {
                 }
             };
             let buf = "";
+            child.stdout.setEncoding("utf8");
             child.stdout.on("data", (chunk) => {
                 buf += chunk;
                 let nl;

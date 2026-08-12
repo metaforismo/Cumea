@@ -109,7 +109,7 @@ responses or events, no baking them into argv where another local process could 
 
 - [ ] `pnpm typecheck` and `pnpm test` pass
 - [ ] New server behavior has a test; driver changes keep the contract tests green
-- [ ] No `dist-server/` churn, no lockfile churn beyond your actual dependency change
+- [ ] If server source changed, `pnpm build:server` regenerated `dist-server/`; no unrelated generated or lockfile churn
 - [ ] macOS-only code is platform-gated; nothing breaks the packaged app
 - [ ] UI changes include before/after screenshots
 

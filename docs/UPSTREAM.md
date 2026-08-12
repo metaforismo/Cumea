@@ -20,8 +20,8 @@ it does not mean an upstream branch was merged without review.
 | Upstream work | Decision | Reason |
 |---|---|---|
 | [#24 quit timeout](https://github.com/milind-soni/OpenMausBot/pull/24), [#25 stop speech](https://github.com/milind-soni/OpenMausBot/pull/25) | Reimplemented now | Small, high-impact lifecycle fixes; Cumea adds duplicate-quit protection and rejection handling. |
-| [#21 reliability/privacy/CI](https://github.com/milind-soni/OpenMausBot/pull/21) | Split and reimplement | Valuable themes, but the proposed invalid-JSON path can leave a promise unresolved and the atomic-write helper needs stronger failure handling. Cumea adopted audited pieces instead of cherry-picking the branch. |
-| [#27 API-key guidance](https://github.com/milind-soni/OpenMausBot/pull/27) | Reimplement in P1 | Good onboarding improvement; needs Cumea copy, accessibility review, and explicit provider billing/data-flow language. |
+| [#21 reliability/privacy/CI](https://github.com/milind-soni/OpenMausBot/pull/21) | Audited and selectively reimplemented | Cumea adopted thread-scoped event IDs, UTF-8 process streams, bounded Codex RPC, provider-reload recovery, mention boundaries, fresh OAuth polling, and stronger atomic persistence. It did not copy the proposed invalid-JSON path, which can leave a promise unresolved, or reintroduce telemetry. |
+| [#27 API-key guidance](https://github.com/milind-soni/OpenMausBot/pull/27) | Reimplemented now | Cumea adds keyboard-accessible help, current provider links, explicit billing/data-flow language, local URL validation, and least-privilege guidance. |
 | [#32 Ubuntu beta](https://github.com/milind-soni/OpenMausBot/pull/32) | Candidate for P1 | Strongest Linux foundation and useful packaged evidence. It still needs rebase plus hands-on Wayland validation. |
 | [#10 Windows hardening](https://github.com/milind-soni/OpenMausBot/pull/10) | Candidate, not wholesale merge | Best of the overlapping Windows directions, but old-base conflicts and overlap with Linux portability should be resolved through shared abstractions first. |
 | [#5](https://github.com/milind-soni/OpenMausBot/pull/5), [#7](https://github.com/milind-soni/OpenMausBot/pull/7), [#17](https://github.com/milind-soni/OpenMausBot/pull/17) Windows variants | Do not merge wholesale | Useful individual ideas, but overlapping scope and unsafe `cmd.exe`/shell quoting patterns make selective reimplementation safer. |
@@ -45,3 +45,12 @@ it does not mean an upstream branch was merged without review.
 
 This file records a time-bounded audit. Recheck upstream state and actual branch diffs before taking
 future work.
+
+## Dependency-update policy
+
+Cumea does not use scheduled Dependabot version PRs. GitHub vulnerability alerts, automatic security
+fixes, secret scanning, push protection, and private vulnerability reporting remain enabled. Turning
+off security-fix PRs is a separate security decision. Maintainers resolve alerts through reviewed,
+SHA-pinned update tranches that pass the full matrix. In the first upstream-hardening tranche, the
+individually green Actions updates were applied manually; a failing grouped development-dependency
+update and an unreviewed icon-library major were left out.

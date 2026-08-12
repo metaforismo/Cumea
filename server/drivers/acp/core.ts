@@ -332,6 +332,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         };
 
         let buf = "";
+        child.stdout.setEncoding("utf8");
         child.stdout.on("data", (chunk) => {
           buf += chunk;
           let nl;

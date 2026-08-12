@@ -53,7 +53,7 @@ export const BoxAgentDriver = {
             const { threadId } = turn;
             const boxId = turn.integrations?.computer?.boxId;
             if (!token)
-                throw new Error('box not configured — add {"box":{"token":"…"}} to ~/.openmausbot/config.json');
+                throw new Error('box not configured — add {"box":{"token":"…"}} to ~/.cumea/config.json');
             if (!boxId)
                 throw new Error("this bot has no computer yet — open the Computer panel and provision one");
             if (active.has(threadId))
@@ -165,7 +165,7 @@ export const BoxAgentDriver = {
         };
         const snapshot = async () => {
             if (!token) {
-                return { state: "unavailable", reason: 'no Box token — add {"box":{"token":"…"}} to ~/.openmausbot/config.json' };
+                return { state: "unavailable", reason: 'no Box token — add {"box":{"token":"…"}} to ~/.cumea/config.json' };
             }
             try {
                 await api("/me");

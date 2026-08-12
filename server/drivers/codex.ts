@@ -40,13 +40,23 @@ const MODELS = {
 export interface CodexConfig {
   cli: string;
   fullAuto: boolean;
+  rpcTimeoutMs: number;
 }
+
+const DEFAULT_RPC_TIMEOUT_MS = 60_000;
 
 function decodeConfig(raw: unknown): CodexConfig {
   const o = (raw ?? {}) as Record<string, unknown>;
+  if (
+    o.rpcTimeoutMs !== undefined &&
+    (typeof o.rpcTimeoutMs !== "number" || !Number.isInteger(o.rpcTimeoutMs) || o.rpcTimeoutMs < 100 || o.rpcTimeoutMs > 300_000)
+  ) {
+    throw new Error("codex: rpcTimeoutMs must be an integer between 100 and 300000");
+  }
   return {
     cli: typeof o.cli === "string" ? o.cli : "codex",
     fullAuto: o.fullAuto === true,
+    rpcTimeoutMs: (o.rpcTimeoutMs as number | undefined) ?? DEFAULT_RPC_TIMEOUT_MS,
   };
 }
 
@@ -102,7 +112,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const state = { settled: false, lastText: "" };
       const asks = new Map<string, (behavior: string, message?: string) => void>();
       let nextId = 1;
-      const rpcPending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+      const rpcPending = new Map<
+        number,
+        { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+      >();
 
       const send = (obj: unknown) => {
         try {
@@ -113,7 +126,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const request = (method: string, params: unknown) =>
         new Promise<any>((resolve, reject) => {
           const id = nextId++;
-          rpcPending.set(id, { resolve, reject });
+          const timer = setTimeout(() => {
+            if (!rpcPending.delete(id)) return;
+            reject(new Error(`${method} timed out after ${config.rpcTimeoutMs}ms`));
+          }, config.rpcTimeoutMs);
+          timer.unref?.();
+          rpcPending.set(id, { resolve, reject, timer });
           send({ jsonrpc: "2.0", id, method, params });
         });
 
@@ -131,7 +149,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (state.settled) return;
         state.settled = true;
         for (const finish of [...asks.values()]) finish("deny", "Cumea: the turn ended");
-        for (const p of rpcPending.values()) p.reject(new Error("turn settled"));
+        for (const p of rpcPending.values()) {
+          clearTimeout(p.timer);
+          p.reject(new Error("turn settled"));
+        }
         rpcPending.clear();
         active.delete(threadId);
         emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost: null });
@@ -263,6 +284,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       };
 
       let buf = "";
+      child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk) => {
         buf += chunk;
         let nl;
@@ -281,6 +303,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             const pend = rpcPending.get(msg.id);
             if (pend) {
               rpcPending.delete(msg.id);
+              clearTimeout(pend.timer);
               msg.error ? pend.reject(new Error(msg.error.message ?? JSON.stringify(msg.error))) : pend.resolve(msg.result);
             }
           } else if (msg.id !== undefined && msg.method) {

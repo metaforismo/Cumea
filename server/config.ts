@@ -1,12 +1,12 @@
 // Config + data dirs. One file, ~/.cumea/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
-import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { InstanceConfigMap } from "./contracts.ts";
+import { writeFileAtomic } from "./atomic.ts";
 
 export interface AppConfig {
   xai?: { key?: string; url?: string };
@@ -66,17 +66,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     }
   }
   mkdirSync(DATA_DIR, { recursive: true });
-  const temp = `${p}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(temp, JSON.stringify(disk, null, 2), { mode: 0o600 });
-    renameSync(temp, p);
-    chmodSync(p, 0o600);
-  } catch (error) {
-    try {
-      unlinkSync(temp);
-    } catch {}
-    throw error;
-  }
+  writeFileAtomic(p, JSON.stringify(disk, null, 2), { mode: 0o600 });
 }
 
 // Default fleet: one instance per built-in driver (upstream

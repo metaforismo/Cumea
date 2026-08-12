@@ -51,11 +51,15 @@ export function PluginsPanel() {
   const [search, setSearch] = useState("");
 
   const refreshStatus = useCallback((slugs: string[]) => {
-    if (!slugs.length) return Promise.resolve();
+    if (!slugs.length) return Promise.resolve({} as Record<string, { connected: boolean }>);
     setRefreshing(true);
     return api(`/api/connectors?services=${slugs.join(",")}`)
-      .then((r) => setStatus(r.services ?? {}))
-      .catch(() => {})
+      .then((r) => {
+        const next = (r.services ?? {}) as Record<string, { connected: boolean }>;
+        setStatus((current) => ({ ...current, ...next }));
+        return next;
+      })
+      .catch(() => ({} as Record<string, { connected: boolean }>))
       .finally(() => setRefreshing(false));
   }, []);
 
@@ -84,8 +88,9 @@ export function PluginsPanel() {
         // the user finishes OAuth in the browser; poll a few times to catch it
         let tries = 0;
         const timer = setInterval(() => {
-          void refreshStatus([slug]);
-          if (++tries >= 6 || status[slug]?.connected) clearInterval(timer);
+          void refreshStatus([slug]).then((latest) => {
+            if (++tries >= 6 || latest[slug]?.connected) clearInterval(timer);
+          });
         }, 5000);
       })
       .catch((e) => setError(e.message))

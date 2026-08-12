@@ -251,12 +251,11 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         {phase === "unconfigured" && (
           <div className="mt-3 rounded-xl bg-card p-4">
             <div className="mb-3 text-[13px] text-ink-secondary">
-              Paste a Box token from box.ascii.dev to give this bot a cloud computer — it spins up right here.
+              Add a third-party cloud-computer token to provision a remote desktop. Usage may incur charges;
+              the help icon explains where the token goes before you save it.
             </div>
             <ApiKeyRow
               section="box"
-              label="Box token"
-              placeholder="Token from box.ascii.dev"
               onSaved={(configured) => configured && setRetry((n) => n + 1)}
             />
           </div>

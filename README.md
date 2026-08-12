@@ -45,6 +45,21 @@ handling, subscriptions, and usage charges still apply.
 
 See [SECURITY.md](SECURITY.md) for the reporting policy and threat boundaries.
 
+## Optional credentials
+
+No third-party credential is required to open Cumea or use an already-authenticated local agent CLI.
+The Settings help icon explains where each optional secret is obtained, when it leaves the machine,
+and where charges may apply.
+
+| Credential | What it enables | Sent to |
+|---|---|---|
+| [Composio Connect API key](https://docs.composio.dev/docs/composio-connect) | App discovery, OAuth connection, and app actions | `connect.composio.dev`, only when connected apps are used |
+| [Composio project API key](https://docs.composio.dev/reference/authenticating-to-composio) | Full connected-app catalog; optional and preferably scoped | `backend.composio.dev`, only while loading that catalog |
+| [Cloud computer token](https://box.ascii.dev) | Remote desktop provisioning and control | `box.ascii.dev`, only for cloud-computer actions |
+
+Credentials are stored in `~/.cumea/config.json` with owner-only permissions where supported. Cumea
+does not proxy them through a Cumea-operated service.
+
 ## Run from source
 
 Requirements:
@@ -113,6 +128,11 @@ See [ROADMAP.md](ROADMAP.md) for the ordered backlog and
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. Small, testable
 changes are preferred; security-sensitive changes need an explicit threat-boundary explanation.
+
+Scheduled Dependabot version-update PRs are disabled. GitHub vulnerability alerts and automatic
+security fixes remain enabled as the safer default; maintainers still review every proposed update
+and may replace it with a pinned, manually tested tranche. Disabling security-fix PRs is a separate
+repository-security decision.
 
 ## Provenance
 
