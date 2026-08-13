@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    name: typecheck + test (${{ matrix.os }})
+  root-checks:
+    name: root checks (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +37,84 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
-      - name: production UI build
-        if: matrix.os == 'ubuntu-latest'
-        run: pnpm exec vite build
+
+  production-build:
+    name: production builds + SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: desktop UI and type-safe source build
+        run: pnpm build
+      - name: distributable harness build
+        run: pnpm build:server
+      - name: deterministic CycloneDX inventory
+        run: pnpm release:sbom
+
+  mobile-export:
+    name: mobile typecheck + JS export
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      EXPO_NO_TELEMETRY: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm mobile:test
+      - run: pnpm mobile:typecheck
+      - run: pnpm mobile:export
+
+  landing-build:
+    name: landing typecheck + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/landing/pnpm-lock.yaml
+      - run: pnpm --dir apps/landing --ignore-workspace install --frozen-lockfile
+      - run: pnpm --dir apps/landing typecheck
+      - run: pnpm --dir apps/landing build
+
+  macos-package-smoke:
+    name: unsigned macOS arm64 package layout
+    # Pin the native Apple Silicon image so pnpm installs the arm64 optional
+    # CUA/UBJS runtimes that electron-builder must package.
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: require a native Apple Silicon runner
+        run: test "$(uname -m)" = arm64
+      - run: pnpm install --frozen-lockfile
+      - name: fetch and verify pinned CUA Driver release
+        run: pnpm prepare:cua-driver
+      - run: pnpm package:mac:dir
+      - run: pnpm release:verify-package

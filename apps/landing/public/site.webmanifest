@@ -1,0 +1,17 @@
+{
+  "name": "Cumea",
+  "short_name": "Cumea",
+  "description": "Open-source AI teammates on infrastructure you control.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f7f5",
+  "theme_color": "#f7f7f5",
+  "icons": [
+    {
+      "src": "/icon-cumea.webp",
+      "sizes": "512x512",
+      "type": "image/webp",
+      "purpose": "any"
+    }
+  ]
+}

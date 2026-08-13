@@ -1,13 +1,14 @@
 // Store persistence contract: bots.json + messages-<threadId>.json are
 // the durable record — everything here must survive a process restart
 // except `busy`, which never does (no turn survives one either).
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
-import { Store, type BotRecord } from "./store.ts";
+import { stageFilesForDeletion } from "./delete-files.ts";
+import { parseBotAvatar, Store, type BotRecord } from "./store.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 
@@ -26,6 +27,8 @@ describe("Store", () => {
     expect(messages[1].kind).toBe("options");
     expect(messages[1].card?.options.length).toBeGreaterThan(1);
     expect(bot.modelSelection).toEqual(selection());
+    expect(bot).toMatchObject({ appsEnabled: true, collaborationEnabled: true, approvalPolicy: "ask" });
+    expect(bot.avatar).toMatchObject({ kind: "mote", shapeId: "orb", motion: "playful" });
   });
 
   it("rotates colors across created bots", () => {
@@ -38,13 +41,18 @@ describe("Store", () => {
   it("persists bots and messages across a restart, resetting busy", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    store.patchBot(bot.id, { name: "Testy", busy: true });
+    store.patchBot(bot.id, {
+      name: "Testy",
+      busy: true,
+      avatar: { kind: "mote", shapeId: "ripple", color: "#7651d6", motion: "kinetic" },
+    });
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi there" });
 
     const reloaded = new Store(selection);
     const back = reloaded.bot(bot.id)!;
     expect(back.name).toBe("Testy");
     expect(back.busy).toBe(false);
+    expect(back.avatar).toEqual({ kind: "mote", shapeId: "ripple", color: "#7651d6", motion: "kinetic" });
     const messages = reloaded.messagesFor(bot.threadId);
     expect(messages.at(-1)).toMatchObject({ role: "user", text: "hi there" });
   });
@@ -71,6 +79,58 @@ describe("Store", () => {
     expect(store.bot(bot.id)).toBeNull();
     expect(existsSync(file)).toBe(false);
     expect(store.deleteBot(bot.id)).toBe(false);
+  });
+
+  it("keeps the bot when its transcript cannot be unlinked", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const file = join(DATA_DIR, `messages-${bot.threadId}.json`);
+    rmSync(file);
+    mkdirSync(file);
+
+    expect(() => store.deleteBot(bot.id)).toThrow(/could not stage bot transcript/);
+    expect(store.bot(bot.id)).toEqual(expect.objectContaining({ id: bot.id }));
+    expect(new Store(selection).bot(bot.id)).toEqual(expect.objectContaining({ id: bot.id }));
+
+    rmSync(file, { recursive: true });
+    expect(store.deleteBot(bot.id)).toBe(true);
+  });
+
+  it("restores the in-memory bot record when bots.json cannot be committed", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const botsFile = join(DATA_DIR, "bots.json");
+    const backup = join(DATA_DIR, "bots-backup.json");
+    renameSync(botsFile, backup);
+    mkdirSync(botsFile);
+
+    expect(() => store.deleteBot(bot.id)).toThrow();
+    expect(store.bot(bot.id)).toEqual(expect.objectContaining({ id: bot.id }));
+    expect(existsSync(join(DATA_DIR, `messages-${bot.threadId}.json`))).toBe(true);
+
+    rmSync(botsFile, { recursive: true });
+    renameSync(backup, botsFile);
+    expect(store.deleteBot(bot.id)).toBe(true);
+  });
+
+  it("restores bot metadata and transcript when quarantine cleanup fails", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const transcript = join(DATA_DIR, `messages-${bot.threadId}.json`);
+    const staged = stageFilesForDeletion(store.botDeletionFiles(bot.id), {
+      unlink() {
+        throw Object.assign(new Error("blocked cleanup"), { code: "EACCES" });
+      },
+    });
+    const transaction = store.deleteBotRecordTransaction(bot.id)!;
+
+    expect(() => staged.purge()).toThrow(/could not finalize bot file deletion/);
+    transaction.rollback();
+    staged.rollback();
+
+    expect(store.bot(bot.id)).toEqual(expect.objectContaining({ id: bot.id }));
+    expect(new Store(selection).bot(bot.id)).toEqual(expect.objectContaining({ id: bot.id }));
+    expect(existsSync(transcript)).toBe(true);
   });
 
   it("setResumeCursor persists per-instance continuations", () => {
@@ -113,5 +173,48 @@ describe("Store", () => {
 
     const reloaded = new Store(selection);
     expect(reloaded.bot(bot.id)?.busy).toBe(false);
+  });
+
+  it("migrates pre-avatar bot records to durable Mote configs", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const file = join(DATA_DIR, "bots.json");
+    const raw: Array<Partial<BotRecord>> = JSON.parse(readFileSync(file, "utf8"));
+    delete raw[0].avatar;
+    raw[0].color = "blue";
+    writeFileSync(file, JSON.stringify(raw));
+
+    const reloaded = new Store(selection);
+    expect(reloaded.bot(bot.id)?.avatar).toEqual({
+      kind: "mote",
+      shapeId: "orb",
+      color: "#2f8de3",
+      motion: "playful",
+    });
+    expect(JSON.parse(readFileSync(file, "utf8"))[0].avatar).toBeTruthy();
+  });
+
+  it("accepts safe raster avatar data and rejects malformed or SVG payloads", () => {
+    expect(parseBotAvatar({
+      kind: "upload",
+      shapeId: "drop",
+      color: "#F56A16",
+      motion: "calm",
+      imageDataUrl: "data:image/png;base64,aA==",
+    })).toEqual({
+      kind: "upload",
+      shapeId: "drop",
+      color: "#f56a16",
+      motion: "calm",
+      imageDataUrl: "data:image/png;base64,aA==",
+    });
+    expect(parseBotAvatar({
+      kind: "upload",
+      shapeId: "drop",
+      color: "#f56a16",
+      motion: "calm",
+      imageDataUrl: "data:image/svg+xml;base64,PHN2Zz4=",
+    })).toBeNull();
+    expect(parseBotAvatar({ kind: "mote", shapeId: "unknown", color: "#f56a16", motion: "calm" })).toBeNull();
   });
 });

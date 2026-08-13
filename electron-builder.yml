@@ -13,19 +13,29 @@ directories:
 # ELECTRON_RUN_AS_NODE (the agentcal-hq pattern).
 files:
   - electron/**
+  - "!electron/**/*.test.*"
   - "!electron/resources/speech-helper"
-  - "!**/node_modules/**"
   - package.json
 
 asar: true
+asarUnpack:
+  # Local computer use loads these native Node modules at runtime. Keeping
+  # them unpacked lets Electron and the platform loader resolve .node/.dylib
+  # files; the package smoke test asserts that they are present.
+  - node_modules/@trycua/**
+  - node_modules/@ubjs/**
 
 extraResources:
   - from: dist
     to: ui
   - from: dist-server
     to: server
-  - from: electron/resources/speech-helper
-    to: speech-helper
+  - from: LICENSE
+    to: LICENSE
+  - from: THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
+  - from: licenses
+    to: licenses
 
 mac:
   target:
@@ -42,10 +52,36 @@ mac:
   extendInfo:
     NSMicrophoneUsageDescription: Cumea uses the microphone for voice dictation into the composer.
     NSSpeechRecognitionUsageDescription: Cumea transcribes your voice on-device to type messages for you.
+    NSScreenCaptureUsageDescription: Cumea captures the screen only when a local bot needs to see and interact with the interface you ask it to control.
+    NSAppleEventsUsageDescription: Cumea uses Automation only when a requested local-computer action needs to communicate with another app.
   # Notarization runs manually after the build (notarytool + staple),
   # mirroring the BlueyLite ship_release.sh flow.
   notarize: false
+  extraResources:
+    - from: electron/resources/speech-helper
+      to: speech-helper
+    - from: build/cua-driver/darwin-arm64/cua-driver
+      to: cua-driver
 
 dmg:
   sign: true
   artifactName: Cumea-${version}.dmg
+
+win:
+  target:
+    - target: nsis
+      arch: x64
+    - target: zip
+      arch: x64
+
+linux:
+  target:
+    - target: AppImage
+      arch: x64
+    - target: tar.gz
+      arch: x64
+  category: Utility
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

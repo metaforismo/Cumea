@@ -3,6 +3,14 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("cumea", {
+  platform: process.platform,
+  /** Public local-computer state. Socket paths and MCP launch details stay in main. */
+  cuaStatus: () => ipcRenderer.invoke("cua:status"),
+  /** User-initiated TCC prompt/check. Starts or restarts only after both grants. */
+  cuaRequestPermissions: () => ipcRenderer.invoke("cua:request-permissions"),
+  /** Explicit read/check/reconnect path after returning from System Settings. */
+  cuaRetry: () => ipcRenderer.invoke("cua:retry"),
+  cuaOpenSettings: (permission) => ipcRenderer.invoke("cua:open-settings", permission),
   /** One frame of this Mac's screen as a data: URL (Screen Recording TCC). */
   screenFrame: () => ipcRenderer.invoke("screen:frame"),
   speechStart: () => ipcRenderer.invoke("speech:start"),

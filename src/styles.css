@@ -526,3 +526,187 @@ body {
 
   .cumea-eyes { transform: none; }
 }
+
+:where(button, a, input, textarea, select):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent, #6ea8ff) 75%, white);
+  outline-offset: 2px;
+}
+
+/* Mote Studio avatar layer. The shape geometry is MIT-licensed; animation is
+   implemented with transform/opacity-only CSS so the desktop stays dependency
+   free and every state has a reduced-motion fallback. */
+.mote-avatar {
+  filter: drop-shadow(0 8px 11px rgb(0 0 0 / 0.18));
+  contain: paint;
+}
+
+.mote-avatar .mote-character,
+.mote-avatar .mote-gaze,
+.mote-avatar .mote-eyes,
+.mote-avatar .mote-working-orbit,
+.mote-avatar .mote-needs-indicator {
+  transform-box: view-box;
+  transform-origin: 160px 160px;
+}
+
+.mote-avatar .mote-body {
+  transition: fill 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.mote-avatar .mote-upload {
+  opacity: 0.82;
+}
+
+.mote-avatar .mote-eyes {
+  transform-origin: 160px 153px;
+  animation: mote-blink 6.2s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+}
+
+.mote-avatar .mote-gaze {
+  transform: translate3d(0, 0, 0);
+}
+
+.mote-avatar .mote-working-orbit {
+  opacity: 0;
+  fill: none;
+  stroke: var(--mote-color);
+  stroke-linecap: round;
+  stroke-width: 4;
+  stroke-dasharray: 120 92;
+  pointer-events: none;
+}
+
+.mote-avatar .mote-working-orbit ellipse:last-child {
+  stroke: var(--mote-eye-color);
+  stroke-width: 2.5;
+  stroke-dasharray: 80 150;
+}
+
+.mote-avatar .mote-needs-indicator {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mote-avatar--ambient.mote-avatar--idle.mote-avatar--calm .cumea-motion--none .mote-character {
+  animation: mote-drift-calm 6.8s cubic-bezier(0.77, 0, 0.175, 1) infinite;
+}
+
+.mote-avatar--ambient.mote-avatar--idle.mote-avatar--playful .cumea-motion--none .mote-character {
+  animation: mote-drift-playful 4.4s cubic-bezier(0.77, 0, 0.175, 1) infinite;
+}
+
+.mote-avatar--ambient.mote-avatar--idle.mote-avatar--kinetic .cumea-motion--none .mote-character {
+  animation: mote-drift-kinetic 3.2s cubic-bezier(0.77, 0, 0.175, 1) infinite;
+}
+
+.mote-avatar--needs-you .mote-gaze {
+  animation: mote-look-around 3.4s cubic-bezier(0.77, 0, 0.175, 1) infinite;
+}
+
+.mote-avatar--needs-you .mote-needs-indicator {
+  opacity: 1;
+  animation: mote-needs-pulse 2.4s ease-in-out infinite;
+}
+
+.mote-avatar--working .mote-character {
+  animation: mote-working 1.55s ease-in-out infinite;
+}
+
+.mote-avatar--working .mote-working-orbit {
+  opacity: 0.76;
+  animation: mote-working-orbit 1.9s linear infinite;
+}
+
+.mote-avatar--success .mote-character {
+  animation: mote-success 850ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+.mote-avatar--error .mote-character {
+  animation: mote-error 760ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+.mote-avatar .cumea-motion--blink .mote-eyes {
+  animation: cumea-blink-eyes 720ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes mote-blink {
+  0%, 45%, 49%, 100% { transform: translate(var(--cumea-eye-x), var(--cumea-eye-y)) scaleY(1); }
+  47% { transform: translate(var(--cumea-eye-x), var(--cumea-eye-y)) scaleY(0.08); }
+}
+
+@keyframes mote-drift-calm {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(-0.4deg) scale(1); }
+  50% { transform: translate3d(0, -3px, 0) rotate(0.4deg) scale(1.006); }
+}
+
+@keyframes mote-drift-playful {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(-1.4deg) scale(1); }
+  50% { transform: translate3d(0, -8px, 0) rotate(1.4deg) scale(1.018); }
+}
+
+@keyframes mote-drift-kinetic {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(-2.5deg) scale(1); }
+  28% { transform: translate3d(0, -12px, 0) rotate(2.2deg) scale(1.03); }
+  52% { transform: translate3d(0, 1px, 0) rotate(-1.2deg) scale(0.99); }
+  76% { transform: translate3d(0, -7px, 0) rotate(1.4deg) scale(1.02); }
+}
+
+@keyframes mote-look-around {
+  0%, 14%, 100% { transform: translate3d(0, 0, 0); }
+  25%, 39% { transform: translate3d(-11px, -3px, 0); }
+  50%, 63% { transform: translate3d(10px, 2px, 0); }
+  74%, 87% { transform: translate3d(2px, -8px, 0); }
+}
+
+@keyframes mote-needs-pulse {
+  0%, 100% { opacity: 0.75; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+
+@keyframes mote-working {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(-1.2deg) scale(0.99); }
+  50% { transform: translate3d(0, -7px, 0) rotate(1.4deg) scale(1.02); }
+}
+
+@keyframes mote-working-orbit {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes mote-success {
+  0% { transform: translateY(0) scale(1); }
+  30% { transform: translateY(4px) scale(1.1, 0.86); }
+  58% { transform: translateY(-8px) scale(0.92, 1.12); }
+  78% { transform: translateY(1px) scale(1.04, 0.96); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+@keyframes mote-error {
+  0%, 100% { transform: translateX(0) rotate(0); }
+  22% { transform: translateX(-7px) rotate(-4deg); }
+  43% { transform: translateX(6px) rotate(4deg); }
+  64% { transform: translateX(-4px) rotate(-2deg); }
+  82% { transform: translateX(2px) rotate(1deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mote-avatar *,
+  .mote-avatar .cumea-motion,
+  .mote-avatar .mote-character,
+  .mote-avatar .mote-gaze,
+  .mote-avatar .mote-eyes,
+  .mote-avatar .mote-working-orbit,
+  .mote-avatar .mote-needs-indicator {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .mote-avatar .mote-eyes,
+  .mote-avatar .mote-gaze {
+    transform: none !important;
+  }
+
+  .mote-avatar--working .mote-working-orbit {
+    opacity: 0.45;
+  }
+}

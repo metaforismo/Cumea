@@ -1,0 +1,7 @@
+packages:
+  - .
+  - apps/mobile
+
+# Expo SDK 54+ supports pnpm's isolated dependency layout. Keeping the
+# default avoids flattening the existing desktop install into the mobile app.
+# The independently deployed landing has its own lockfile under apps/landing.

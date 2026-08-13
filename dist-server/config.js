@@ -3,13 +3,14 @@
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
 import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { writeFileAtomic } from "./atomic.js";
-export const DATA_DIR = join(homedir(), ".cumea");
+export const DATA_DIR = process.env.CUMEA_DATA_DIR ? resolve(process.env.CUMEA_DATA_DIR) : join(homedir(), ".cumea");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
+export const ATTACHMENTS_DIR = join(DATA_DIR, "attachments");
 export function ensureDirs() {
-    for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR]) {
+    for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR, ATTACHMENTS_DIR]) {
         mkdirSync(dir, { recursive: true, mode: 0o700 });
         try {
             chmodSync(dir, 0o700);

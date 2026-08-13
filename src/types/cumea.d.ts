@@ -2,8 +2,21 @@
 export {};
 
 declare global {
+  type CuaPublicStatus = {
+    state: "checking" | "starting" | "ready" | "needs-permissions" | "unavailable" | "error";
+    mode: "embedded" | "standalone" | "needs-permissions" | "unavailable" | "error" | null;
+    permissions: { accessibility: boolean; screenRecording: boolean } | null;
+    reason: string | null;
+    driverVersion: string | null;
+  };
+
   interface Window {
     cumea?: {
+      platform: "darwin" | "win32" | "linux" | string;
+      cuaStatus(): Promise<CuaPublicStatus>;
+      cuaRequestPermissions(): Promise<CuaPublicStatus>;
+      cuaRetry(): Promise<CuaPublicStatus>;
+      cuaOpenSettings(permission: "accessibility" | "screenRecording"): Promise<boolean>;
       screenFrame(): Promise<string | null>;
       speechStart(): Promise<void>;
       speechStop(): Promise<void>;

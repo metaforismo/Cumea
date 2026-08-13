@@ -2,10 +2,11 @@
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
 // one). messages-<threadId>.json holds the folded transcript.
-import { readFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
+import { stageFilesForDeletion, type DeletionFile } from "./delete-files.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
 
@@ -33,6 +34,48 @@ export type CumeaExpression =
   | "worried"
   | "mischievous";
 
+export const MOTE_SHAPE_IDS = ["orb", "soft", "tile", "capsule", "peak", "gem", "ripple", "drop"] as const;
+export type MoteShapeId = (typeof MOTE_SHAPE_IDS)[number];
+export type MoteMotionLevel = "calm" | "playful" | "kinetic";
+
+export interface BotAvatarConfig {
+  kind: "mote" | "upload";
+  shapeId: MoteShapeId;
+  color: string;
+  motion: MoteMotionLevel;
+  /** Client-resized raster only. SVG is deliberately excluded. */
+  imageDataUrl?: string;
+}
+
+const MOTE_MOTION_LEVELS = new Set<MoteMotionLevel>(["calm", "playful", "kinetic"]);
+const MOTE_SHAPE_SET = new Set<MoteShapeId>(MOTE_SHAPE_IDS);
+const RASTER_DATA_URL = /^data:image\/(?:png|jpeg|webp);base64,[a-zA-Z0-9+/]+={0,2}$/;
+
+/** Strict public boundary for avatar JSON received over HTTP or read from disk. */
+export function parseBotAvatar(value: unknown): BotAvatarConfig | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind !== "mote" && candidate.kind !== "upload") return null;
+  if (typeof candidate.shapeId !== "string" || !MOTE_SHAPE_SET.has(candidate.shapeId as MoteShapeId)) return null;
+  if (typeof candidate.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(candidate.color)) return null;
+  if (typeof candidate.motion !== "string" || !MOTE_MOTION_LEVELS.has(candidate.motion as MoteMotionLevel)) return null;
+  const base: BotAvatarConfig = {
+    kind: candidate.kind,
+    shapeId: candidate.shapeId as MoteShapeId,
+    color: candidate.color.toLowerCase(),
+    motion: candidate.motion as MoteMotionLevel,
+  };
+  if (candidate.kind === "upload") {
+    if (
+      typeof candidate.imageDataUrl !== "string" ||
+      candidate.imageDataUrl.length > 720_000 ||
+      !RASTER_DATA_URL.test(candidate.imageDataUrl)
+    ) return null;
+    base.imageDataUrl = candidate.imageDataUrl;
+  }
+  return base;
+}
+
 export interface OptionCardData {
   title: string;
   subtitle: string;
@@ -41,14 +84,35 @@ export interface OptionCardData {
   dismissed?: boolean;
   /** Present when this card is a live provider ask (approval/question). */
   requestId?: string;
+  requestType?: "permission" | "question";
+  tool?: string;
+}
+
+export interface AttachmentRef {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
+export interface HandoffData {
+  fromBotId: string;
+  fromName: string;
+  toBotId: string;
+  toName: string;
+  prompt: string;
+  status: "requested" | "completed" | "failed";
+  reply?: string;
 }
 
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen";
+  kind: "text" | "options" | "activity" | "screen" | "handoff";
   text?: string;
   card?: OptionCardData;
+  attachments?: AttachmentRef[];
+  handoff?: HandoffData;
   /** activity messages: tool name + outcome */
   tool?: { name: string; ok?: boolean };
   /** screen messages: a frame of the bot's computer (base64 image) */
@@ -66,6 +130,7 @@ export interface BotRecord {
   notifications: boolean;
   color: CumeaColor;
   mascotExpression?: CumeaExpression | null;
+  avatar: BotAvatarConfig;
   unread: boolean;
   modelSelection: ModelSelection;
   /** provider-native continuation per instance (e.g. claude session id) */
@@ -73,6 +138,13 @@ export interface BotRecord {
   /** which computer the bot acts on: its cloud box, this Mac (local CUA),
    * or none. Unset = auto (box when it exists, else local when available). */
   computer?: "cloud" | "local" | "off";
+  /** Optional visual grouping in the sidebar. */
+  sectionId?: string | null;
+  /** Connected apps and peer agents are independently scoped per bot. */
+  appsEnabled?: boolean;
+  collaborationEnabled?: boolean;
+  /** Remembered provider permission behavior for this bot. */
+  approvalPolicy?: "ask" | "allow" | "deny";
   pinned?: boolean;
   hidden?: boolean;
   busy?: boolean;
@@ -81,6 +153,11 @@ export interface BotRecord {
 
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
+
+export interface BotRecordDeletionTransaction {
+  rollback: () => void;
+  finalize: () => void;
+}
 
 const COLORS: CumeaColor[] = [
   "green",
@@ -94,6 +171,28 @@ const COLORS: CumeaColor[] = [
   "teal",
   "coral",
 ];
+
+const LEGACY_MOTE_COLORS: Record<CumeaColor, string> = {
+  green: "#19ae7a",
+  blue: "#2f8de3",
+  red: "#dc2944",
+  orange: "#f56a16",
+  purple: "#7651d6",
+  cyan: "#16a79d",
+  pink: "#d72879",
+  yellow: "#ee9e18",
+  teal: "#16a79d",
+  coral: "#f56a16",
+};
+
+function defaultBotAvatar(index: number, color: CumeaColor): BotAvatarConfig {
+  return {
+    kind: "mote",
+    shapeId: MOTE_SHAPE_IDS[index % MOTE_SHAPE_IDS.length],
+    color: LEGACY_MOTE_COLORS[color],
+    motion: index % 3 === 0 ? "playful" : index % 3 === 1 ? "calm" : "kinetic",
+  };
+}
 
 /** Resolve @mentions in a message against a bot roster: `@` must start a
  * word, names match case-insensitively, longest name wins (so "@New Bot 2"
@@ -139,8 +238,22 @@ export class Store {
     } catch {
       this.bots = [];
     }
-    // busy never survives a restart — no turn does either
-    for (const b of this.bots) b.busy = false;
+    // busy never survives a restart — no turn does either. Old bot records
+    // are upgraded in place so every renderer receives a durable Mote config.
+    let migrated = false;
+    for (const [index, b] of this.bots.entries()) {
+      b.busy = false;
+      const avatar = parseBotAvatar(b.avatar);
+      if (avatar) {
+        b.avatar = avatar;
+      } else {
+        const legacyColor = COLORS.includes(b.color) ? b.color : COLORS[index % COLORS.length];
+        b.color = legacyColor;
+        b.avatar = defaultBotAvatar(index, legacyColor);
+        migrated = true;
+      }
+    }
+    if (migrated) this.saveBots();
   }
 
   private saveBots() {
@@ -186,6 +299,7 @@ export class Store {
   }
 
   createBot(): BotRecord {
+    const color = COLORS[this.bots.length % COLORS.length];
     const bot: BotRecord = {
       id: newId(),
       threadId: newId(),
@@ -193,10 +307,14 @@ export class Store {
       title: "",
       description: "",
       notifications: true,
-      color: COLORS[this.bots.length % COLORS.length],
+      color,
+      avatar: defaultBotAvatar(this.bots.length, color),
       unread: false,
       modelSelection: this.defaultSelection(),
       resumeCursors: {},
+      appsEnabled: true,
+      collaborationEnabled: true,
+      approvalPolicy: "ask",
       createdAt: Date.now(),
     };
     this.bots.unshift(bot);
@@ -213,13 +331,78 @@ export class Store {
   deleteBot(id: string): boolean {
     const bot = this.bot(id);
     if (!bot) return false;
-    this.bots = this.bots.filter((b) => b.id !== id);
-    this.messages.delete(bot.threadId);
-    this.saveBots();
+
+    const files = stageFilesForDeletion(this.botDeletionFiles(id));
+    let transaction: BotRecordDeletionTransaction | null = null;
     try {
-      unlinkSync(messagesFile(bot.threadId));
-    } catch {}
-    return true;
+      transaction = this.deleteBotRecordTransaction(id);
+      if (!transaction) throw Object.assign(new Error("bot disappeared during deletion"), { status: 500 });
+      files.purge();
+      transaction.finalize();
+      return true;
+    } catch (error) {
+      const rollbackErrors: unknown[] = [];
+      try {
+        transaction?.rollback();
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+      try {
+        files.rollback();
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+      if (rollbackErrors.length) {
+        throw Object.assign(new Error("bot deletion failed and could not be fully rolled back"), {
+          status: 500,
+          cause: new AggregateError([error, ...rollbackErrors]),
+        });
+      }
+      throw error;
+    }
+  }
+
+  botDeletionFiles(id: string): DeletionFile[] {
+    const bot = this.bot(id);
+    return bot ? [{ path: messagesFile(bot.threadId), label: "transcript" }] : [];
+  }
+
+  /** Metadata phase used after the outer transaction quarantines every file. */
+  deleteBotRecordTransaction(id: string): BotRecordDeletionTransaction | null {
+    const bot = this.bot(id);
+    if (!bot) return null;
+    const previousBots = this.bots;
+    this.bots = previousBots.filter((candidate) => candidate.id !== id);
+    try {
+      this.saveBots();
+    } catch (error) {
+      this.bots = previousBots;
+      throw error;
+    }
+
+    let settled = false;
+    return {
+      rollback: () => {
+        if (settled) return;
+        this.bots = previousBots;
+        try {
+          this.saveBots();
+          settled = true;
+        } catch (error) {
+          // Keep the retry anchor visible in the live store even when the
+          // durable rollback itself is blocked.
+          throw Object.assign(new Error("could not restore bot record after deletion failed"), {
+            status: 500,
+            cause: error,
+          });
+        }
+      },
+      finalize: () => {
+        if (settled) return;
+        this.messages.delete(bot.threadId);
+        settled = true;
+      },
+    };
   }
 
   patchBot(id: string, patch: Partial<BotRecord>): BotRecord | null {

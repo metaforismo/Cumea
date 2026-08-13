@@ -2,21 +2,61 @@
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { homedir } from "node:os";
-import { dirname, extname, join, resolve, sep } from "node:path";
+import { homedir, hostname } from "node:os";
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeFileAtomic } from "./atomic.js";
 import * as box from "./box.js";
 import * as composio from "./composio.js";
-import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.js";
+import { ATTACHMENTS_DIR, ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.js";
+import { stageFilesForDeletion } from "./delete-files.js";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.js";
 import { threadEventKey, threadEventPrefix } from "./event-key.js";
 import { EventBus } from "./harness/bus.js";
 import { ProviderRegistry } from "./harness/registry.js";
-import { mentionedBots, Store } from "./store.js";
+import { MOBILE_BOOTSTRAP_MESSAGE_LIMIT, MOBILE_MESSAGE_PAGE_LIMIT, MOBILE_MESSAGE_PAGE_LIMIT_MAX, decodeMobileComputerPreview, publicMobileBot, publicMobileMessage, publicMobileWorkspace, sanitizeRemoteSsePayload, } from "./mobile.js";
+import { PairingStore } from "./pairing.js";
+import { mentionedBots, parseBotAvatar, Store } from "./store.js";
+import { WorkspaceStore } from "./workspace.js";
 const PORT = Number(process.env.CUMEA_PORT || 8799);
 const STATIC_DIR = process.env.CUMEA_STATIC_DIR || null;
+function remoteListenerConfig() {
+    if (process.env.CUMEA_REMOTE_ACCESS !== "1")
+        return null;
+    const port = Number(process.env.CUMEA_REMOTE_PORT || PORT + 1);
+    if (!Number.isInteger(port) || port < 1 || port > 65_535 || port === PORT) {
+        throw new Error("CUMEA_REMOTE_PORT must be a valid port different from CUMEA_PORT");
+    }
+    const bind = String(process.env.CUMEA_REMOTE_BIND || "127.0.0.1").trim();
+    if (!bind)
+        throw new Error("CUMEA_REMOTE_BIND cannot be empty");
+    const loopbackBind = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(bind);
+    if (!loopbackBind && process.env.CUMEA_REMOTE_ALLOW_DIRECT_BIND !== "1") {
+        throw new Error("non-loopback CUMEA_REMOTE_BIND requires CUMEA_REMOTE_ALLOW_DIRECT_BIND=1");
+    }
+    const rawPublicUrl = String(process.env.CUMEA_REMOTE_PUBLIC_URL || "").trim();
+    if (!rawPublicUrl)
+        throw new Error("CUMEA_REMOTE_PUBLIC_URL is required when remote access is enabled");
+    let publicUrl;
+    try {
+        publicUrl = new URL(rawPublicUrl);
+    }
+    catch {
+        throw new Error("CUMEA_REMOTE_PUBLIC_URL must be an absolute URL");
+    }
+    if (publicUrl.username || publicUrl.password || publicUrl.search || publicUrl.hash || publicUrl.pathname !== "/") {
+        throw new Error("CUMEA_REMOTE_PUBLIC_URL must be an origin without credentials, path, query, or fragment");
+    }
+    const insecureAllowed = process.env.CUMEA_REMOTE_ALLOW_INSECURE === "1";
+    if (publicUrl.protocol !== "https:" && !(insecureAllowed && publicUrl.protocol === "http:")) {
+        throw new Error("CUMEA_REMOTE_PUBLIC_URL must use HTTPS (HTTP requires CUMEA_REMOTE_ALLOW_INSECURE=1)");
+    }
+    return { bind, port, publicUrl: publicUrl.origin };
+}
+const REMOTE = remoteListenerConfig();
+const REMOTE_SCREEN_PREVIEW = Boolean(REMOTE) && process.env.CUMEA_REMOTE_SCREEN_PREVIEW === "1";
 const MIME = {
     ".html": "text/html",
     ".js": "text/javascript",
@@ -64,7 +104,7 @@ function agentsIntegration(botId, depth) {
 /** Run a turn on `targetBotId` and resolve with its assistant text — the
  * synchronous half of ask_bot. Subscribes to the bus, folds assistant_text
  * for that thread, resolves on turn.completed (or a 4-min ceiling). */
-function askBotAndWait(targetBotId, message, depth) {
+function askBotAndWait(targetBotId, message, depth, sourceBotId) {
     const target = store.bot(targetBotId);
     if (!target)
         return Promise.resolve("(no such bot)");
@@ -91,7 +131,12 @@ function askBotAndWait(targetBotId, message, depth) {
             }
         });
         const timer = setTimeout(() => finish(text || "(timed out waiting for the bot to reply)"), 4 * 60_000);
-        startTurn(targetBotId, message, { commsDepth: depth + 1 }).catch((err) => finish(`(couldn't start that bot: ${err instanceof Error ? err.message : String(err)})`));
+        startTurn(targetBotId, message, {
+            commsDepth: depth + 1,
+            source: "handoff",
+            sourceBotId,
+            taskTitle: `Handoff from ${store.bot(sourceBotId ?? "")?.name ?? "another bot"}`,
+        }).catch((err) => finish(`(couldn't start that bot: ${err instanceof Error ? err.message : String(err)})`));
     });
 }
 // default selection for new bots: first available instance, claude preferred
@@ -103,13 +148,66 @@ async function defaultSelection() {
 }
 let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
 const store = new Store(() => bootSelection);
+const workspace = new WorkspaceStore();
+const pairing = new PairingStore();
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
-// ── SSE fan-out to clients ─────────────────────────────────────────────
-const sseClients = new Set();
-function broadcast(payload) {
-    const frame = `data: ${JSON.stringify(payload)}\n\n`;
-    for (const res of [...sseClients]) {
+const sseClients = new Map();
+function visibleRemoteBotIds() {
+    return new Set(store.bots.filter((bot) => !bot.hidden).map((bot) => bot.id));
+}
+/** Visibility is resolved against the canonical store immediately before
+ * every remote write. Unknown/malformed bot-scoped event families fail closed. */
+function visibleRemoteSsePayload(payload, allowDeletedBot) {
+    if (!payload || typeof payload !== "object")
+        return null;
+    const envelope = payload;
+    switch (envelope.kind) {
+        case "bot": {
+            const eventBot = envelope.bot;
+            if (typeof eventBot?.id !== "string")
+                return null;
+            const current = store.bot(eventBot.id);
+            return current && !current.hidden ? payload : null;
+        }
+        case "message":
+        case "message.patch": {
+            if (typeof envelope.threadId !== "string")
+                return null;
+            return store.bots.some((bot) => bot.threadId === envelope.threadId && !bot.hidden) ? payload : null;
+        }
+        case "runtime": {
+            const event = envelope.event;
+            if (typeof event?.threadId !== "string")
+                return null;
+            return store.bots.some((bot) => bot.threadId === event.threadId && !bot.hidden) ? payload : null;
+        }
+        case "bot.deleted":
+            return allowDeletedBot && typeof envelope.botId === "string" && envelope.botId ? payload : null;
+        default:
+            return payload;
+    }
+}
+function broadcast(payload, options = {}) {
+    for (const [res, client] of [...sseClients]) {
+        if (client.surface === "remote" && (!client.deviceId || !pairing.isActive(client.deviceId))) {
+            sseClients.delete(res);
+            res.end();
+            continue;
+        }
+        const surface = client.surface;
+        const remoteCandidate = Object.prototype.hasOwnProperty.call(options, "remoteOverride")
+            ? options.remoteOverride
+            : payload;
+        const visibleCandidate = surface === "remote"
+            ? visibleRemoteSsePayload(remoteCandidate, options.remoteDeletedBotWasVisible === true)
+            : payload;
+        const outgoing = surface === "remote"
+            ? sanitizeRemoteSsePayload(visibleCandidate, { visibleBotIds: visibleRemoteBotIds() })
+            : visibleCandidate;
+        if (outgoing === null)
+            continue;
+        const frame = `data: ${JSON.stringify(outgoing)}\n\n`;
         try {
             res.write(frame);
         }
@@ -118,11 +216,34 @@ function broadcast(payload) {
         }
     }
 }
+function publicAttachment(attachment) {
+    const { storedPath: _storedPath, ...safe } = attachment;
+    return safe;
+}
+function publicWorkspace() {
+    const snapshot = workspace.snapshot();
+    return {
+        sections: snapshot.sections,
+        attachments: snapshot.attachments.map(publicAttachment),
+        tasks: snapshot.tasks,
+        runs: snapshot.runs,
+        routines: snapshot.routines,
+    };
+}
+function publicRemoteWorkspace() {
+    return publicMobileWorkspace(publicWorkspace(), visibleRemoteBotIds());
+}
+function broadcastWorkspace() {
+    broadcast({ kind: "workspace", workspace: publicWorkspace() });
+}
 // ── server-side event folding (upstream's ingestion worker, miniature) ──
 // The canonical stream is the source of truth; the persisted transcript
 // and every client view are projections of it.
 const toolMessageByItem = new Map(); // threadId + itemId -> messageId
 const askMessageByRequest = new Map(); // threadId + requestId -> messageId
+const activeRunByThread = new Map();
+/** Threads whose current turn actually invoked a computer tool. */
+const usedComputerByThread = new Set();
 function clearThreadEventState(threadId) {
     const prefix = threadEventPrefix(threadId);
     for (const key of toolMessageByItem.keys())
@@ -131,6 +252,7 @@ function clearThreadEventState(threadId) {
     for (const key of askMessageByRequest.keys())
         if (key.startsWith(prefix))
             askMessageByRequest.delete(key);
+    usedComputerByThread.delete(threadId);
 }
 bus.subscribe((event) => {
     broadcast({ kind: "runtime", event });
@@ -150,7 +272,12 @@ bus.subscribe((event) => {
             break;
         case "item.completed":
             if (event.itemType === "assistant_text") {
-                pushMessage({ role: "bot", kind: "text", text: event.text });
+                const message = pushMessage({ role: "bot", kind: "text", text: event.text });
+                const runId = activeRunByThread.get(event.threadId);
+                if (runId) {
+                    workspace.addArtifact(runId, { kind: "response", label: "Bot response", messageId: message.id, mime: "text/plain" });
+                    broadcastWorkspace();
+                }
             }
             else if (event.itemType === "tool" && event.itemId) {
                 const key = threadEventKey(event.threadId, event.itemId);
@@ -163,6 +290,11 @@ bus.subscribe((event) => {
                         broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
                     toolMessageByItem.delete(key);
                 }
+                const runId = activeRunByThread.get(event.threadId);
+                if (runId) {
+                    workspace.completeStep(runId, event.itemId, event.ok ? "completed" : "failed");
+                    broadcastWorkspace();
+                }
                 // the bot just finished acting — refresh its screen preview now
                 pokeScreenPoller(bot.id);
             }
@@ -172,22 +304,69 @@ bus.subscribe((event) => {
                 const message = pushMessage({ role: "bot", kind: "activity", tool: { name: event.title ?? "tool" } });
                 if (event.itemId)
                     toolMessageByItem.set(threadEventKey(event.threadId, event.itemId), message.id);
+                if ((event.title ?? "").startsWith("mcp__computer__"))
+                    usedComputerByThread.add(event.threadId);
+                const runId = activeRunByThread.get(event.threadId);
+                if (runId) {
+                    workspace.addStep(runId, { kind: "tool", title: event.title ?? "Tool", itemId: event.itemId });
+                    broadcastWorkspace();
+                }
             }
             break;
         case "request.opened": {
             const permission = event.requestType === "permission";
+            const runId = activeRunByThread.get(event.threadId);
+            const policy = permission ? bot.approvalPolicy ?? "ask" : "ask";
+            if (permission && policy !== "ask") {
+                const behavior = policy === "allow" ? "allow" : "deny";
+                pushMessage({
+                    role: "bot",
+                    kind: "options",
+                    card: {
+                        title: policy === "allow" ? "Allowed by bot policy" : "Denied by bot policy",
+                        subtitle: event.summary,
+                        options: ["Always allow", "Allow once", "Never"],
+                        requestId: event.requestId,
+                        requestType: event.requestType,
+                        tool: event.tool,
+                        answered: behavior,
+                        dismissed: true,
+                    },
+                });
+                if (runId) {
+                    workspace.addStep(runId, {
+                        kind: "approval",
+                        title: event.summary,
+                        itemId: event.requestId,
+                        status: behavior === "allow" ? "completed" : "denied",
+                    });
+                    broadcastWorkspace();
+                }
+                const instance = registry.get(bot.modelSelection.instanceId);
+                void instance?.adapter.respondToRequest(event.threadId, event.requestId ?? "", { behavior }).catch((error) => {
+                    const message = error instanceof Error ? error.message : String(error);
+                    pushMessage({ role: "bot", kind: "activity", tool: { name: `approval policy failed: ${message.slice(0, 120)}`, ok: false } });
+                });
+                break;
+            }
             const message = pushMessage({
                 role: "bot",
                 kind: "options",
                 card: {
                     title: permission ? "Approval needed" : "Your bot has a question",
                     subtitle: event.summary,
-                    options: event.choices?.length ? event.choices : permission ? ["Allow", "Deny"] : [],
+                    options: event.choices?.length ? event.choices : permission ? ["Always allow", "Allow once", "Never"] : [],
                     requestId: event.requestId,
+                    requestType: event.requestType,
+                    tool: event.tool,
                 },
             });
             if (event.requestId)
                 askMessageByRequest.set(threadEventKey(event.threadId, event.requestId), message.id);
+            if (runId) {
+                workspace.markNeedsAttention(runId, event.summary, event.requestId);
+                broadcastWorkspace();
+            }
             break;
         }
         case "request.resolved": {
@@ -205,17 +384,38 @@ bus.subscribe((event) => {
                 if (key)
                     askMessageByRequest.delete(key);
             }
+            const runId = activeRunByThread.get(event.threadId);
+            if (runId) {
+                workspace.resumeRun(runId, event.requestId, event.behavior === "deny");
+                broadcastWorkspace();
+            }
             break;
         }
-        case "runtime.error":
+        case "runtime.error": {
             pushMessage({ role: "bot", kind: "activity", tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false } });
+            const runId = activeRunByThread.get(event.threadId);
+            if (runId) {
+                workspace.addStep(runId, { kind: "tool", title: event.message.slice(0, 160), status: "failed" });
+                broadcastWorkspace();
+            }
             break;
+        }
         case "turn.completed": {
             // the last live frame becomes a settled inline screen message —
             // the screenshot-in-chat moment
             const frame = stopScreenPoller(bot.id);
-            if (frame)
-                pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
+            if (frame && usedComputerByThread.has(event.threadId)) {
+                const message = pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
+                const runId = activeRunByThread.get(event.threadId);
+                if (runId)
+                    workspace.addArtifact(runId, { kind: "screen", label: "Final screen", messageId: message.id, mime: frame.mime });
+            }
+            const runId = activeRunByThread.get(event.threadId);
+            if (runId) {
+                workspace.completeRun(runId, event.ok, event.stopReason || (event.ok ? undefined : "Provider run failed"));
+                activeRunByThread.delete(event.threadId);
+                broadcastWorkspace();
+            }
             store.patchBot(bot.id, { busy: false, unread: true });
             broadcast({ kind: "bot", bot: store.bot(bot.id) });
             clearThreadEventState(event.threadId);
@@ -234,9 +434,9 @@ function startScreenPoller(botId) {
         inFlight = true;
         try {
             const { png, format } = await box.screenshotBox(cfg, botId);
-            const frame = { png, mime: format === "jpeg" ? "image/jpeg" : "image/png" };
+            const frame = { png, mime: format === "jpeg" ? "image/jpeg" : "image/png", capturedAt: Date.now() };
             entry.last = frame;
-            broadcast({ kind: "screen", botId, ...frame });
+            broadcast({ kind: "screen", botId, png: frame.png, mime: frame.mime });
         }
         catch {
             /* box asleep or mid-command — try again next tick */
@@ -269,11 +469,18 @@ function stopScreenPoller(botId) {
 // (~/Library/Application Support/Cumea/cua-connection.json). Read
 // fresh each turn — Electron may restart or permissions may change.
 function readCuaConnection() {
-    // new name first; pre-rename desktop builds used the old directory
-    for (const dir of ["Cumea"]) {
+    const explicit = process.env.CUMEA_CUA_CONNECTION;
+    const candidates = [
+        ...(explicit && isAbsolute(explicit) ? [explicit] : []),
+        ...(process.platform === "darwin"
+            ? [join(homedir(), "Library", "Application Support", "Cumea", "cua-connection.json")]
+            : process.platform === "win32"
+                ? [join(process.env.APPDATA || join(homedir(), "AppData", "Roaming"), "Cumea", "cua-connection.json")]
+                : [join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "Cumea", "cua-connection.json")]),
+    ];
+    for (const path of candidates) {
         try {
-            const p = join(homedir(), "Library", "Application Support", dir, "cua-connection.json");
-            const conn = JSON.parse(readFileSync(p, "utf8"));
+            const conn = JSON.parse(readFileSync(path, "utf8"));
             if (!conn || conn.mode === "unavailable" || !conn.mcpCommand)
                 continue;
             return { command: conn.mcpCommand, args: conn.mcpArgs ?? ["mcp"], env: conn.mcpEnv ?? {} };
@@ -284,20 +491,55 @@ function readCuaConnection() {
     }
     return null;
 }
-// ── turn dispatch (upstream ProviderCommandReactor, miniature) ──────────
-async function startTurn(botId, text, opts) {
+async function startTurn(botId, text, opts = {}) {
     const bot = store.bot(botId);
     if (!bot)
         throw Object.assign(new Error("no such bot"), { status: 404 });
     if (bot.busy)
         throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
-    const commsDepth = opts?.commsDepth ?? 0;
+    const commsDepth = opts.commsDepth ?? 0;
+    const attachments = opts.attachments ?? [];
+    const task = opts.track === false
+        ? null
+        : opts.taskId
+            ? workspace.task(opts.taskId)
+            : workspace.createTask({
+                botId: bot.id,
+                prompt: text,
+                title: opts.taskTitle,
+                source: opts.source,
+                sourceBotId: opts.sourceBotId,
+                routineId: opts.routineId,
+                attachmentIds: attachments.map((attachment) => attachment.id),
+            });
+    if (opts.track !== false && !task)
+        throw Object.assign(new Error("no such task"), { status: 404 });
+    if (task && task.botId !== bot.id) {
+        throw Object.assign(new Error("task belongs to another bot"), { status: 409 });
+    }
+    const userMessage = store.appendMessage(bot.threadId, {
+        role: "user",
+        kind: "text",
+        text,
+        ...(attachments.length ? { attachments: attachments.map(publicAttachment) } : {}),
+    });
+    broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
+    let runId;
+    if (task) {
+        const run = workspace.createRun(task.id);
+        runId = run.id;
+        broadcastWorkspace();
+    }
     const instance = registry.get(bot.modelSelection.instanceId);
     if (!instance) {
-        throw Object.assign(new Error(`provider instance "${bot.modelSelection.instanceId}" is unavailable — pick another model in settings`), { status: 409 });
+        const message = `provider instance "${bot.modelSelection.instanceId}" is unavailable — pick another model in settings`;
+        if (runId)
+            workspace.completeRun(runId, false, message);
+        broadcastWorkspace();
+        throw Object.assign(new Error(message), { status: 409 });
     }
-    const userMessage = store.appendMessage(bot.threadId, { role: "user", kind: "text", text });
-    broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
+    if (runId)
+        activeRunByThread.set(bot.threadId, runId);
     // transcript for API-backed drivers: settled text turns only
     const transcript = store
         .messagesFor(bot.threadId)
@@ -311,6 +553,11 @@ async function startTurn(botId, text, opts) {
     ]
         .filter(Boolean)
         .join(" ");
+    const providerText = attachments.length
+        ? `${text}\n\nAttached files available on this computer:\n${attachments
+            .map((attachment) => `- ${attachment.name} (${attachment.mime}, ${attachment.size} bytes): ${attachment.storedPath}`)
+            .join("\n")}`
+        : text;
     // busy flips immediately so the composer locks; the dispatch itself runs
     // in the background — box provisioning can take ~90s and must never
     // hang the HTTP request
@@ -319,10 +566,11 @@ async function startTurn(botId, text, opts) {
     void (async () => {
         try {
             const integrations = {};
-            if (cfg.composio?.key)
+            if (bot.appsEnabled !== false && instance.adapter.capabilities.composioMcp === true && cfg.composio?.key) {
                 integrations.composio = { key: cfg.composio.key, url: cfg.composio.url };
+            }
             const wants = bot.computer; // 'cloud' | 'local' | 'off' | undefined(auto)
-            if (wants !== "off" && wants !== "local" && box.boxConfigured(cfg)) {
+            if (instance.adapter.capabilities.cloudComputerMcp === true && wants !== "off" && wants !== "local" && box.boxConfigured(cfg)) {
                 let b = await box.findBox(cfg, bot.id).catch(() => null);
                 // the Computer driver runs ON the box — provision it on first use
                 if (!b && instance.driverKind === "boxAgent") {
@@ -336,7 +584,7 @@ async function startTurn(botId, text, opts) {
             // local computer (this Mac) via the Electron-hosted cua-driver: the
             // Electron main process owns the daemon (TCC attribution) and writes
             // its spawn contract to cua-connection.json; the harness only reads it
-            if (!integrations.computer && wants !== "off" && wants !== "cloud") {
+            if (instance.adapter.capabilities.localComputerMcp === true && !integrations.computer && wants !== "off" && wants !== "cloud") {
                 const cua = readCuaConnection();
                 if (cua)
                     integrations.localComputer = cua;
@@ -349,6 +597,7 @@ async function startTurn(botId, text, opts) {
             // without it must not be told about tools it cannot call. Any bot can
             // still be the TARGET of ask_bot regardless of its driver.
             if (commsDepth < MAX_COMMS_DEPTH &&
+                bot.collaborationEnabled !== false &&
                 instance.adapter.capabilities.agentsMcp === true &&
                 store.bots.filter((b) => b.id !== bot.id && !b.hidden).length > 0) {
                 integrations.agents = agentsIntegration(bot.id, commsDepth);
@@ -357,11 +606,11 @@ async function startTurn(botId, text, opts) {
             // an explicit delegation nudge — the agent still does the ask_bot call
             // itself, so the harness stays the single owner of turns/permissions
             const tagged = integrations.agents
-                ? mentionedBots(text, store.bots.filter((b) => b.id !== bot.id))
+                ? mentionedBots(providerText, store.bots.filter((b) => b.id !== bot.id))
                 : [];
-            await instance.adapter.sendTurn({
+            const started = await instance.adapter.sendTurn({
                 threadId: bot.threadId,
-                text,
+                text: providerText,
                 model: bot.modelSelection.model,
                 resumeCursor: bot.resumeCursors[bot.modelSelection.instanceId],
                 transcript,
@@ -374,6 +623,9 @@ async function startTurn(botId, text, opts) {
                     (integrations.agents
                         ? " You can work with the user's other bots through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply."
                         : "") +
+                    (integrations.composio
+                        ? " The user's connected apps are available through the composio tools. Search for the right tool and use it before telling the user that a service is unavailable."
+                        : "") +
                     (tagged.length
                         ? ` The user tagged ${tagged
                             .map((t) => `@${t.name} (ask_bot bot_id ${t.id})`)
@@ -381,6 +633,10 @@ async function startTurn(botId, text, opts) {
                         : ""),
                 integrations,
             });
+            if (runId) {
+                workspace.bindTurn(runId, started.turnId);
+                broadcastWorkspace();
+            }
             if (integrations.computer)
                 startScreenPoller(bot.id);
         }
@@ -392,6 +648,11 @@ async function startTurn(botId, text, opts) {
                 tool: { name: `error: ${message.slice(0, 160)}`, ok: false },
             });
             broadcast({ kind: "message", threadId: bot.threadId, message: failure });
+            if (runId) {
+                workspace.completeRun(runId, false, message);
+                activeRunByThread.delete(bot.threadId);
+                broadcastWorkspace();
+            }
             store.patchBot(bot.id, { busy: false });
             broadcast({ kind: "bot", bot: store.bot(bot.id) });
         }
@@ -420,10 +681,69 @@ async function reloadProviders() {
         if (!bot.busy)
             continue;
         store.patchBot(bot.id, { busy: false });
+        const runId = activeRunByThread.get(bot.threadId);
+        if (runId) {
+            workspace.completeRun(runId, false, "Providers reloaded while the task was running.");
+            activeRunByThread.delete(bot.threadId);
+        }
         clearThreadEventState(bot.threadId);
         broadcast({ kind: "bot", bot: store.bot(bot.id) });
     }
+    broadcastWorkspace();
 }
+async function runRoutine(routineId, manual = false) {
+    const routine = workspace.snapshot().routines.find((candidate) => candidate.id === routineId);
+    if (!routine)
+        throw Object.assign(new Error("no such routine"), { status: 404 });
+    const bot = store.bot(routine.botId);
+    workspace.advanceRoutine(routine.id);
+    if (!bot) {
+        workspace.markRoutineFailure(routine.id, "The routine's bot no longer exists.");
+        broadcastWorkspace();
+        if (manual)
+            throw Object.assign(new Error("the routine's bot no longer exists"), { status: 409 });
+        return;
+    }
+    if (bot.busy) {
+        workspace.markRoutineFailure(routine.id, "The bot was already working when this routine became due.");
+        broadcastWorkspace();
+        if (manual)
+            throw Object.assign(new Error("the bot is already working"), { status: 409 });
+        return;
+    }
+    broadcastWorkspace();
+    try {
+        await startTurn(bot.id, routine.prompt, {
+            source: "routine",
+            routineId: routine.id,
+            taskTitle: routine.name,
+        });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        workspace.markRoutineFailure(routine.id, message);
+        broadcastWorkspace();
+        if (manual)
+            throw error;
+    }
+}
+let dispatchingRoutines = false;
+async function dispatchDueRoutines() {
+    if (dispatchingRoutines)
+        return;
+    dispatchingRoutines = true;
+    try {
+        for (const routine of workspace.dueRoutines())
+            await runRoutine(routine.id);
+    }
+    finally {
+        dispatchingRoutines = false;
+    }
+}
+const routineTimer = setInterval(() => void dispatchDueRoutines(), 30_000);
+routineTimer.unref();
+const initialRoutineTimer = setTimeout(() => void dispatchDueRoutines(), 1_000);
+initialRoutineTimer.unref();
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 function json(res, status, body) {
     const data = JSON.stringify(body);
@@ -462,6 +782,92 @@ function readBody(req) {
         req.on("error", (error) => fail(error));
     });
 }
+const ATTACHMENT_MAX_FILE_BYTES = 25 * 1024 * 1024;
+function readBytes(req, maxBytes = ATTACHMENT_MAX_FILE_BYTES) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        let total = 0;
+        let done = false;
+        const fail = (error) => {
+            if (done)
+                return;
+            done = true;
+            reject(error);
+        };
+        req.on("data", (chunk) => {
+            if (done)
+                return;
+            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            total += bytes.length;
+            if (total > maxBytes) {
+                fail(Object.assign(new Error("attachment is larger than 25 MB"), { status: 413 }));
+                return;
+            }
+            chunks.push(bytes);
+        });
+        req.on("end", () => {
+            if (done)
+                return;
+            done = true;
+            resolve(Buffer.concat(chunks));
+        });
+        req.on("error", fail);
+    });
+}
+async function uploadAttachment(req, res, botId) {
+    const bot = store.bot(botId);
+    if (!bot)
+        return json(res, 404, { error: "no such bot" });
+    // Count is checked before consuming a body. Content-Length, when present,
+    // also lets us reject a storage-quota violation before buffering bytes.
+    workspace.assertAttachmentCapacity(bot.id, 0);
+    const declaredLength = Array.isArray(req.headers["content-length"])
+        ? req.headers["content-length"][0]
+        : req.headers["content-length"];
+    if (declaredLength !== undefined) {
+        const expectedBytes = Number(declaredLength);
+        if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0) {
+            throw Object.assign(new Error("invalid attachment content length"), { status: 400 });
+        }
+        if (expectedBytes > ATTACHMENT_MAX_FILE_BYTES) {
+            throw Object.assign(new Error("attachment is larger than 25 MB"), { status: 413 });
+        }
+        workspace.assertAttachmentCapacity(bot.id, expectedBytes);
+    }
+    const rawHeader = Array.isArray(req.headers["x-file-name"])
+        ? req.headers["x-file-name"][0]
+        : req.headers["x-file-name"];
+    let requestedName = "attachment";
+    try {
+        requestedName = decodeURIComponent(String(rawHeader || "attachment"));
+    }
+    catch {
+        throw Object.assign(new Error("invalid attachment name"), { status: 400 });
+    }
+    const safeName = basename(requestedName)
+        .replace(/[\u0000-\u001f\u007f]/g, "")
+        .trim()
+        .slice(0, 180) || "attachment";
+    const bytes = await readBytes(req);
+    if (!bytes.length)
+        return json(res, 400, { error: "attachment is empty" });
+    // The exact post-read check does not trust a missing or incorrect header.
+    workspace.assertAttachmentCapacity(bot.id, bytes.length);
+    const directory = join(ATTACHMENTS_DIR, bot.id);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const storedPath = join(directory, `${randomBytes(12).toString("hex")}-${safeName}`);
+    writeFileAtomic(storedPath, bytes);
+    const attachment = workspace.createAttachment({
+        botId: bot.id,
+        threadId: bot.threadId,
+        name: safeName,
+        mime: String(req.headers["content-type"] || "application/octet-stream").slice(0, 120),
+        size: bytes.length,
+        storedPath,
+    });
+    broadcastWorkspace();
+    return json(res, 201, { attachment: publicAttachment(attachment) });
+}
 const SECURITY_HEADERS = {
     "x-content-type-options": "nosniff",
     "referrer-policy": "no-referrer",
@@ -495,13 +901,145 @@ function requestOriginAllowed(req, method) {
         return false;
     }
 }
-const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+function bearerToken(req) {
+    const header = req.headers.authorization;
+    if (!header || Array.isArray(header))
+        return null;
+    const match = header.match(/^Bearer ([^\s]+)$/);
+    return match?.[1] ?? null;
+}
+/** Least-privilege mobile surface. Provider credentials, connector setup,
+ * instance metadata, and raw computer execution remain local-only. */
+function remoteRouteAllowed(method, path) {
+    if (method === "GET" && ["/api/health", "/api/mobile/bootstrap", "/api/events", "/api/work", "/api/bots"].includes(path)) {
+        return true;
+    }
+    if (method === "GET" && /^\/api\/bots\/[\w-]+\/messages$/.test(path))
+        return true;
+    if (method === "GET" && /^\/api\/bots\/[\w-]+\/computer-preview$/.test(path))
+        return true;
+    if (method === "DELETE" && /^\/api\/attachments\/[\w-]+$/.test(path))
+        return true;
+    if (method === "POST" && path === "/api/bots")
+        return true;
+    if (method === "POST" && /^\/api\/bots\/[\w-]+\/attachments$/.test(path))
+        return true;
+    if (method === "PATCH" && /^\/api\/bots\/[\w-]+$/.test(path))
+        return true;
+    if (method === "POST" && /^\/api\/bots\/[\w-]+\/(messages|respond|interrupt)$/.test(path))
+        return true;
+    return false;
+}
+function publicRemoteError(status, message) {
+    if (/provider|adapter|instance/i.test(message))
+        return "provider unavailable";
+    if (status >= 500)
+        return "request failed";
+    return message.slice(0, 240);
+}
+function parseRoutineSchedule(value) {
+    if (!value || typeof value !== "object") {
+        throw Object.assign(new Error("schedule required"), { status: 400 });
+    }
+    const schedule = value;
+    if (schedule.kind === "interval") {
+        return { kind: "interval", everyMinutes: Number(schedule.everyMinutes) };
+    }
+    if (schedule.kind === "daily") {
+        return { kind: "daily", time: String(schedule.time ?? ""), timezone: String(schedule.timezone ?? "") };
+    }
+    if (schedule.kind === "weekly") {
+        return {
+            kind: "weekly",
+            time: String(schedule.time ?? ""),
+            timezone: String(schedule.timezone ?? ""),
+            weekdays: Array.isArray(schedule.weekdays) ? schedule.weekdays.map(Number) : [],
+        };
+    }
+    throw Object.assign(new Error("unknown schedule kind"), { status: 400 });
+}
+async function handleRequest(req, res, surface) {
+    let url;
+    try {
+        url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+    }
+    catch {
+        return json(res, 400, { error: "invalid request URL" });
+    }
     const path = url.pathname;
     const method = req.method ?? "GET";
     try {
+        const pairingClaim = method === "POST" && path === "/api/pairing/claim";
+        let authenticatedDeviceId;
+        if (surface === "remote" && !pairingClaim) {
+            const token = bearerToken(req);
+            const device = token ? pairing.authenticate(token) : null;
+            if (!device) {
+                res.setHeader("www-authenticate", 'Bearer realm="cumea-mobile"');
+                return json(res, 401, { error: "device authentication required" });
+            }
+            authenticatedDeviceId = device.id;
+            if (path.startsWith("/api/internal/") || !remoteRouteAllowed(method, path)) {
+                return json(res, 403, { error: "endpoint is not available to mobile devices" });
+            }
+        }
         if (!requestOriginAllowed(req, method))
             return json(res, 403, { error: "origin not allowed" });
+        // ── self-hosted mobile pairing ────────────────────────────────────
+        // Pairing sessions and device revocation are deliberately local-only.
+        if (method === "POST" && path === "/api/pairing/sessions") {
+            if (surface !== "local")
+                return json(res, 403, { error: "pairing sessions can only be created locally" });
+            if (!REMOTE)
+                return json(res, 409, { error: "remote access is disabled" });
+            const body = await readBody(req);
+            const ttlMs = body.ttlMs === undefined ? undefined : Number(body.ttlMs);
+            const session = pairing.createSession(REMOTE.publicUrl, ttlMs);
+            res.setHeader("cache-control", "no-store");
+            return json(res, 201, {
+                session: {
+                    ...session,
+                    hostName: String(cfg.profile?.name || hostname()).slice(0, 100),
+                },
+            });
+        }
+        if (method === "POST" && path === "/api/pairing/claim") {
+            if (surface !== "remote")
+                return json(res, 403, { error: "pairing claims must use the remote listener" });
+            if (!REMOTE)
+                return json(res, 409, { error: "remote access is disabled" });
+            const body = await readBody(req);
+            const claimed = pairing.claim(String(body.sessionId ?? ""), String(body.secret ?? ""), body.deviceName);
+            res.setHeader("cache-control", "no-store");
+            return json(res, 201, { ...claimed, hostUrl: REMOTE.publicUrl });
+        }
+        if (method === "GET" && path === "/api/devices") {
+            if (surface !== "local")
+                return json(res, 403, { error: "device management is local-only" });
+            return json(res, 200, { devices: pairing.list() });
+        }
+        let deviceMatch = path.match(/^\/api\/devices\/([\w-]+)$/);
+        if (method === "DELETE" && deviceMatch) {
+            if (surface !== "local")
+                return json(res, 403, { error: "device management is local-only" });
+            const device = pairing.revoke(deviceMatch[1]);
+            if (!device)
+                return json(res, 404, { error: "no such device" });
+            return json(res, 200, { device });
+        }
+        if (method === "GET" && path === "/api/mobile/bootstrap") {
+            const visibleBotIds = visibleRemoteBotIds();
+            return json(res, 200, {
+                app: "cumea",
+                host: { name: String(cfg.profile?.name || hostname()).slice(0, 100) },
+                profile: { name: cfg.profile?.name ?? "" },
+                capabilities: { computerPreview: REMOTE_SCREEN_PREVIEW },
+                bots: store.bots
+                    .filter((bot) => !bot.hidden)
+                    .map((bot) => publicMobileBot(bot, store.messagesFor(bot.threadId), MOBILE_BOOTSTRAP_MESSAGE_LIMIT, visibleBotIds)),
+                workspace: publicRemoteWorkspace(),
+            });
+        }
         // ── internal peer-agent comms (localhost + shared token only) ──────
         // The agents-proxy (spawned inside a bot's agent process) calls these to
         // discover peers and hand a message to one. Not part of the public API.
@@ -537,6 +1075,8 @@ const server = createServer(async (req, res) => {
                 // bot-to-bot turns are never invisible (they cost the user tokens)
                 const from = store.bot(fromBotId);
                 const fromName = from?.name ?? "another bot";
+                let handoffMessageId;
+                let handoffStepId;
                 if (from) {
                     const note = store.appendMessage(from.threadId, {
                         role: "bot",
@@ -544,9 +1084,48 @@ const server = createServer(async (req, res) => {
                         tool: { name: `asked @${target.name}: ${message.slice(0, 80)}` },
                     });
                     broadcast({ kind: "message", threadId: from.threadId, message: note });
+                    const handoff = store.appendMessage(from.threadId, {
+                        role: "bot",
+                        kind: "handoff",
+                        handoff: {
+                            fromBotId: from.id,
+                            fromName: from.name,
+                            toBotId: target.id,
+                            toName: target.name,
+                            prompt: message,
+                            status: "requested",
+                        },
+                    });
+                    handoffMessageId = handoff.id;
+                    broadcast({ kind: "message", threadId: from.threadId, message: handoff });
+                    const callerRunId = activeRunByThread.get(from.threadId);
+                    if (callerRunId) {
+                        const step = workspace.addStep(callerRunId, {
+                            kind: "handoff",
+                            title: `Handoff to ${target.name}`,
+                            itemId: handoff.id,
+                        });
+                        handoffStepId = step?.itemId;
+                        broadcastWorkspace();
+                    }
                 }
                 const prefixed = `[Message from @${fromName}, another bot in this Cumea workspace. Reply to them.]\n\n${message}`;
-                const reply = await askBotAndWait(toBotId, prefixed, depth);
+                const reply = await askBotAndWait(toBotId, prefixed, depth, fromBotId);
+                if (from && handoffMessageId) {
+                    const existing = store.messagesFor(from.threadId).find((candidate) => candidate.id === handoffMessageId);
+                    if (existing?.handoff) {
+                        const patched = store.patchMessage(from.threadId, handoffMessageId, {
+                            handoff: { ...existing.handoff, status: "completed", reply },
+                        });
+                        if (patched)
+                            broadcast({ kind: "message.patch", threadId: from.threadId, message: patched });
+                    }
+                    const callerRunId = activeRunByThread.get(from.threadId);
+                    if (callerRunId && handoffStepId) {
+                        workspace.completeStep(callerRunId, handoffStepId, "completed");
+                        broadcastWorkspace();
+                    }
+                }
                 return json(res, 200, { botName: target.name, text: reply });
             }
             return json(res, 404, { error: "unknown internal endpoint" });
@@ -560,8 +1139,15 @@ const server = createServer(async (req, res) => {
                 connection: "keep-alive",
             });
             res.write(`data: ${JSON.stringify({ kind: "hello" })}\n\n`);
-            sseClients.add(res);
+            sseClients.set(res, { surface, ...(authenticatedDeviceId ? { deviceId: authenticatedDeviceId } : {}) });
             const keepalive = setInterval(() => {
+                const client = sseClients.get(res);
+                if (client?.surface === "remote" && (!client.deviceId || !pairing.isActive(client.deviceId))) {
+                    clearInterval(keepalive);
+                    sseClients.delete(res);
+                    res.end();
+                    return;
+                }
                 try {
                     res.write(": keepalive\n\n");
                 }
@@ -573,29 +1159,245 @@ const server = createServer(async (req, res) => {
             });
             return;
         }
+        // ── durable work model: sections, tasks, runs, artifacts, routines ──
+        if (method === "GET" && path === "/api/work") {
+            return json(res, 200, { workspace: surface === "remote" ? publicRemoteWorkspace() : publicWorkspace() });
+        }
+        if (method === "POST" && path === "/api/sections") {
+            const body = await readBody(req);
+            const section = workspace.createSection(String(body.name ?? ""));
+            broadcastWorkspace();
+            return json(res, 201, { section });
+        }
+        let m = path.match(/^\/api\/sections\/([\w-]+)$/);
+        if (m && method === "PATCH") {
+            const body = await readBody(req);
+            const section = workspace.patchSection(m[1], String(body.name ?? ""));
+            if (!section)
+                return json(res, 404, { error: "no such section" });
+            broadcastWorkspace();
+            return json(res, 200, { section });
+        }
+        m = path.match(/^\/api\/sections\/([\w-]+)$/);
+        if (m && method === "DELETE") {
+            if (!workspace.deleteSection(m[1]))
+                return json(res, 404, { error: "no such section" });
+            for (const bot of store.bots) {
+                if (bot.sectionId !== m[1])
+                    continue;
+                const patched = store.patchBot(bot.id, { sectionId: null });
+                if (patched)
+                    broadcast({ kind: "bot", bot: patched });
+            }
+            broadcastWorkspace();
+            return json(res, 200, { ok: true });
+        }
+        if (method === "POST" && path === "/api/routines") {
+            const body = await readBody(req);
+            const botId = String(body.botId ?? "");
+            if (!store.bot(botId))
+                return json(res, 404, { error: "no such bot" });
+            const routine = workspace.createRoutine({
+                botId,
+                name: String(body.name ?? ""),
+                prompt: String(body.prompt ?? ""),
+                schedule: parseRoutineSchedule(body.schedule),
+                enabled: body.enabled === undefined ? true : Boolean(body.enabled),
+            });
+            broadcastWorkspace();
+            return json(res, 201, { routine });
+        }
+        m = path.match(/^\/api\/routines\/([\w-]+)$/);
+        if (m && method === "PATCH") {
+            const body = await readBody(req);
+            const routine = workspace.patchRoutine(m[1], {
+                ...(body.name !== undefined ? { name: String(body.name) } : {}),
+                ...(body.prompt !== undefined ? { prompt: String(body.prompt) } : {}),
+                ...(body.schedule !== undefined ? { schedule: parseRoutineSchedule(body.schedule) } : {}),
+                ...(body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {}),
+            });
+            if (!routine)
+                return json(res, 404, { error: "no such routine" });
+            broadcastWorkspace();
+            return json(res, 200, { routine });
+        }
+        m = path.match(/^\/api\/routines\/([\w-]+)$/);
+        if (m && method === "DELETE") {
+            if (!workspace.deleteRoutine(m[1]))
+                return json(res, 404, { error: "no such routine" });
+            broadcastWorkspace();
+            return json(res, 200, { ok: true });
+        }
+        m = path.match(/^\/api\/routines\/([\w-]+)\/run$/);
+        if (m && method === "POST") {
+            await runRoutine(m[1], true);
+            return json(res, 202, { ok: true });
+        }
+        m = path.match(/^\/api\/tasks\/([\w-]+)\/teach$/);
+        if (m && method === "POST") {
+            const task = workspace.task(m[1]);
+            if (!task)
+                return json(res, 404, { error: "no such task" });
+            const body = await readBody(req);
+            const timezone = String(body.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+            const routine = workspace.createRoutine({
+                botId: task.botId,
+                name: String(body.name || task.title),
+                prompt: task.prompt,
+                schedule: body.schedule
+                    ? parseRoutineSchedule(body.schedule)
+                    : { kind: "daily", time: "09:00", timezone },
+                enabled: body.enabled === undefined ? false : Boolean(body.enabled),
+            });
+            broadcastWorkspace();
+            return json(res, 201, { routine });
+        }
+        m = path.match(/^\/api\/tasks\/([\w-]+)\/retry$/);
+        if (m && method === "POST") {
+            const task = workspace.task(m[1]);
+            if (!task)
+                return json(res, 404, { error: "no such task" });
+            const attachments = workspace.attachmentsFor(task.botId, task.attachmentIds);
+            if (attachments.some((attachment) => !existsSync(attachment.storedPath))) {
+                return json(res, 409, { error: "one or more task attachments are missing from disk" });
+            }
+            await startTurn(task.botId, task.prompt, { taskId: task.id, attachments });
+            return json(res, 202, { ok: true });
+        }
+        m = path.match(/^\/api\/attachments\/([\w-]+)$/);
+        if (m && method === "GET") {
+            const attachment = workspace.attachment(m[1]);
+            if (!attachment)
+                return json(res, 404, { error: "no such attachment" });
+            try {
+                const data = readFileSync(attachment.storedPath);
+                const encodedName = encodeURIComponent(attachment.name);
+                res.writeHead(200, {
+                    ...SECURITY_HEADERS,
+                    "content-type": attachment.mime || "application/octet-stream",
+                    "content-length": String(data.length),
+                    "content-disposition": `attachment; filename*=UTF-8''${encodedName}`,
+                });
+                return res.end(data);
+            }
+            catch {
+                return json(res, 410, { error: "attachment file is missing" });
+            }
+        }
+        if (m && method === "DELETE") {
+            const attachment = workspace.attachment(m[1]);
+            if (surface === "remote" && attachment && store.bot(attachment.botId)?.hidden) {
+                return json(res, 404, { error: "no such attachment" });
+            }
+            if (!workspace.deleteAttachment(m[1]))
+                return json(res, 404, { error: "no such attachment" });
+            broadcastWorkspace();
+            return json(res, 200, { ok: true });
+        }
         // ── bots ──
         if (method === "GET" && path === "/api/bots") {
+            const visibleBotIds = visibleRemoteBotIds();
             return json(res, 200, {
-                bots: store.bots.map((b) => ({ ...b, messages: store.messagesFor(b.threadId) })),
+                bots: surface === "remote"
+                    ? store.bots
+                        .filter((bot) => !bot.hidden)
+                        .map((bot) => publicMobileBot(bot, store.messagesFor(bot.threadId), MOBILE_BOOTSTRAP_MESSAGE_LIMIT, visibleBotIds))
+                    : store.bots.map((b) => ({ ...b, messages: store.messagesFor(b.threadId) })),
             });
         }
         if (method === "POST" && path === "/api/bots") {
+            const body = await readBody(req);
+            if (surface === "remote" && Object.keys(body).some((key) => !["name", "title"].includes(key))) {
+                return json(res, 403, { error: "mobile bot creation only accepts name and title" });
+            }
+            const requestedName = body.name === undefined
+                ? undefined
+                : String(body.name).replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80);
+            if (requestedName !== undefined && !requestedName)
+                return json(res, 400, { error: "name cannot be empty" });
+            const requestedTitle = body.title === undefined
+                ? undefined
+                : String(body.title).replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 120);
             const bot = store.createBot();
-            store.patchBot(bot.id, { modelSelection: await defaultSelection() });
-            return json(res, 201, { bot: { ...store.bot(bot.id), messages: store.messagesFor(bot.threadId) } });
+            const patch = { modelSelection: await defaultSelection() };
+            if (requestedName !== undefined)
+                patch.name = requestedName;
+            if (requestedTitle !== undefined)
+                patch.title = requestedTitle;
+            store.patchBot(bot.id, patch);
+            const created = store.bot(bot.id);
+            broadcast({ kind: "bot", bot: created });
+            return json(res, 201, {
+                bot: surface === "remote"
+                    ? publicMobileBot(created, store.messagesFor(created.threadId), MOBILE_BOOTSTRAP_MESSAGE_LIMIT, visibleRemoteBotIds())
+                    : { ...created, messages: store.messagesFor(bot.threadId) },
+            });
         }
-        let m = path.match(/^\/api\/bots\/([\w-]+)$/);
+        m = path.match(/^\/api\/bots\/([\w-]+)$/);
         if (m && method === "PATCH") {
             const body = await readBody(req);
+            if (surface === "remote") {
+                if (Object.keys(body).length !== 1 || typeof body.unread !== "boolean") {
+                    return json(res, 403, { error: "mobile bot updates only accept unread" });
+                }
+                if (store.bot(m[1])?.hidden)
+                    return json(res, 404, { error: "no such bot" });
+                const bot = store.patchBot(m[1], { unread: body.unread });
+                if (!bot)
+                    return json(res, 404, { error: "no such bot" });
+                broadcast({ kind: "bot", bot });
+                return json(res, 200, { bot: publicMobileBot(bot, undefined, MOBILE_BOOTSTRAP_MESSAGE_LIMIT, visibleRemoteBotIds()) });
+            }
+            const remoteWasVisible = Boolean(store.bot(m[1]) && !store.bot(m[1]).hidden);
             const patch = {};
-            for (const key of ["name", "title", "description", "notifications", "modelSelection", "unread", "computer", "color", "mascotExpression", "pinned", "hidden"]) {
+            for (const key of [
+                "name",
+                "title",
+                "description",
+                "notifications",
+                "modelSelection",
+                "unread",
+                "computer",
+                "color",
+                "mascotExpression",
+                "pinned",
+                "hidden",
+                "appsEnabled",
+                "collaborationEnabled",
+            ]) {
                 if (body[key] !== undefined)
                     patch[key] = body[key];
+            }
+            if (body.avatar !== undefined) {
+                const avatar = parseBotAvatar(body.avatar);
+                if (!avatar)
+                    return json(res, 400, { error: "invalid avatar" });
+                patch.avatar = avatar;
+            }
+            if (body.sectionId !== undefined) {
+                const sectionId = body.sectionId === null || body.sectionId === "" ? null : String(body.sectionId);
+                if (sectionId && !workspace.snapshot().sections.some((section) => section.id === sectionId)) {
+                    return json(res, 400, { error: "no such section" });
+                }
+                patch.sectionId = sectionId;
+            }
+            if (body.approvalPolicy !== undefined) {
+                if (!["ask", "allow", "deny"].includes(body.approvalPolicy)) {
+                    return json(res, 400, { error: "unknown approval policy" });
+                }
+                patch.approvalPolicy = body.approvalPolicy;
             }
             const bot = store.patchBot(m[1], patch);
             if (!bot)
                 return json(res, 404, { error: "no such bot" });
-            broadcast({ kind: "bot", bot });
+            if (remoteWasVisible && bot.hidden) {
+                // Desktop sees the full local patch; companions only learn that a
+                // formerly-visible row disappeared, never the hidden record itself.
+                broadcast({ kind: "bot", bot }, { remoteOverride: { kind: "bot.deleted", botId: bot.id }, remoteDeletedBotWasVisible: true });
+            }
+            else {
+                broadcast({ kind: "bot", bot });
+            }
             return json(res, 200, { bot });
         }
         m = path.match(/^\/api\/bots\/([\w-]+)$/);
@@ -603,18 +1405,86 @@ const server = createServer(async (req, res) => {
             const bot = store.bot(m[1]);
             if (!bot)
                 return json(res, 404, { error: "no such bot" });
+            const rawOperationId = String(req.headers["x-cumea-operation-id"] ?? "");
+            const operationId = /^[\w-]{1,100}$/.test(rawOperationId) ? rawOperationId : undefined;
             // a running turn dies with its bot
             await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => { });
             stopScreenPoller(bot.id);
-            store.deleteBot(bot.id);
-            for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
+            const runId = activeRunByThread.get(bot.threadId);
+            if (runId) {
+                workspace.completeRun(runId, false, "interrupted");
+                activeRunByThread.delete(bot.threadId);
+            }
+            clearThreadEventState(bot.threadId);
+            let stagedFiles = null;
+            let workspaceTransaction = null;
+            let botTransaction = null;
+            try {
+                // Same-volume rename is the prepare phase: no bytes are destroyed
+                // until both metadata stores have committed, and every path can be
+                // restored if either commit fails.
+                stagedFiles = stageFilesForDeletion([
+                    ...store.botDeletionFiles(bot.id),
+                    { path: join(EVENTS_DIR, `${bot.threadId}.ndjson`), label: "event log" },
+                    { path: join(NATIVE_DIR, `${bot.threadId}.ndjson`), label: "native log" },
+                    ...workspace.botDeletionFiles(bot.id),
+                ]);
+                workspaceTransaction = workspace.removeBotDataTransaction(bot.id);
+                botTransaction = store.deleteBotRecordTransaction(bot.id);
+                if (!botTransaction)
+                    throw Object.assign(new Error("bot disappeared during deletion"), { status: 500 });
+                // A purge failure rolls metadata and all remaining quarantined bytes
+                // back below. Only after a complete purge may the transcript cache be
+                // forgotten and a deletion event be broadcast.
+                stagedFiles.purge();
+                botTransaction.finalize();
+            }
+            catch (error) {
+                const rollbackErrors = [];
+                for (const rollback of [
+                    botTransaction?.rollback,
+                    workspaceTransaction?.rollback,
+                    stagedFiles?.rollback,
+                ]) {
+                    if (!rollback)
+                        continue;
+                    try {
+                        rollback();
+                    }
+                    catch (rollbackError) {
+                        rollbackErrors.push(rollbackError);
+                    }
+                }
+                // The bot remains the durable retry anchor when cleanup cannot
+                // complete. Its in-flight work was already stopped, so reflect that
+                // honestly; persistence can itself be the failing boundary, hence the
+                // best-effort patch without masking the original delete error.
                 try {
-                    unlinkSync(join(dir, `${bot.threadId}.ndjson`));
+                    const patched = store.patchBot(bot.id, { busy: false });
+                    if (patched)
+                        broadcast({ kind: "bot", bot: patched });
                 }
                 catch { }
+                broadcastWorkspace();
+                if (rollbackErrors.length) {
+                    throw Object.assign(new Error("bot deletion failed and could not be fully rolled back"), {
+                        status: 500,
+                        cause: new AggregateError([error, ...rollbackErrors]),
+                    });
+                }
+                throw error;
             }
-            broadcast({ kind: "bot.deleted", botId: bot.id });
-            return json(res, 200, { ok: true });
+            broadcast({ kind: "bot.deleted", botId: bot.id, ...(operationId ? { operationId } : {}) }, { remoteDeletedBotWasVisible: !bot.hidden });
+            broadcastWorkspace();
+            return json(res, 200, { ok: true, removed: workspaceTransaction.removed });
+        }
+        m = path.match(/^\/api\/bots\/([\w-]+)\/attachments$/);
+        if (m && method === "POST") {
+            if (surface === "remote" && store.bot(m[1])?.hidden)
+                return json(res, 404, { error: "no such bot" });
+            // Await so quota/body/filesystem rejections are handled by this
+            // request's bounded error response instead of becoming unhandled.
+            return await uploadAttachment(req, res, m[1]);
         }
         // onboarding/ask cards persist their answered/dismissed state
         m = path.match(/^\/api\/bots\/([\w-]+)\/cards\/([\w-]+)$/);
@@ -637,33 +1507,129 @@ const server = createServer(async (req, res) => {
             return json(res, 200, { message: patched });
         }
         m = path.match(/^\/api\/bots\/([\w-]+)\/messages$/);
+        if (m) {
+            const bot = store.bot(m[1]);
+            if (!bot || (surface === "remote" && bot.hidden))
+                return json(res, 404, { error: "no such bot" });
+        }
+        if (m && method === "GET") {
+            const bot = store.bot(m[1]);
+            const requestedLimit = url.searchParams.get("limit");
+            const parsedLimit = requestedLimit === null ? MOBILE_MESSAGE_PAGE_LIMIT : Number(requestedLimit);
+            if (!Number.isInteger(parsedLimit) || parsedLimit < 1)
+                return json(res, 400, { error: "limit must be a positive integer" });
+            const limit = Math.min(parsedLimit, MOBILE_MESSAGE_PAGE_LIMIT_MAX);
+            const all = store.messagesFor(bot.threadId);
+            const before = url.searchParams.get("before") ?? url.searchParams.get("cursor");
+            const end = before ? all.findIndex((message) => message.id === before) : all.length;
+            if (before && end < 0)
+                return json(res, 400, { error: "unknown before message" });
+            const start = Math.max(0, end - limit);
+            const page = all.slice(start, end);
+            const nextBefore = start > 0 && page.length ? page[0].id : null;
+            return json(res, 200, {
+                messages: surface === "remote"
+                    ? page.map((message) => publicMobileMessage(message, visibleRemoteBotIds()))
+                    : page,
+                nextCursor: nextBefore,
+                page: {
+                    limit,
+                    hasMore: start > 0,
+                    nextBefore,
+                },
+            });
+        }
         if (m && method === "POST") {
             const body = await readBody(req);
             const text = String(body.text ?? "").trim();
             if (!text)
                 return json(res, 400, { error: "text required" });
-            await startTurn(m[1], text);
+            const attachmentIds = Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String).slice(0, 10) : [];
+            const attachments = workspace.attachmentsFor(m[1], attachmentIds);
+            await startTurn(m[1], text, { attachments, track: body.track !== false });
             return json(res, 202, { ok: true });
+        }
+        m = path.match(/^\/api\/bots\/([\w-]+)\/computer-preview$/);
+        if (m && method === "GET") {
+            if (surface !== "remote")
+                return json(res, 404, { error: "no route" });
+            res.setHeader("cache-control", "no-store");
+            if (!REMOTE_SCREEN_PREVIEW)
+                return json(res, 403, { error: "computer preview is disabled" });
+            const bot = store.bot(m[1]);
+            if (!bot || bot.hidden)
+                return json(res, 404, { error: "no such bot" });
+            const cached = screenPollers.get(bot.id)?.last;
+            const transcript = [...store.messagesFor(bot.threadId)]
+                .reverse()
+                .find((message) => message.kind === "screen" && message.png);
+            const source = cached ?? (transcript?.png ? { png: transcript.png, mime: transcript.mime ?? "image/png", capturedAt: transcript.at } : null);
+            const preview = source ? decodeMobileComputerPreview(source.png, source.mime) : null;
+            if (!preview)
+                return json(res, 200, { available: false });
+            return json(res, 200, {
+                available: true,
+                mime: preview.mime,
+                png: preview.bytes.toString("base64"),
+                capturedAt: source.capturedAt,
+            });
         }
         m = path.match(/^\/api\/bots\/([\w-]+)\/respond$/);
         if (m && method === "POST") {
             const bot = store.bot(m[1]);
-            if (!bot)
+            if (!bot || (surface === "remote" && bot.hidden))
                 return json(res, 404, { error: "no such bot" });
             const body = await readBody(req);
+            const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
+            if (!requestId)
+                return json(res, 400, { error: "requestId required" });
+            const requestKey = threadEventKey(bot.threadId, requestId);
+            const requestMessageId = askMessageByRequest.get(requestKey);
+            const requestMessage = requestMessageId
+                ? store.messagesFor(bot.threadId).find((message) => message.id === requestMessageId)
+                : undefined;
+            if (!requestMessage?.card || requestMessage.card.answered) {
+                return json(res, 409, { error: "no such pending request" });
+            }
+            if (!["allow", "deny", "answer"].includes(body.behavior)) {
+                return json(res, 400, { error: "unknown response behavior" });
+            }
+            const requestType = requestMessage.card.requestType ?? "question";
+            if (requestType === "permission" && body.behavior === "answer") {
+                return json(res, 400, { error: "permission requests require allow or deny" });
+            }
+            if (requestType === "question" && body.behavior !== "answer") {
+                return json(res, 400, { error: "question requests require an answer" });
+            }
             const instance = registry.get(bot.modelSelection.instanceId);
             if (!instance)
                 return json(res, 409, { error: "provider unavailable" });
-            await instance.adapter.respondToRequest(bot.threadId, String(body.requestId), {
+            if (body.rememberPolicy !== undefined) {
+                if (!["allow", "deny", "ask"].includes(body.rememberPolicy)) {
+                    return json(res, 400, { error: "unknown approval policy" });
+                }
+                if (requestMessage.card.requestType !== "permission") {
+                    return json(res, 400, { error: "approval policy applies only to permission requests" });
+                }
+            }
+            await instance.adapter.respondToRequest(bot.threadId, requestId, {
                 behavior: body.behavior,
                 message: body.message,
             });
+            // Persist a remembered policy only after the owning provider accepted
+            // this exact pending request. A stale or forged request must never be
+            // able to mutate future approval behavior.
+            if (body.rememberPolicy !== undefined) {
+                const patched = store.patchBot(bot.id, { approvalPolicy: body.rememberPolicy });
+                if (patched)
+                    broadcast({ kind: "bot", bot: patched });
+            }
             return json(res, 200, { ok: true });
         }
         m = path.match(/^\/api\/bots\/([\w-]+)\/interrupt$/);
         if (m && method === "POST") {
             const bot = store.bot(m[1]);
-            if (!bot)
+            if (!bot || (surface === "remote" && bot.hidden))
                 return json(res, 404, { error: "no such bot" });
             const instance = registry.get(bot.modelSelection.instanceId);
             await instance?.adapter.interruptTurn(bot.threadId);
@@ -673,7 +1639,12 @@ const server = createServer(async (req, res) => {
         // child proves it is OURS by echoing its pid (a stray dev server has
         // the same API shape but a different pid)
         if (method === "GET" && path === "/api/health") {
-            return json(res, 200, { app: "cumea", pid: process.pid, static: Boolean(STATIC_DIR) });
+            return json(res, 200, {
+                app: "cumea",
+                ...(surface === "local" ? { pid: process.pid, static: Boolean(STATIC_DIR) } : {}),
+                remoteAccess: Boolean(REMOTE),
+                capabilities: { computerPreview: REMOTE_SCREEN_PREVIEW },
+            });
         }
         // ── provider instances (model picker) ──
         if (method === "GET" && path === "/api/instances") {
@@ -780,14 +1751,24 @@ const server = createServer(async (req, res) => {
     }
     catch (e) {
         const status = e?.status ?? 500;
-        return json(res, status, { error: e instanceof Error ? e.message : String(e) });
+        const message = e instanceof Error ? e.message : String(e);
+        return json(res, status, { error: surface === "remote" ? publicRemoteError(status, message) : message });
     }
-});
+}
+const server = createServer((req, res) => void handleRequest(req, res, "local"));
 server.listen(PORT, "127.0.0.1", () => {
     console.log(`cumea server on http://127.0.0.1:${PORT}`);
 });
+const remoteServer = REMOTE ? createServer((req, res) => void handleRequest(req, res, "remote")) : null;
+remoteServer?.listen(REMOTE.port, REMOTE.bind, () => {
+    console.log(`cumea authenticated mobile listener on http://${REMOTE.bind}:${REMOTE.port}`);
+});
 for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => {
+        clearInterval(routineTimer);
+        clearTimeout(initialRoutineTimer);
+        remoteServer?.close();
+        server.close();
         void registry.disposeAll().finally(() => process.exit(0));
     });
 }

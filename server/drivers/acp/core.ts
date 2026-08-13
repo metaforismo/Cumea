@@ -130,6 +130,15 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       // fine here. env is the ACP {name,value}[] shape.
       const acpMcpServers = (turn: SendTurnInput) => {
         const servers: Array<{ name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }> = [];
+        const computer = turn.integrations?.localComputer;
+        if (computer) {
+          servers.push({
+            name: "computer",
+            command: computer.command,
+            args: computer.args,
+            env: Object.entries(computer.env).map(([name, value]) => ({ name, value: String(value) })),
+          });
+        }
         const agents = turn.integrations?.agents;
         if (agents) {
           servers.push({
@@ -487,7 +496,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         snapshot,
         adapter: {
           provider: DRIVER_KIND,
-          capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true },
+          capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true, localComputerMcp: true },
           sendTurn,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
           respondToRequest: async (threadId, requestId, decision) => {

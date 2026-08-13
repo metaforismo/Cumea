@@ -1,7 +1,7 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, session, shell, systemPreferences, utilityProcess } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
+import { publicCuaStatus, startCua, stopCua, registerCuaIpc } from "./cua.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,6 +36,7 @@ async function startServerOn(port) {
       ...process.env,
       CUMEA_STATIC_DIR: path.join(process.resourcesPath, "ui"),
       CUMEA_PORT: String(port),
+      CUMEA_CUA_CONNECTION: path.join(app.getPath("userData"), "cua-connection.json"),
     },
     stdio: "inherit",
   });
@@ -87,7 +88,7 @@ async function startServerPackaged() {
 const ERROR_PAGE =
   "data:text/html;charset=utf-8," +
   encodeURIComponent(
-    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">◉</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the agent server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen Cumea — if it keeps happening, restart your Mac.</p></div></body>`,
+    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">◉</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the agent server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen Cumea — if it keeps happening, restart your computer.</p></div></body>`,
   );
 
 function createWindow() {
@@ -98,8 +99,9 @@ function createWindow() {
     minHeight: 600,
     icon: APP_ICON,
     backgroundColor: "#070707",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 16 },
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 16 } }
+      : {}),
     webPreferences: {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
@@ -127,9 +129,11 @@ function createWindow() {
   }
 }
 
-// "This Mac" screen preview — served from the main process so the Screen
-// Recording permission prompt attributes to the app, never the server
+// "This Mac" screen preview — served from the main process so TCC attribution
+// stays with Cumea. The CUA state gate prevents capture or prompting until the
+// official SDK has confirmed both required grants.
 ipcMain.handle("screen:frame", async () => {
+  if (publicCuaStatus().state !== "ready") return null;
   const sources = await desktopCapturer.getSources({
     types: ["screen"],
     thumbnailSize: { width: 1280, height: 800 },
@@ -140,21 +144,13 @@ ipcMain.handle("screen:frame", async () => {
 // Onboarding permission checks. Status reads are free; the mic request
 // pops the real TCC prompt attributed to the app.
 //
-// Screen Recording deliberately has NO request path here. On macOS 15+
-// every pre-grant mechanism is broken: getMediaAccessStatus("screen")
-// wraps CGPreflightScreenCaptureAccess, which caches per-process (stays
-// "denied" for the whole session after the user grants); a helper child
-// binary gets TCC-attributed to ITSELF on macOS 26, not the app, and
-// plain executables no longer appear in the Settings pane at all; and
-// Sequoia+ re-prompts periodically regardless, so a pre-grant expires.
-// The one reliable path is the first real in-process capture
-// (screen:frame above / getDisplayMedia via the handler below) — macOS
-// prompts then, attributed correctly, at the moment of actual use. The
-// perm:open-settings deep link stays as the repair path for denials.
+// CUA Accessibility/Screen Recording permission requests use the official SDK
+// in cua.mjs. These generic handlers remain for dictation and repair links.
 ipcMain.handle("perm:status", () => ({
-  mic: systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown",
+  mic: process.platform === "darwin" ? systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown" : "unavailable",
 }));
 ipcMain.handle("perm:request-mic", async () => {
+  if (process.platform !== "darwin") return false;
   try {
     return await systemPreferences.askForMediaAccess("microphone");
   } catch {
@@ -165,6 +161,11 @@ ipcMain.handle("perm:request-mic", async () => {
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.
 ipcMain.handle("perm:open-settings", (_event, pane) => {
+  if (process.platform === "win32") {
+    const targets = { mic: "ms-settings:privacy-microphone", screen: "ms-settings:privacy-screenshots", speech: "ms-settings:privacy-speech" };
+    return shell.openExternal(Object.hasOwn(targets, pane) ? targets[pane] : "ms-settings:privacy");
+  }
+  if (process.platform !== "darwin") return false;
   const panes = {
     mic: "Privacy_Microphone",
     screen: "Privacy_ScreenCapture",
@@ -182,10 +183,8 @@ ipcMain.handle("speech:stop", () => stopSpeech());
 
 app.whenReady().then(async () => {
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
-  // getDisplayMedia in the renderer → this handler → ScreenCaptureKit, all
-  // inside the app's own processes — the one capture path macOS reliably
-  // attributes to the app (registers it in the Screen Recording pane and
-  // prompts). Used by the onboarding "Enable screen preview" button.
+  // getDisplayMedia stays in the app responsibility chain. Local computer
+  // onboarding uses the CUA SDK gate; this handler does not start the driver.
   session.defaultSession.setDisplayMediaRequestHandler(
     (_request, callback) => {
       desktopCapturer
@@ -196,10 +195,10 @@ app.whenReady().then(async () => {
     { useSystemPicker: false },
   );
   registerCuaIpc();
-  // Start the CUA daemon before the window so the harness can pick up the
-  // connection descriptor on first render. Never blocks window creation on
-  // failure — computer use degrades to "unavailable", the rest still works.
-  startCua().catch((e) => console.error("[cua] start failed:", e));
+  // Resolve the fail-closed CUA state before the packaged harness reads its
+  // descriptor. If TCC is incomplete this records needs-permissions and does
+  // not create or start the embedded daemon.
+  await startCua().catch((e) => console.error("[cua] start failed:", e));
   if (app.isPackaged) serverReady = await startServerPackaged();
   createWindow();
   app.on("activate", () => {

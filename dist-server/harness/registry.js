@@ -64,6 +64,7 @@ export class ProviderRegistry {
                     displayName: entry.shadow.displayName ?? entry.shadow.driverKind,
                     snapshot: { state: "unavailable", reason: entry.shadow.reason },
                     models: { default: "", options: [] },
+                    capabilities: { sessionModelSwitch: "unsupported" },
                 };
             }
             const inst = entry.live;
@@ -80,6 +81,7 @@ export class ProviderRegistry {
                 displayName: inst.displayName ?? inst.driverKind,
                 snapshot,
                 models: inst.models,
+                capabilities: inst.adapter.capabilities,
             };
         }));
     }

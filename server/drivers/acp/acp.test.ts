@@ -108,6 +108,30 @@ posixOnly("ACP turns (fake CLI)", () => {
     expect(seen.env.XAI_API_KEY).toBeUndefined();
   });
 
+  it("mounts a local computer MCP server when the harness supplies one", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_ACP_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-computer",
+      text: "inspect the screen",
+      integrations: {
+        localComputer: { command: "/tmp/cua-driver", args: ["mcp"], env: { CUA_TEST: "1" } },
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const sessionNew = seen.calls?.find((call: any) => call.method === "session/new");
+    expect(sessionNew?.params?.mcpServers).toContainEqual({
+      name: "computer",
+      command: "/tmp/cua-driver",
+      args: ["mcp"],
+      env: [{ name: "CUA_TEST", value: "1" }],
+    });
+  });
+
   it("surfaces a permission ask as request.opened and completes once allowed", async () => {
     await create(GrokAgentDriver, "permission");
     await instance.adapter.sendTurn({ threadId: "t-perm", text: "go" });

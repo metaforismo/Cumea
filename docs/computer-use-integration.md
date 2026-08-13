@@ -21,8 +21,11 @@ Electron main process
 - **Plugins = MCP servers over stdio.** The Plugins panel toggles which MCP
   servers get injected into each bot's `--mcp-config`. Same pattern as Claude
   Desktop / Cherry Studio / LibreChat.
-- **Computer use = bundled `cua-driver`** (Rust, single static Mach-O,
-  23MB arm64 / 48MB universal — from `mywork/cua/libs/cua-driver/rust`).
+- **Computer use = bundled `cua-driver`** (Rust, official v0.19.3 release
+  executable). The pinned `darwin-arm64` release archive currently contains a
+  59.1 MB universal Mach-O with both x86_64 and arm64 slices; Cumea verifies and
+  preserves that upstream artifact instead of relying on a developer-machine
+  checkout.
   NOT Swift — the Swift file everyone remembers
   (`examples/embedded-host-macos/ExampleAgentHarness.swift`) is a 165-line
   reference host showing the embedding pattern, not the driver.
@@ -60,14 +63,25 @@ bundled `cua-driver` binary. Alternatives evaluated and rejected:
    `typescript/test/electron-main-fixture.mjs`.
 3. Env: `CUA_DRIVER_EMBEDDED=1` (exact value) + `CUA_DRIVER_HOST_BUNDLE_ID`.
    Permission mode `standard`.
-4. Lifecycle: defer `before-quit` until `await embedded.stop()`; after a TCC
-   grant change, destroy clients → `restart()` → reconnect (macOS caches TCC
-   per process).
+4. Before creating or starting `EmbeddedCuaDriverHost`, read the host-process
+   status with `currentMacOsPermissionStatus()` and require
+   `hasRequiredMacOSPermissions(status)`. The renderer can explicitly request
+   grants or re-check them through narrow IPC, but it never receives the socket
+   path or MCP launch contract. A missing/revoked grant persists a
+   `needs-permissions` descriptor with no MCP command.
+5. Lifecycle: defer `before-quit` until `await embedded.stop()`; after an
+   explicit grant refresh, destroy/restart the generation and reconnect. Watch
+   `waitForExit(generation)` to fail closed; do not auto-restart or replay an
+   action whose completion is unknown.
 
 ### Packaging
 
-- Ship the binary at `Cumea.app/Contents/Resources/cua-driver`,
-  **outside the ASAR**, executable bit preserved (electron-builder
+- Ship the official `cua-driver-rs-v0.19.3` arm64 release binary at
+  `Cumea.app/Contents/Resources/cua-driver`, prepared by
+  `scripts/prepare-cua-driver.mjs` only after its pinned release asset passes
+  exact byte-length and SHA-256 verification. The downloaded archive and
+  extracted executable stay under ignored `build/cua-driver/`; no driver binary
+  is committed. Keep it **outside the ASAR**, executable bit preserved (electron-builder
   `extraResources`).
 - **Re-sign it with our Team ID** before signing + notarizing the app (the
   installed copy is signed by trycua `YCK386LBJ7`). Biggest new build step.

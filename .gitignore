@@ -1,8 +1,16 @@
 node_modules
+.pnpm-store/
+.vercel/
 dist
 dist-electron
 *.local
 .DS_Store
 *.tsbuildinfo
 electron/resources/speech-helper
+build/.swift-module-cache
+build/cua-driver/
 release
+apps/mobile/.expo
+apps/mobile/dist
+apps/mobile/ios
+apps/mobile/android

@@ -33,6 +33,7 @@ type Phase =
   | "starting"
   | "ready"
   | "local"
+  | "local-needs-permissions"
   | "local-unavailable"
   | "off"
   | "error";
@@ -44,6 +45,8 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const [polledFrame, setPolledFrame] = useState<{ png: string; mime: string } | null>(null);
   const [localFrame, setLocalFrame] = useState<string | null>(null);
   const [pending, setPending] = useState<"join" | "sleep" | null>(null);
+  const [localPending, setLocalPending] = useState<"request" | "retry" | null>(null);
+  const [localStatus, setLocalStatus] = useState<CuaPublicStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   // bumped when a Box token is saved inline, to re-run the spin-up flow
   const [retry, setRetry] = useState(0);
@@ -55,28 +58,51 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     setPhase("checking");
     setPolledFrame(null);
     setLocalFrame(null);
+    setLocalStatus(null);
     setError(null);
-    const isElectron = Boolean(window.cumea);
+    const resolveLocal = async () => {
+      if (!window.cumea?.cuaStatus) {
+        if (alive) setPhase("local-unavailable");
+        return;
+      }
+      try {
+        const status = await window.cumea.cuaStatus();
+        if (!alive) return;
+        setLocalStatus(status);
+        if (status.state === "ready") setPhase("local");
+        else if (status.state === "needs-permissions") setPhase("local-needs-permissions");
+        else {
+          setError(status.reason);
+          setPhase("local-unavailable");
+        }
+      } catch (cause) {
+        if (!alive) return;
+        setError(cause instanceof Error ? cause.message : "Could not check local computer status");
+        setPhase("local-unavailable");
+      }
+    };
     if (bot.computer === "off") {
       setPhase("off");
       return;
     }
     if (bot.computer === "local") {
-      setPhase(isElectron ? "local" : "local-unavailable");
-      return;
+      void resolveLocal();
+      return () => {
+        alive = false;
+      };
     }
     // cloud, or auto (cloud box wins when one exists, else local in-app)
     api(`/api/bots/${bot.id}/computer`)
       .then((status) => {
         if (!alive) return;
-        const autoLocal = bot.computer !== "cloud" && isElectron;
+        const autoLocal = bot.computer !== "cloud" && Boolean(window.cumea?.cuaStatus);
         if (!status.configured) {
-          setPhase(autoLocal ? "local" : "unconfigured");
+          if (autoLocal) return resolveLocal();
+          setPhase("unconfigured");
           return;
         }
         if (!status.box && autoLocal) {
-          setPhase("local");
-          return;
+          return resolveLocal();
         }
         setPhase("starting");
         return api(`/api/bots/${bot.id}/computer/provision`, { method: "POST" }).then((r) => {
@@ -175,11 +201,34 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       .finally(() => setPending(null));
   };
 
+  const refreshLocal = async (kind: "request" | "retry") => {
+    const bridge = window.cumea;
+    if (!bridge) return;
+    setLocalPending(kind);
+    setError(null);
+    try {
+      const status = kind === "request" ? await bridge.cuaRequestPermissions() : await bridge.cuaRetry();
+      setLocalStatus(status);
+      if (status.state === "ready") setPhase("local");
+      else if (status.state === "needs-permissions") setPhase("local-needs-permissions");
+      else {
+        setError(status.reason);
+        setPhase("local-unavailable");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not refresh local computer access");
+      setPhase("local-unavailable");
+    } finally {
+      setLocalPending(null);
+    }
+  };
+
   const emptyState: Record<Exclude<Phase, "ready" | "local">, string> = {
     checking: "Checking…",
     starting: "Starting your bot's computer…",
     unconfigured: "No cloud computer configured",
-    "local-unavailable": "Local preview needs the desktop app — run pnpm dev:desktop",
+    "local-needs-permissions": "This Mac needs permission before the local computer can start",
+    "local-unavailable": localStatus?.reason ?? "Local computer control is unavailable in this environment",
     off: "This bot's computer is off",
     error: "Couldn't reach the computer",
   };
@@ -239,6 +288,48 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   Open Settings
                 </button>
               )}
+              {phase === "local-needs-permissions" && (
+                <div className="mt-1 flex flex-col items-center gap-2">
+                  <div className="text-[11px] text-ink-secondary">
+                    {!localStatus?.permissions?.accessibility && "Accessibility is off. "}
+                    {!localStatus?.permissions?.screenRecording && "Screen Recording is off."}
+                  </div>
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <button
+                      onClick={() => void refreshLocal("request")}
+                      disabled={localPending !== null}
+                      className="rounded-lg bg-raised px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover disabled:opacity-50"
+                    >
+                      {localPending === "request" ? "Requesting…" : "Enable"}
+                    </button>
+                    <button
+                      onClick={() => void refreshLocal("retry")}
+                      disabled={localPending !== null}
+                      className="rounded-lg bg-raised px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover disabled:opacity-50"
+                    >
+                      {localPending === "retry" ? "Checking…" : "Check again"}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {!localStatus?.permissions?.accessibility && (
+                      <button
+                        onClick={() => window.cumea?.cuaOpenSettings("accessibility")}
+                        className="text-[11px] text-ink-secondary underline hover:text-ink"
+                      >
+                        Accessibility settings
+                      </button>
+                    )}
+                    {!localStatus?.permissions?.screenRecording && (
+                      <button
+                        onClick={() => window.cumea?.cuaOpenSettings("screenRecording")}
+                        className="text-[11px] text-ink-secondary underline hover:text-ink"
+                      >
+                        Screen Recording settings
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -290,7 +381,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         <div className="mt-4 rounded-xl bg-card p-4">
           <div className="text-[15px] font-medium text-ink">Runs on</div>
           <div className="mt-0.5 text-[13px] text-ink-secondary">
-            {bot.computer ? "" : "Auto: the cloud box when one exists, else this Mac. "}Pick where this bot's
+            {bot.computer ? "" : "Auto: the cloud box when one exists, else this Mac when it is ready. "}Pick where this bot's
             computer lives.
           </div>
           <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
@@ -328,9 +419,8 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             Routines are recurring tasks this agent runs on a schedule.
           </div>
           <button
-            disabled
-            className="mt-3 w-full cursor-not-allowed rounded-lg bg-raised py-2 text-[13px] text-ink-secondary opacity-60"
-            title="Coming soon"
+            onClick={() => dispatch({ type: "toggleWork", open: true, tab: "routines" })}
+            className="mt-3 w-full rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover"
           >
             Create Routine
           </button>

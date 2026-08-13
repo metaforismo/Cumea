@@ -114,6 +114,32 @@ posixOnly("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
   });
 
+  it("mounts peer-agent handoff tools when the harness supplies them", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-agents",
+      text: "ask a teammate",
+      integrations: {
+        agents: { command: "/tmp/agents-proxy", args: ["serve"], env: { CUMEA_TEST: "1" } },
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const configIndex = seen.argv.indexOf("--mcp-config");
+    const toolsIndex = seen.argv.indexOf("--allowedTools");
+    expect(JSON.parse(seen.argv[configIndex + 1]).mcpServers.agents).toEqual({
+      command: "/tmp/agents-proxy",
+      args: ["serve"],
+      env: { CUMEA_TEST: "1" },
+    });
+    expect(seen.argv[toolsIndex + 1]).toContain("mcp__agents");
+    expect(instance.adapter.capabilities.agentsMcp).toBe(true);
+  });
+
   it("resumes with --resume when a cursor exists and reports that session id", async () => {
     await create();
     const dump = join(scratch, "dump.json");
