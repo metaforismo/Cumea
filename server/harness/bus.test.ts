@@ -9,6 +9,7 @@ import { EVENTS_DIR, ensureDirs } from "../config.ts";
 import type { RuntimeEvent } from "../contracts.ts";
 import { makeFakeDriver } from "../testing/fake-driver.ts";
 import { EventBus } from "./bus.ts";
+import { EventLogWriter } from "./event-log.ts";
 
 const testEvent = (over: Partial<RuntimeEvent> = {}): RuntimeEvent =>
   ({
@@ -40,7 +41,7 @@ describe("EventBus", () => {
 
   it("stamps events from an attached adapter with the instanceId", async () => {
     const { instance, emit } = await liveInstance();
-    const bus = new EventBus();
+    const bus = new EventBus(new EventLogWriter({ flushDelayMs: 0 }));
     bus.attach([instance]);
     const seen: RuntimeEvent[] = [];
     bus.subscribe((e) => seen.push(e));
@@ -62,7 +63,7 @@ describe("EventBus", () => {
   });
 
   it("tees every published event to the per-thread NDJSON log", () => {
-    const bus = new EventBus();
+    const bus = new EventBus(new EventLogWriter({ flushDelayMs: 0 }));
     bus.publish(testEvent({ threadId: "log-me" }));
 
     const logged = readFileSync(join(EVENTS_DIR, "log-me.ndjson"), "utf8")
@@ -71,6 +72,28 @@ describe("EventBus", () => {
       .map((l) => JSON.parse(l));
     expect(logged).toHaveLength(1);
     expect(logged[0].type).toBe("turn.started");
+  });
+
+  it("drops rejected stale events before both persistence and listener fanout", () => {
+    const bus = new EventBus(new EventLogWriter({ flushDelayMs: 0 }), (event) => event.turnId === "current-turn");
+    const seen: RuntimeEvent[] = [];
+    bus.subscribe((event) => seen.push(event));
+    bus.publish(testEvent({ threadId: "filtered", turnId: "stale-turn" }));
+    expect(seen).toEqual([]);
+    expect(existsSync(join(EVENTS_DIR, "filtered.ndjson"))).toBe(false);
+  });
+
+  it("delivers one admitted event to every listener even if an earlier listener retires its fence", () => {
+    let accepted = true;
+    const bus = new EventBus(new EventLogWriter({ flushDelayMs: 0 }), () => accepted);
+    const seen: string[] = [];
+    bus.subscribe(() => {
+      seen.push("folder");
+      accepted = false;
+    });
+    bus.subscribe(() => seen.push("handoff"));
+    bus.publish(testEvent({ turnId: "current-turn", type: "turn.completed", ok: true }));
+    expect(seen).toEqual(["folder", "handoff"]);
   });
 
   it("still delivers when the NDJSON log cannot be written", () => {

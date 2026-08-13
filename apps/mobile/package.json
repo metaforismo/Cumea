@@ -1,6 +1,6 @@
 {
   "name": "@cumea/mobile",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "main": "expo-router/entry",
@@ -8,9 +8,11 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
+    "run:android": "expo run:android",
+    "run:ios": "expo run:ios",
     "web": "expo start --web",
     "export": "expo export --platform all",
-    "test": "node --experimental-strip-types --test src/state/chat-state.test.mjs",
+    "test": "node --experimental-strip-types --test src/state/chat-state.test.mjs src/speech/dictation.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -25,6 +27,7 @@
     "expo-linking": "~57.0.5",
     "expo-router": "~57.0.12",
     "expo-secure-store": "~57.0.1",
+    "expo-speech-recognition": "56.0.1",
     "expo-splash-screen": "~57.0.6",
     "expo-status-bar": "~57.0.1",
     "expo-system-ui": "~57.0.2",

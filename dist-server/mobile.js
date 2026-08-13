@@ -106,6 +106,9 @@ export function publicMobileBot(bot, messages, messageLimit = MOBILE_BOOTSTRAP_M
         pinned: Boolean(bot.pinned),
         busy: Boolean(bot.busy),
         sectionId: bot.sectionId ?? null,
+        ...(Object.prototype.hasOwnProperty.call(bot, "lifecycle")
+            ? { lifecycle: bot.lifecycle ?? null }
+            : {}),
         createdAt: bot.createdAt,
     };
     if (messages)

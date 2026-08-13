@@ -45,13 +45,24 @@ describe("mobile public projections", () => {
   });
 
   it("bounds bootstrap messages and strips provider/computer administration", () => {
-    const bot = publicMobileBot(botFixture(), Array.from({ length: 70 }, (_, index) => textMessage(index)));
+    const fixture = botFixture();
+    fixture.lifecycle = { kind: "temporary", expiresAt: 123_456 };
+    const bot = publicMobileBot(fixture, Array.from({ length: 70 }, (_, index) => textMessage(index)));
     expect((bot.messages as unknown[])).toHaveLength(50);
     expect((bot.messages as Array<{ id: string }>)[0].id).toBe("message-20");
+    expect(bot.lifecycle).toEqual({ kind: "temporary", expiresAt: 123_456 });
     const encoded = JSON.stringify(bot);
     for (const forbidden of ["modelSelection", "secret-model", "resumeCursors", "secret-session-cursor", "computer", "approvalPolicy"]) {
       expect(encoded).not.toContain(forbidden);
     }
+  });
+
+  it("preserves an explicit lifecycle tombstone so companion clients clear their quick badge", () => {
+    const projected = sanitizeRemoteSsePayload({
+      kind: "bot",
+      bot: { ...botFixture(), lifecycle: null },
+    });
+    expect(projected).toMatchObject({ kind: "bot", bot: { id: "bot-1", lifecycle: null } });
   });
 
   it("redacts handoff peers that are hidden from the paired device", () => {

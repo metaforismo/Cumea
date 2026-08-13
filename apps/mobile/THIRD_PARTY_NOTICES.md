@@ -27,3 +27,11 @@ The Markdown renderer depends on `markdown-it` 14.2.0:
 - Source: <https://github.com/markdown-it/markdown-it>
 - Copyright (c) 2014 Vitaly Puzrin and Alex Kocharin
 - License: MIT; see `licenses/markdown-it-MIT.txt`
+
+## expo-speech-recognition
+
+Native mobile dictation uses `expo-speech-recognition` 56.0.1:
+
+- Source: <https://github.com/jamsch/expo-speech-recognition>
+- Copyright (c) 2024 jamsch
+- License: MIT; see `licenses/expo-speech-recognition-MIT.txt`

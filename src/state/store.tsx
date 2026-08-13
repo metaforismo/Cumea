@@ -68,6 +68,11 @@ export interface ModelSelection {
   model: string;
 }
 
+export interface BotLifecycle {
+  kind: "temporary";
+  expiresAt: number;
+}
+
 export interface Bot {
   id: string;
   threadId: string;
@@ -89,6 +94,7 @@ export interface Bot {
   appsEnabled?: boolean;
   collaborationEnabled?: boolean;
   approvalPolicy?: "ask" | "allow" | "deny";
+  lifecycle?: BotLifecycle | null;
   messages: Message[];
 }
 
@@ -248,7 +254,7 @@ type Action =
   | { type: "select"; id: string }
   | { type: "cardAnswered"; botId: string; messageId: string; answer: string }
   | { type: "cardDismissed"; botId: string; messageId: string }
-  | { type: "newBot" }
+  | { type: "newBot"; temporary?: boolean; ttlMinutes?: number }
   | { type: "botAdded"; bot: Bot }
   | { type: "botDeleted"; botId: string }
   | { type: "duplicateBot"; botId: string }
@@ -605,6 +611,7 @@ const StoreContext = createContext<{
   answerCard: (input: { botId: string; messageId: string; answer: string }) => Promise<void>;
   dismissCard: (input: { botId: string; messageId: string }) => Promise<void>;
   deleteBot: (botId: string) => Promise<void>;
+  makeBotPermanent: (botId: string) => Promise<void>;
 } | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -617,6 +624,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // A local DELETE receives an SSE tombstone before its HTTP response. Hold
   // that event so a failed request never removes the bot from the desktop.
   const pendingBotDeletes = useRef(new Map<string, string>());
+  // Browser EventSource can deliver provider token deltas much faster than a
+  // paint. Coalesce them to one reducer/context update per animation frame;
+  // durable message and turn boundaries flush synchronously below.
+  const pendingStreamDeltas = useRef(new Map<string, string>());
+  const streamFrame = useRef<number | null>(null);
+
+  const flushStreamDeltas = useCallback((threadId?: string) => {
+    if (threadId) {
+      const delta = pendingStreamDeltas.current.get(threadId);
+      pendingStreamDeltas.current.delete(threadId);
+      if (delta) rawDispatch({ type: "streamDelta", threadId, delta });
+    } else {
+      for (const [id, delta] of pendingStreamDeltas.current) {
+        rawDispatch({ type: "streamDelta", threadId: id, delta });
+      }
+      pendingStreamDeltas.current.clear();
+    }
+    if (pendingStreamDeltas.current.size === 0 && streamFrame.current !== null) {
+      cancelAnimationFrame(streamFrame.current);
+      streamFrame.current = null;
+    }
+  }, []);
+
+  const queueStreamDelta = useCallback((threadId: string, delta: string) => {
+    if (!delta) return;
+    pendingStreamDeltas.current.set(threadId, `${pendingStreamDeltas.current.get(threadId) ?? ""}${delta}`);
+    if (streamFrame.current !== null) return;
+    streamFrame.current = requestAnimationFrame(() => {
+      streamFrame.current = null;
+      flushStreamDeltas();
+    });
+  }, [flushStreamDeltas]);
 
   const showError = useCallback((error: unknown) => {
     rawDispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
@@ -742,12 +781,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [showError]);
 
+  const makeBotPermanent = useCallback(async (botId: string) => {
+    try {
+      const { bot } = await api(`/api/bots/${botId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ temporary: false }),
+      });
+      // Optional fields omitted by JSON cannot clear a prior reducer value,
+      // so carry the lifecycle tombstone explicitly.
+      rawDispatch({ type: "botPatched", bot: { ...bot, lifecycle: null } });
+    } catch (error) {
+      showError(error);
+      throw error;
+    }
+  }, [showError]);
+
   const dispatch = useMemo(() => {
     const wrapped: React.Dispatch<Action> = (action) => {
       rawDispatch(action);
       switch (action.type) {
         case "newBot":
-          api("/api/bots", { method: "POST" })
+          api("/api/bots", {
+            method: "POST",
+            ...(action.temporary
+              ? { body: JSON.stringify({ temporary: true, ttlMinutes: action.ttlMinutes }) }
+              : {}),
+          })
             .then(({ bot }) => rawDispatch({ type: "botAdded", bot }))
             .catch(showError);
           break;
@@ -854,9 +913,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       switch (frame.kind) {
         case "message":
+          flushStreamDeltas(frame.threadId);
           rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
           break;
         case "message.patch":
+          flushStreamDeltas(frame.threadId);
           rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message });
           break;
         case "bot": {
@@ -876,8 +937,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "runtime": {
           const event = frame.event;
           if (event.type === "content.delta" && event.streamKind === "assistant_text") {
-            rawDispatch({ type: "streamDelta", threadId: event.threadId, delta: event.delta });
+            queueStreamDelta(event.threadId, event.delta);
           } else if (event.type === "turn.completed") {
+            flushStreamDeltas(event.threadId);
             rawDispatch({ type: "streamClear", threadId: event.threadId });
           }
           break;
@@ -914,13 +976,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
     return () => {
       alive = false;
+      flushStreamDeltas();
+      if (streamFrame.current !== null) {
+        cancelAnimationFrame(streamFrame.current);
+        streamFrame.current = null;
+      }
       es.close();
     };
-  }, []);
+  }, [flushStreamDeltas, queueStreamDelta]);
 
   const value = useMemo(
-    () => ({ state, dispatch, sendMessage, answerCard, dismissCard, deleteBot }),
-    [state, dispatch, sendMessage, answerCard, dismissCard, deleteBot],
+    () => ({ state, dispatch, sendMessage, answerCard, dismissCard, deleteBot, makeBotPermanent }),
+    [state, dispatch, sendMessage, answerCard, dismissCard, deleteBot, makeBotPermanent],
   );
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

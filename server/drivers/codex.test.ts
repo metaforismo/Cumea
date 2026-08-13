@@ -68,9 +68,11 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
 
     const { turnId } = await instance.adapter.sendTurn({
       threadId: "t-happy",
+      turnId: "harness-turn-codex",
       text: "list files",
       system: "You are Testy.",
     });
+    expect(turnId).toBe("harness-turn-codex");
     await recorder.until((e) => e.type === "turn.completed");
 
     const types = recorder.events.map((e) => e.type);

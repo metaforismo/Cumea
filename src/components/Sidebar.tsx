@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
   BellDot,
+  Bot as BotIcon,
+  Clock3,
   ClipboardCopy,
   Copy,
   EyeOff,
@@ -50,6 +52,15 @@ function preview(bot: Bot): string {
   return last.text ?? "";
 }
 
+function temporaryTimeLabel(expiresAt: number): string {
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) return "Expires as soon as it is safely idle";
+  const hours = Math.ceil(remaining / 3_600_000);
+  if (hours < 24) return hours === 1 ? "Expires in 1 hour" : `Expires in ${hours} hours`;
+  const days = Math.ceil(hours / 24);
+  return days === 1 ? "Expires in 1 day" : `Expires in ${days} days`;
+}
+
 interface MenuState {
   botId: string;
   x: number;
@@ -67,7 +78,7 @@ function BotContextMenu({
   onMove: (botId: string) => void;
   onDelete: (botId: string) => void;
 }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, makeBotPermanent } = useStore();
   const bot = state.bots.find((b) => b.id === menu.botId);
 
   useEffect(() => {
@@ -140,6 +151,11 @@ function BotContextMenu({
         item(<Copy size={16} className="text-ink-secondary" />, "Duplicate", () =>
           dispatch({ type: "duplicateBot", botId: bot.id }),
         ),
+        ...(bot.lifecycle
+          ? [item(<Clock3 size={16} className="text-ink-secondary" />, "Keep permanently", () => {
+              void makeBotPermanent(bot.id).catch(() => {});
+            })]
+          : []),
         divider("d2"),
         item(<ClipboardCopy size={16} className="text-ink-secondary" />, "Copy conversation ID", () => {
           void navigator.clipboard?.writeText(bot.threadId);
@@ -354,6 +370,14 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
           <span className="flex min-w-0 items-center gap-1.5 truncate text-[15px] font-semibold text-ink">
             {bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
             <span className="truncate">{bot.name}</span>
+            {bot.lifecycle ? (
+              <span
+                title={temporaryTimeLabel(bot.lifecycle.expiresAt)}
+                className="shrink-0 rounded-md bg-accent/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.05em] text-accent"
+              >
+                Quick
+              </span>
+            ) : null}
           </span>
           {selected && last && (
             <span className="shrink-0 text-xs text-ink-secondary">
@@ -379,6 +403,7 @@ export function Sidebar() {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [moveBotId, setMoveBotId] = useState<string | null>(null);
   const [deleteBotId, setDeleteBotId] = useState<string | null>(null);
+  const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -392,6 +417,22 @@ export function Sidebar() {
     window.addEventListener("keydown", focusSearch);
     return () => window.removeEventListener("keydown", focusSearch);
   }, []);
+
+  useEffect(() => {
+    if (!createMenuOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!(event.target as HTMLElement).closest("[data-create-bot-menu]")) setCreateMenuOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCreateMenuOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", escape);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", escape);
+    };
+  }, [createMenuOpen]);
 
   const visibleBots = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -448,14 +489,54 @@ export function Sidebar() {
               </span>
             )}
           </button>
-          <button
-            onClick={() => dispatch({ type: "newBot" })}
-            className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-            aria-label="New bot"
-            title="New bot"
-          >
-            <Plus size={20} strokeWidth={2} />
-          </button>
+          <div className="relative" data-create-bot-menu>
+            <button
+              onClick={() => setCreateMenuOpen((open) => !open)}
+              className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+              aria-label="Create a bot"
+              aria-haspopup="menu"
+              aria-expanded={createMenuOpen}
+              title="Create a bot"
+            >
+              <Plus size={20} strokeWidth={2} />
+            </button>
+            {createMenuOpen ? (
+              <div
+                role="menu"
+                aria-label="Create a bot"
+                className="absolute right-0 top-10 z-40 w-[250px] overflow-hidden rounded-xl border border-hairline/50 bg-card p-1.5 shadow-2xl shadow-black/60"
+              >
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setCreateMenuOpen(false);
+                    dispatch({ type: "newBot" });
+                  }}
+                  className="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-raised/70"
+                >
+                  <BotIcon size={17} className="mt-0.5 shrink-0 text-ink-secondary" aria-hidden="true" />
+                  <span>
+                    <span className="block text-[13px] font-medium text-ink">Permanent bot</span>
+                    <span className="mt-0.5 block text-[11px] leading-snug text-ink-secondary">Stays until you delete it.</span>
+                  </span>
+                </button>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setCreateMenuOpen(false);
+                    dispatch({ type: "newBot", temporary: true, ttlMinutes: 24 * 60 });
+                  }}
+                  className="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-raised/70"
+                >
+                  <Clock3 size={17} className="mt-0.5 shrink-0 text-accent" aria-hidden="true" />
+                  <span>
+                    <span className="block text-[13px] font-medium text-ink">Quick bot</span>
+                    <span className="mt-0.5 block text-[11px] leading-snug text-ink-secondary">Expires after 24 hours when safely idle.</span>
+                  </span>
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
 

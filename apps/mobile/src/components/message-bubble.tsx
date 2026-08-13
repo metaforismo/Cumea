@@ -102,8 +102,13 @@ export const MessageBubble = memo(function MessageBubble({ message }: { message:
 });
 
 export const StreamingBubble = memo(function StreamingBubble({ text }: { text: string }) {
+  const reduceMotion = useReducedMotion();
   return (
-    <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={{ width: "100%", alignItems: "flex-start" }}>
+    <Animated.View
+      entering={reduceMotion ? undefined : FadeIn.duration(160)}
+      exiting={reduceMotion ? undefined : FadeOut.duration(120)}
+      style={{ width: "100%", alignItems: "flex-start" }}
+    >
       <View style={{ maxWidth: "82%", borderRadius: 20, borderCurve: "continuous", backgroundColor: theme.card, paddingHorizontal: 15, paddingVertical: 11 }}>
         {text ? (
           <View>

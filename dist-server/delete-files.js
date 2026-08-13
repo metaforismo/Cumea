@@ -1,6 +1,24 @@
 import { lstatSync, mkdirSync, mkdtempSync, renameSync, rmdirSync, unlinkSync, } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
+/** Finalize already-committed deletion quarantines independently.
+ *
+ * Once metadata no longer contains the bot, rollback is no longer a valid
+ * outcome. A failed purge is retained as private staging garbage for later
+ * maintenance; it must not prevent the remaining quarantines from purging or
+ * tempt the caller to resurrect records whose bytes may already be gone. */
+export function purgeCommittedFileDeletions(deletions, onError) {
+    for (const deletion of deletions) {
+        if (!deletion)
+            continue;
+        try {
+            deletion.purge();
+        }
+        catch (error) {
+            onError(error);
+        }
+    }
+}
 function errno(error) {
     return error?.code;
 }

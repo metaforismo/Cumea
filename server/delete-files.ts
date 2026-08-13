@@ -30,6 +30,26 @@ export interface StagedFileDeletion {
   rollback: () => void;
 }
 
+/** Finalize already-committed deletion quarantines independently.
+ *
+ * Once metadata no longer contains the bot, rollback is no longer a valid
+ * outcome. A failed purge is retained as private staging garbage for later
+ * maintenance; it must not prevent the remaining quarantines from purging or
+ * tempt the caller to resurrect records whose bytes may already be gone. */
+export function purgeCommittedFileDeletions(
+  deletions: Array<StagedFileDeletion | null>,
+  onError: (error: unknown) => void,
+): void {
+  for (const deletion of deletions) {
+    if (!deletion) continue;
+    try {
+      deletion.purge();
+    } catch (error) {
+      onError(error);
+    }
+  }
+}
+
 function errno(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException)?.code;
 }

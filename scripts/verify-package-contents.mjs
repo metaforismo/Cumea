@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { createReadStream } from "node:fs";
-import { access, readdir, stat } from "node:fs/promises";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -10,6 +10,8 @@ import { CUA_DRIVER_RELEASE } from "./cua-driver-release.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const exec = promisify(execFile);
+const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+const electronManifest = JSON.parse(await readFile(path.join(root, "node_modules", "electron", "package.json"), "utf8"));
 
 async function findDirectories(directory, suffix, depth = 0) {
   if (depth > 6) return [];
@@ -30,6 +32,19 @@ async function findFile(directory, fileName, depth = 0) {
     if (entry.isFile() && entry.name === fileName) return target;
     if (entry.isDirectory()) {
       const nested = await findFile(target, fileName, depth + 1);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
+}
+
+async function findMatchingFile(directory, predicate, depth = 0) {
+  if (depth > 12) return undefined;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isFile() && predicate(entry.name)) return target;
+    if (entry.isDirectory()) {
+      const nested = await findMatchingFile(target, predicate, depth + 1);
       if (nested) return nested;
     }
   }
@@ -70,13 +85,58 @@ const required = [
   ["licenses/cua-driver-node-runtime-NOTICE.md", 64],
   ["licenses/qrcode-react-ISC.txt", 64],
   ["licenses/react-native-markdown-display-MIT.txt", 64],
+  ["licenses/expo-speech-recognition-MIT.txt", 64],
+  ["licenses/jszip-MIT.txt", 64],
+  ["licenses/pdfjs-Apache-2.0.txt", 1024],
+  ["licenses/electron-MIT.txt", 512],
 ];
 for (const [relative, minimumBytes] of required) {
   await requireFile(path.join(resources, relative), minimumBytes);
 }
 
+const pdfWorker = await findMatchingFile(
+  path.join(resources, "ui", "assets"),
+  (fileName) => fileName.startsWith("pdf.worker.min-") && fileName.endsWith(".mjs"),
+);
+if (!pdfWorker) throw new Error("Packaged PDF.js worker asset is missing");
+await requireFile(pdfWorker, 500_000);
+
 const infoPlist = path.join(resources, "..", "Info.plist");
-for (const usageKey of ["NSScreenCaptureUsageDescription", "NSAppleEventsUsageDescription"]) {
+const { stdout: packagedVersion } = await exec("plutil", ["-extract", "CFBundleShortVersionString", "raw", infoPlist]);
+if (packagedVersion.trim() !== manifest.version) {
+  throw new Error(`Packaged app version mismatch: expected ${manifest.version}, received ${packagedVersion.trim()}`);
+}
+const electronFrameworkInfo = path.join(
+  resources,
+  "..",
+  "Frameworks",
+  "Electron Framework.framework",
+  "Versions",
+  "A",
+  "Resources",
+  "Info.plist",
+);
+await requireFile(electronFrameworkInfo, 256);
+const { stdout: packagedElectronVersion } = await exec("plutil", [
+  "-extract",
+  // Electron's framework plist exposes the runtime release as
+  // CFBundleVersion (the app plist uses CFBundleShortVersionString).
+  "CFBundleVersion",
+  "raw",
+  electronFrameworkInfo,
+]);
+if (packagedElectronVersion.trim() !== electronManifest.version) {
+  throw new Error(
+    `Packaged Electron runtime mismatch: expected ${electronManifest.version}, ` +
+    `received ${packagedElectronVersion.trim()}`,
+  );
+}
+for (const usageKey of [
+  "NSMicrophoneUsageDescription",
+  "NSSpeechRecognitionUsageDescription",
+  "NSScreenCaptureUsageDescription",
+  "NSAppleEventsUsageDescription",
+]) {
   const { stdout: usageDescription } = await exec("plutil", ["-extract", usageKey, "raw", infoPlist]);
   if (!usageDescription.trim()) throw new Error(`Packaged Info.plist is missing ${usageKey}`);
 }

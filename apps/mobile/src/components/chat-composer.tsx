@@ -1,39 +1,53 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Alert, Text, TextInput, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { PendingAttachment } from "@/host/types";
+import { useNativeDictation } from "@/speech/use-native-dictation";
 import { PressableScale } from "./pressable-scale";
 import { theme } from "@/theme";
 
 interface ChatComposerProps {
   agentName: string;
   working: boolean;
+  screenFocused?: boolean;
   attachmentsEnabled?: boolean;
   onSend(text: string, attachments: PendingAttachment[]): Promise<void>;
   onStop(): Promise<void>;
 }
 
-function MicrophoneGlyph() {
+function MicrophoneGlyph({ color = theme.background }: { color?: string }) {
   return (
     <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ width: 17, height: 21, alignItems: "center" }}>
-      <View style={{ width: 8, height: 13, borderRadius: 5, borderWidth: 2, borderColor: theme.background }} />
-      <View style={{ position: "absolute", top: 8, width: 15, height: 9, borderLeftWidth: 2, borderRightWidth: 2, borderBottomWidth: 2, borderColor: theme.background, borderBottomLeftRadius: 8, borderBottomRightRadius: 8 }} />
-      <View style={{ position: "absolute", bottom: 0, width: 2, height: 4, backgroundColor: theme.background }} />
+      <View style={{ width: 8, height: 13, borderRadius: 5, borderWidth: 2, borderColor: color }} />
+      <View style={{ position: "absolute", top: 8, width: 15, height: 9, borderLeftWidth: 2, borderRightWidth: 2, borderBottomWidth: 2, borderColor: color, borderBottomLeftRadius: 8, borderBottomRightRadius: 8 }} />
+      <View style={{ position: "absolute", bottom: 0, width: 2, height: 4, backgroundColor: color }} />
     </View>
   );
 }
 
-export function ChatComposer({ agentName, working, attachmentsEnabled = true, onSend, onStop }: ChatComposerProps) {
+export function ChatComposer({ agentName, working, screenFocused = true, attachmentsEnabled = true, onSend, onStop }: ChatComposerProps) {
   const insets = useSafeAreaInsets();
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [sending, setSending] = useState(false);
-  const canSend = Boolean(text.trim());
-  const showMicrophone = !working && !sending && !text.trim() && attachments.length === 0;
+  const dictationContext = useMemo(() => ["Cumea", agentName], [agentName]);
+  const dictation = useNativeDictation({
+    value: text,
+    onChangeText: setText,
+    contextualStrings: dictationContext,
+    screenFocused,
+  });
+  const canSend = Boolean(text.trim() || attachments.length);
+  const showMicrophone = dictation.active || (!working && !sending && !text.trim() && attachments.length === 0);
+
+  useEffect(() => {
+    if ((working || sending) && dictation.active) dictation.abort();
+  }, [dictation.active, dictation.abort, sending, working]);
 
   const pick = async () => {
+    if (dictation.active) dictation.abort();
     try {
       const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
       if (result.canceled) return;
@@ -55,8 +69,9 @@ export function ChatComposer({ agentName, working, attachmentsEnabled = true, on
 
   const send = async () => {
     if (sending) return;
-    if (!text.trim()) {
-      Alert.alert("Add a message", "Tell the bot what to do with the attached files before sending.");
+    if (dictation.active) dictation.abort();
+    if (!text.trim() && attachments.length === 0) {
+      Alert.alert("Add a message", "Dictate or type what you want the bot to do.");
       return;
     }
     const outgoingText = text;
@@ -86,6 +101,35 @@ export function ChatComposer({ agentName, working, attachmentsEnabled = true, on
 
   return (
     <View style={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: Math.max(insets.bottom, 8), backgroundColor: theme.background }}>
+      {dictation.failure ? (
+        <View
+          accessibilityLiveRegion="assertive"
+          style={{ marginHorizontal: 6, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 12, borderCurve: "continuous", borderWidth: 1, borderColor: `${theme.danger}66`, backgroundColor: `${theme.danger}14`, paddingHorizontal: 11, paddingVertical: 9 }}
+        >
+          <Text selectable style={{ flex: 1, color: theme.text, fontSize: 12, lineHeight: 17 }}>{dictation.failure.message}</Text>
+          {dictation.failure.canOpenSettings ? (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Open system settings"
+              hitSlop={6}
+              onPress={() => void dictation.openSettings()}
+              style={{ minHeight: 32, justifyContent: "center", borderRadius: 16, backgroundColor: theme.cardRaised, paddingHorizontal: 11 }}
+            >
+              <Text style={{ color: theme.text, fontSize: 12, fontWeight: "700" }}>Settings</Text>
+            </PressableScale>
+          ) : null}
+        </View>
+      ) : null}
+      {dictation.statusLabel ? (
+        <View
+          accessibilityLiveRegion="polite"
+          accessibilityRole="text"
+          style={{ marginHorizontal: 7, marginBottom: 7, flexDirection: "row", alignItems: "center", gap: 7 }}
+        >
+          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: theme.danger }} />
+          <Text style={{ color: theme.textSecondary, fontSize: 12, fontWeight: "600" }}>{dictation.statusLabel}</Text>
+        </View>
+      ) : null}
       {attachments.length ? (
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 7, paddingHorizontal: 6, paddingBottom: 8 }}>
           {attachments.map((attachment, index) => (
@@ -115,8 +159,8 @@ export function ChatComposer({ agentName, working, attachmentsEnabled = true, on
           <TextInput
             accessibilityLabel={`Message ${agentName}`}
             value={text}
-            onChangeText={setText}
-            placeholder={`Ask ${agentName}`}
+            onChangeText={dictation.handleTextChange}
+            placeholder={dictation.statusLabel ?? `Ask ${agentName}`}
             placeholderTextColor={theme.textSecondary}
             multiline
             maxLength={20_000}
@@ -125,20 +169,23 @@ export function ChatComposer({ agentName, working, attachmentsEnabled = true, on
           />
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel={working ? "Stop agent" : showMicrophone ? "Voice input unavailable" : canSend ? "Send message" : "Add a message before sending attachments"}
-            accessibilityHint={showMicrophone ? "Voice input is not enabled in this build" : undefined}
-            disabled={sending}
+            accessibilityLabel={working ? "Stop agent" : dictation.active ? "Stop dictation" : showMicrophone ? "Start dictation" : canSend ? "Send message" : "Add a message before sending attachments"}
+            accessibilityHint={showMicrophone && !dictation.active ? "Transcribes speech into this message using the device speech service" : undefined}
+            accessibilityState={{ busy: dictation.phase === "requesting" || dictation.phase === "stopping", selected: dictation.active }}
+            hitSlop={6}
+            disabled={sending || dictation.phase === "stopping"}
             onPress={() => {
               if (working) void stop();
-              else if (showMicrophone) Alert.alert("Voice input isn’t enabled yet", "Use the keyboard to message this bot.");
+              else if (dictation.active) dictation.stop();
+              else if (showMicrophone) void dictation.start();
               else void send();
             }}
-            style={{ width: 36, height: 36, borderRadius: 18, opacity: working || canSend || showMicrophone ? 1 : 0.4, alignItems: "center", justifyContent: "center", backgroundColor: theme.text }}
+            style={{ width: 36, height: 36, borderRadius: 18, opacity: working || canSend || showMicrophone ? 1 : 0.4, alignItems: "center", justifyContent: "center", backgroundColor: dictation.active ? theme.danger : theme.text }}
           >
             {working ? (
               <Text style={{ color: theme.background, fontSize: 16, fontWeight: "800" }}>■</Text>
             ) : showMicrophone ? (
-              <MicrophoneGlyph />
+              <MicrophoneGlyph color={dictation.active ? theme.text : theme.background} />
             ) : (
               <Text style={{ color: theme.background, fontSize: 20, fontWeight: "800" }}>↑</Text>
             )}

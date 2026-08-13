@@ -92,7 +92,7 @@ async function handle(msg: Json) {
       ok(id, {
         protocolVersion: (params.protocolVersion as string) ?? "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "cumea-agents", version: "0.1.0" },
+        serverInfo: { name: "cumea-agents", version: "0.2.0" },
       });
       return;
     case "notifications/initialized":

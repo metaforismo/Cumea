@@ -56,7 +56,8 @@ interface CumeaActions {
   interrupt(agentId: string): Promise<void>;
   respondAttention(item: AttentionItem, choice: AttentionItem["choices"][number]): Promise<void>;
   toggleRoutine(routine: RoutineSummary): Promise<void>;
-  createAgent(name: string, role: string): Promise<AgentSummary>;
+  createAgent(name: string, role: string, options?: { temporary?: boolean }): Promise<AgentSummary>;
+  makeAgentPermanent(agentId: string): Promise<void>;
   clearError(): void;
 }
 
@@ -548,9 +549,9 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
   }, [setError]);
 
   const sendMessage = useCallback(async (agentId: string, rawText: string, attachments: PendingAttachment[]) => {
-    const text = rawText.trim();
-    if (!text && attachments.length === 0) return;
-    if (!text) throw new Error("Add a message so the bot knows what to do with the attached files.");
+    const typedText = rawText.trim();
+    if (!typedText && attachments.length === 0) return;
+    const text = typedText || "Please review the attached files.";
     const clientMessageId = localId();
     const optimistic: ChatMessage = {
       id: clientMessageId,
@@ -717,11 +718,11 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
     setState((current) => ({ ...current, routines: current.routines.map((item) => item.id === routine.id ? optimistic : item) }));
   }, [setError]);
 
-  const createAgent = useCallback(async (name: string, role: string): Promise<AgentSummary> => {
+  const createAgent = useCallback(async (name: string, role: string, options: { temporary?: boolean } = {}): Promise<AgentSummary> => {
     if (stateRef.current.enrollment?.mode === "host") {
       const client = clientRef.current;
       if (!client) throw new Error("Your Cumea host is offline.");
-      const agent = await client.createAgent(name, role);
+      const agent = await client.createAgent(name, role, options);
       setState((current) => ({
         ...current,
         agents: upsertAgent(current.agents, agent),
@@ -736,6 +737,7 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
     const agent: AgentSummary = {
       id: localId(), threadId: localId(), name, role, preview: "Ready when you are.", updatedAt: Date.now(), unread: false,
       needsYou: false, presence: "idle", avatar: { version: 1, kind: "mote", shapeId: "orb", color: colors[stateRef.current.agents.length % colors.length], motion: "playful" },
+      ...(options.temporary ? { lifecycle: { kind: "temporary" as const, expiresAt: Date.now() + 24 * 60 * 60_000 } } : {}),
     };
     setState((current) => ({
       ...current,
@@ -747,6 +749,20 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
       },
     }));
     return agent;
+  }, []);
+
+  const makeAgentPermanent = useCallback(async (agentId: string) => {
+    if (stateRef.current.enrollment?.mode === "host") {
+      const client = clientRef.current;
+      if (!client) throw new Error("Your Cumea host is offline.");
+      const agent = await client.makeAgentPermanent(agentId);
+      setState((current) => ({ ...current, agents: upsertAgent(current.agents, agent) }));
+      return;
+    }
+    setState((current) => ({
+      ...current,
+      agents: current.agents.map((agent) => agent.id === agentId ? { ...agent, lifecycle: undefined } : agent),
+    }));
   }, []);
 
   const actions = useMemo<CumeaActions>(() => ({
@@ -763,8 +779,9 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
     respondAttention,
     toggleRoutine,
     createAgent,
+    makeAgentPermanent,
     clearError: () => setState((current) => ({ ...current, error: null })),
-  }), [createAgent, disconnect, ensureMessages, enterDemo, finishOnboarding, interrupt, loadOlderMessages, markRead, pair, refresh, respondAttention, sendMessage, toggleRoutine]);
+  }), [createAgent, disconnect, ensureMessages, enterDemo, finishOnboarding, interrupt, loadOlderMessages, makeAgentPermanent, markRead, pair, refresh, respondAttention, sendMessage, toggleRoutine]);
 
   const value = useMemo(() => ({ state, actions }), [actions, state]);
   return <CumeaContext value={value}>{children}</CumeaContext>;

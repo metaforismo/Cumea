@@ -31,6 +31,8 @@ it does not mean an upstream branch was merged without review.
 | [#33 icon grid](https://github.com/milind-soni/OpenMausBot/pull/33) | Reimplemented independently | Cumea's supplied artwork is padded for native icon masks without copying upstream art. |
 | [#34 trial box TTL](https://github.com/milind-soni/OpenMausBot/pull/34), [#35 dictation locale](https://github.com/milind-soni/OpenMausBot/pull/35), [#36 connected-app prompt](https://github.com/milind-soni/OpenMausBot/pull/36), [#37 screen-frame gating](https://github.com/milind-soni/OpenMausBot/pull/37) | Reimplemented now | Small, bounded improvements that match Cumea's existing Box, speech, Composio, and computer-preview contracts. |
 | [#38 pasted images](https://github.com/milind-soni/OpenMausBot/pull/38), [#39 per-bot drafts](https://github.com/milind-soni/OpenMausBot/pull/39), [#40 multiline composer](https://github.com/milind-soni/OpenMausBot/pull/40) | Adapted now | Cumea reuses its own attachment pipeline, clears drafts on agent switches, guards IME composition, and supports Shift+Enter in an auto-growing composer. |
+| [#41 Windows CLI shims](https://github.com/milind-soni/OpenMausBot/pull/41), [#42 Windows permission pipe](https://github.com/milind-soni/OpenMausBot/pull/42), [#43 Windows process tree](https://github.com/milind-soni/OpenMausBot/pull/43), [#44 cross-platform user data](https://github.com/milind-soni/OpenMausBot/pull/44) | Selective/defer | Cumea already resolves its CUA descriptor through Electron's exact `userData` path with platform fallbacks. CLI shims, authenticated named pipes, and process-tree cleanup belong in one Windows tranche with quoting, ACL, packaged-Electron, and real-host tests; the open branches are useful references but are overlapping and not safe to combine wholesale. |
+| [#45 message editing and branches](https://github.com/milind-soni/OpenMausBot/pull/45) | Defer to a dedicated design | Branching changes the persistence model and must cover tasks, runs, artifacts, attachments, pagination, mobile synchronization, crash recovery, and accessible version switching. A transcript-only import would make the audit trail inconsistent. |
 | [#23 README diagram](https://github.com/milind-soni/OpenMausBot/pull/23) | Absorb concept | Documentation is being rewritten around Cumea rather than patching the upstream README. |
 | [#14 PATH detection](https://github.com/milind-soni/OpenMausBot/pull/14) | Superseded/selective | Much of the problem is already addressed by `env-path.ts`; remaining deterministic probe work can be added independently. |
 
@@ -47,7 +49,7 @@ it does not mean an upstream branch was merged without review.
   until its consent and authentication model is appropriate for a local agent workspace.
 
 This file records a time-bounded audit, refreshed on 2026-08-13 against upstream `main` at
-`8511f02557f19cf6ac1976d3115b08c0c4643754` and the open pull requests through #40. Recheck
+`8511f02557f19cf6ac1976d3115b08c0c4643754` and the open pull requests through #45. Recheck
 upstream state and actual branch diffs before taking future work.
 
 ## Dependency-update policy

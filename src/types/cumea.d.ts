@@ -18,12 +18,25 @@ declare global {
       cuaRetry(): Promise<CuaPublicStatus>;
       cuaOpenSettings(permission: "accessibility" | "screenRecording"): Promise<boolean>;
       screenFrame(): Promise<string | null>;
-      speechStart(): Promise<void>;
+      speechStart(): Promise<{ started: boolean }>;
       speechStop(): Promise<void>;
       onSpeechTranscript(
         cb: (line: { partial?: boolean; text?: string; error?: string }) => void,
       ): () => void;
-      onSpeechEnd(cb: (info: { code: number | null }) => void): () => void;
+      onSpeechEnd(
+        cb: (info: {
+          code: number | null;
+          reason?:
+            | "completed"
+            | "speech-not-authorized"
+            | "recognizer-unavailable"
+            | "mic-failed"
+            | "recognition-error"
+            | "helper-unavailable"
+            | "helper-exited"
+            | "unsupported-platform";
+        }) => void,
+      ): () => void;
       /** {mic} TCC status: granted|denied|not-determined|unknown. Screen
        * status is deliberately absent — macOS 15+ caches it per-process,
        * so it lies for the whole session after a grant. */

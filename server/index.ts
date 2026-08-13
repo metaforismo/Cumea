@@ -10,14 +10,30 @@ import { fileURLToPath } from "node:url";
 
 import { writeFileAtomic } from "./atomic.ts";
 import * as box from "./box.ts";
+import {
+  BotResourceGate,
+  TurnEventFence,
+  shouldCleanupStaleProvision,
+  type BotDetachedOperation,
+} from "./bot-resource-gate.ts";
 import * as composio from "./composio.ts";
 import { ATTACHMENTS_DIR, ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
-import type { RuntimeEvent } from "./contracts.ts";
-import { stageFilesForDeletion, type StagedFileDeletion } from "./delete-files.ts";
+import { newId, type RuntimeEvent } from "./contracts.ts";
+import { purgeCommittedFileDeletions, stageFilesForDeletion, type StagedFileDeletion } from "./delete-files.ts";
+import {
+  FileCapabilityStore,
+  botWorkspaceDirectory,
+  publicFileCapability,
+  readLocalBotFile,
+  readStoredAttachmentFile,
+  stageBotWorkspaceForDeletion,
+} from "./file-capabilities.ts";
+import { buildStructuredPreview } from "./document-preview.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { threadEventKey, threadEventPrefix } from "./event-key.ts";
 import { EventBus } from "./harness/bus.ts";
+import { EventLogWriter } from "./harness/event-log.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import {
   MOBILE_BOOTSTRAP_MESSAGE_LIMIT,
@@ -30,7 +46,10 @@ import {
   sanitizeRemoteSsePayload,
 } from "./mobile.ts";
 import { PairingStore } from "./pairing.ts";
-import { mentionedBots, parseBotAvatar, Store, type Message } from "./store.ts";
+import { ProviderFleetGate } from "./provider-fleet-gate.ts";
+import { commitCaptureIfCurrent } from "./screen-capture.ts";
+import { mentionedBots, parseBotAvatar, Store, type BotRecord, type Message } from "./store.ts";
+import { isTemporaryBotCleanupEligible, sweepTemporaryBots, temporaryBotLifecycle } from "./temporary-bots.ts";
 import { WorkspaceStore, type AttachmentRecord, type RoutineSchedule, type TaskSource } from "./workspace.ts";
 
 const PORT = Number(process.env.CUMEA_PORT || 8799);
@@ -79,6 +98,7 @@ const REMOTE_SCREEN_PREVIEW = Boolean(REMOTE) && process.env.CUMEA_REMOTE_SCREEN
 const MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
+  ".mjs": "text/javascript",
   ".css": "text/css",
   ".svg": "image/svg+xml",
   ".png": "image/png",
@@ -91,9 +111,6 @@ ensureDirs();
 const cfg = loadConfig();
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS);
 await registry.load(instanceConfigs(cfg));
-
-const bus = new EventBus();
-bus.attach(registry.instances());
 
 // ── peer-agent comms wiring ────────────────────────────────────────────
 // A shared secret guards the localhost-only /api/internal endpoints the
@@ -132,6 +149,7 @@ function askBotAndWait(targetBotId: string, message: string, depth: number, sour
   const target = store.bot(targetBotId);
   if (!target) return Promise.resolve("(no such bot)");
   const threadId = target.threadId;
+  const turnId = newId();
   return new Promise((resolve) => {
     let text = "";
     let done = false;
@@ -143,7 +161,10 @@ function askBotAndWait(targetBotId: string, message: string, depth: number, sour
       resolve(out);
     };
     const unsub = bus.subscribe((e: RuntimeEvent) => {
-      if (e.threadId !== threadId) return;
+      // EventBus rejects stale generations before fanout. Keep this listener
+      // correlated by the harness-issued ids only: the primary folder
+      // subscriber runs first and retires the accepted fence on completion.
+      if (e.threadId !== threadId || e.turnId !== turnId) return;
       if (e.type === "item.completed" && e.itemType === "assistant_text") {
         text += (text ? "\n" : "") + e.text;
       } else if (e.type === "turn.completed") {
@@ -156,6 +177,7 @@ function askBotAndWait(targetBotId: string, message: string, depth: number, sour
       source: "handoff",
       sourceBotId,
       taskTitle: `Handoff from ${store.bot(sourceBotId ?? "")?.name ?? "another bot"}`,
+      turnId,
     }).catch((err) =>
       finish(`(couldn't start that bot: ${err instanceof Error ? err.message : String(err)})`),
     );
@@ -173,8 +195,20 @@ let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
 const store = new Store(() => bootSelection);
 const workspace = new WorkspaceStore();
 const pairing = new PairingStore();
+const fileCapabilities = new FileCapabilityStore();
+const botResourceGate = new BotResourceGate();
+const turnEventFence = new TurnEventFence();
+const providerFleetGate = new ProviderFleetGate();
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
+
+// Event persistence follows the canonical bot roster instead of accumulating
+// per-process deletion tombstones. Once a bot transaction commits, callbacks
+// from its interrupted provider session can no longer recreate its log.
+const bus = new EventBus(new EventLogWriter({
+  isThreadActive: (threadId) => Boolean(store.botByThread(threadId)),
+}), (event) => turnEventFence.accepts(event.threadId, event.type, event.turnId));
+bus.attach(registry.instances());
 
 // ── SSE fan-out to clients ─────────────────────────────────────────────
 interface SseClient {
@@ -280,8 +314,24 @@ function broadcastWorkspace() {
 const toolMessageByItem = new Map<string, string>(); // threadId + itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // threadId + requestId -> messageId
 const activeRunByThread = new Map<string, string>();
+const activeProviderTurnByThread = new Map<string, { instanceId: string; turnId: string }>();
+/** Serializes manual and automatic deletion for the same bot. */
+const deletingBotIds = new Set<string>();
 /** Threads whose current turn actually invoked a computer tool. */
 const usedComputerByThread = new Set<string>();
+
+/** Detached provider callbacks must prove both generation and canonical store
+ * ownership. The object-identity check prevents an ABA-style replacement with
+ * the same public ids; the gate generation stays invalid after delete rollback. */
+function isCanonicalBotOperation(bot: BotRecord, operation?: BotDetachedOperation) {
+  return (
+    (operation?.isCurrent() ?? true) &&
+    !deletingBotIds.has(bot.id) &&
+    !botResourceGate.isDeleting(bot.id) &&
+    store.bot(bot.id) === bot &&
+    store.botByThread(bot.threadId) === bot
+  );
+}
 
 function clearThreadEventState(threadId: string) {
   const prefix = threadEventPrefix(threadId);
@@ -291,9 +341,15 @@ function clearThreadEventState(threadId: string) {
 }
 
 bus.subscribe((event: RuntimeEvent) => {
-  broadcast({ kind: "runtime", event });
   const bot = store.botByThread(event.threadId);
-  if (!bot) return;
+  if (
+    !bot ||
+    !isCanonicalBotOperation(bot) ||
+    !turnEventFence.accepts(event.threadId, event.type, event.turnId)
+  ) return;
+  // Provider callbacks may outlive an interrupted/deleted session. Resolve
+  // canonical ownership before exposing diagnostics to any local SSE client.
+  broadcast({ kind: "runtime", event });
 
   const pushMessage = (m: Omit<Message, "id" | "at">) => {
     const message = store.appendMessage(event.threadId, m);
@@ -301,7 +357,8 @@ bus.subscribe((event: RuntimeEvent) => {
     return message;
   };
 
-  switch (event.type) {
+  try {
+    switch (event.type) {
     case "session.started":
       if (event.sessionId && event.providerInstanceId) {
         store.setResumeCursor(bot.id, event.providerInstanceId, event.sessionId);
@@ -376,10 +433,18 @@ bus.subscribe((event: RuntimeEvent) => {
           broadcastWorkspace();
         }
         const instance = registry.get(bot.modelSelection.instanceId);
-        void instance?.adapter.respondToRequest(event.threadId, event.requestId ?? "", { behavior }).catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          pushMessage({ role: "bot", kind: "activity", tool: { name: `approval policy failed: ${message.slice(0, 120)}`, ok: false } });
-        });
+        if (instance) {
+          const approvalOperation = botResourceGate.beginDetachedOperation(bot.id);
+          void instance.adapter.respondToRequest(event.threadId, event.requestId ?? "", { behavior })
+            .catch((error) => {
+              // A provider rejection can arrive after DELETE committed and the
+              // transcript was removed. Never let that callback recreate it.
+              if (!isCanonicalBotOperation(bot, approvalOperation)) return;
+              const message = error instanceof Error ? error.message : String(error);
+              pushMessage({ role: "bot", kind: "activity", tool: { name: `approval policy failed: ${message.slice(0, 120)}`, ok: false } });
+            })
+            .finally(approvalOperation.release);
+        }
         break;
       }
       const message = pushMessage({
@@ -446,10 +511,15 @@ bus.subscribe((event: RuntimeEvent) => {
         broadcastWorkspace();
       }
       store.patchBot(bot.id, { busy: false, unread: true });
+      const providerTurn = activeProviderTurnByThread.get(event.threadId);
+      if (providerTurn?.turnId === event.turnId) activeProviderTurnByThread.delete(event.threadId);
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
       clearThreadEventState(event.threadId);
       break;
     }
+    }
+  } finally {
+    if (event.type === "turn.completed") turnEventFence.complete(event.threadId, event.turnId);
   }
 });
 
@@ -469,10 +539,17 @@ function startScreenPoller(botId: string) {
     if (inFlight) return;
     inFlight = true;
     try {
-      const { png, format } = await box.screenshotBox(cfg, botId);
-      const frame = { png, mime: format === "jpeg" ? "image/jpeg" : "image/png", capturedAt: Date.now() };
-      entry.last = frame;
-      broadcast({ kind: "screen", botId, png: frame.png, mime: frame.mime });
+      await commitCaptureIfCurrent(
+        async () => {
+          const { png, format } = await box.screenshotBox(cfg, botId);
+          return { png, mime: format === "jpeg" ? "image/jpeg" : "image/png", capturedAt: Date.now() } satisfies Frame;
+        },
+        () => screenPollers.get(botId) === entry && Boolean(store.bot(botId)) && !deletingBotIds.has(botId),
+        (frame) => {
+          entry.last = frame;
+          broadcast({ kind: "screen", botId, png: frame.png, mime: frame.mime });
+        },
+      );
     } catch {
       /* box asleep or mid-command — try again next tick */
     } finally {
@@ -536,14 +613,28 @@ interface TurnOptions {
   taskTitle?: string;
   attachments?: AttachmentRecord[];
   track?: boolean;
+  /** Internal correlation id used by peer-agent handoffs. */
+  turnId?: string;
 }
 
 async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
+  const providerFleet = providerFleetGate.snapshot();
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
+  if (!providerFleet.isCurrent()) {
+    throw Object.assign(new Error("providers are reloading — retry in a moment"), { status: 409 });
+  }
+  if (deletingBotIds.has(bot.id) || botResourceGate.isDeleting(bot.id)) {
+    throw Object.assign(new Error("the bot is being deleted"), { status: 409 });
+  }
   if (bot.busy) throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
   const commsDepth = opts.commsDepth ?? 0;
+  const eventTurnId = opts.turnId ?? newId();
   const attachments = opts.attachments ?? [];
+  const localWorkspace = botWorkspaceDirectory(bot.id);
+  // Provider ownership is immutable for this dispatch even if unrelated bot
+  // settings are edited while provisioning is in flight.
+  const selection = { ...bot.modelSelection };
 
   const task = opts.track === false
     ? null
@@ -578,9 +669,9 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
     broadcastWorkspace();
   }
 
-  const instance = registry.get(bot.modelSelection.instanceId);
+  const instance = registry.get(selection.instanceId);
   if (!instance) {
-    const message = `provider instance "${bot.modelSelection.instanceId}" is unavailable — pick another model in settings`;
+    const message = `provider instance "${selection.instanceId}" is unavailable — pick another model in settings`;
     if (runId) workspace.completeRun(runId, false, message);
     broadcastWorkspace();
     throw Object.assign(new Error(message), { status: 409 });
@@ -613,6 +704,32 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
   store.patchBot(bot.id, { busy: true, unread: false });
   broadcast({ kind: "bot", bot: store.bot(bot.id) });
 
+  const turnOperation = botResourceGate.beginDetachedOperation(bot.id);
+  const eventAdmission = turnEventFence.begin(bot.threadId, eventTurnId);
+  const isCurrentBot = () => isCanonicalBotOperation(bot, turnOperation);
+  const isCurrentTurn = () =>
+    isCurrentBot() &&
+    providerFleet.isCurrent() &&
+    (!runId || activeRunByThread.get(bot.threadId) === runId);
+  let cloudProvisionMayExist = false;
+  let provisionedBoxId: string | undefined;
+  let lateProvisionCleanupAttempted = false;
+  let providerTurnAccepted = false;
+  const cleanupLateProvision = async () => {
+    if (
+      !cloudProvisionMayExist ||
+      lateProvisionCleanupAttempted ||
+      !shouldCleanupStaleProvision(store.bot(bot.id))
+    ) return;
+    lateProvisionCleanupAttempted = true;
+    if (provisionedBoxId) {
+      const result = await box.archiveBoxByIdForDeletion(cfg, provisionedBoxId);
+      if (result.outcome === "warning") {
+        console.warn(`cloud computer cleanup warning during late provisioning for bot ${bot.id}: ${result.warning}`);
+      }
+    } else await archiveBotComputerForDeletion(bot.id, "late provisioning");
+  };
+
   void (async () => {
     try {
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
@@ -622,11 +739,24 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
       const wants = bot.computer; // 'cloud' | 'local' | 'off' | undefined(auto)
       if (instance.adapter.capabilities.cloudComputerMcp === true && wants !== "off" && wants !== "local" && box.boxConfigured(cfg)) {
         let b = await box.findBox(cfg, bot.id).catch(() => null);
+        if (!isCurrentTurn()) return;
         // the Computer driver runs ON the box — provision it on first use
         if (!b && instance.driverKind === "boxAgent") {
+          if (!isCurrentTurn()) return;
           broadcast({ kind: "computer", botId: bot.id, state: "provisioning" });
-          await box.provisionBox(cfg, bot.id, bot.name);
+          // provisionBox may create the substrate before its promise settles.
+          // If DELETE closes the generation during that await, the stale turn
+          // must archive the late Box because the canonical delete may already
+          // have completed its initial owner lookup.
+          cloudProvisionMayExist = true;
+          const provisioned = await box.provisionBox(cfg, bot.id, bot.name);
+          provisionedBoxId = provisioned.boxId;
+          if (!isCurrentTurn()) {
+            if (!isCurrentBot()) await cleanupLateProvision();
+            return;
+          }
           b = await box.findBox(cfg, bot.id).catch(() => null);
+          if (!isCurrentTurn()) return;
         }
         if (b) integrations.computer = { boxId: b.id, token: cfg.box!.token! };
       }
@@ -662,14 +792,23 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
           )
         : [];
 
+      // Last synchronous fence before invoking a provider. Deletion changes
+      // the generation before its first await, so provisioning that resumes
+      // late can never start a new turn for a removed bot.
+      if (!isCurrentTurn()) return;
+      if (!eventAdmission.markDispatching()) return;
+      activeProviderTurnByThread.set(bot.threadId, { instanceId: selection.instanceId, turnId: eventTurnId });
       const started = await instance.adapter.sendTurn({
         threadId: bot.threadId,
+        turnId: eventTurnId,
         text: providerText,
-        model: bot.modelSelection.model,
-        resumeCursor: bot.resumeCursors[bot.modelSelection.instanceId],
+        model: selection.model,
+        resumeCursor: bot.resumeCursors[selection.instanceId],
         transcript,
+        cwd: localWorkspace,
         system:
           persona +
+          " Put user-facing files you create locally in the current working directory and cite them as ./filename.ext so Cumea can open them safely. When you create a file through the cloud computer, put it under /workspace and cite its absolute /workspace/path. Never cite a private configuration or credential path as a deliverable." +
           (integrations.computer && instance.driverKind !== "boxAgent"
             ? " You have your own cloud computer — use the computer tools (screenshot, computer_exec, open_url) whenever browsing or acting on a desktop helps."
             : integrations.localComputer
@@ -688,12 +827,41 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
             : ""),
         integrations,
       });
-      if (runId) {
+      if (!isCurrentBot() || !providerFleet.isCurrent()) {
+        // DELETE may have raced with the provider's own asynchronous session
+        // setup after its first interrupt saw no live turn. Stop it again once
+        // sendTurn settles, but never persist anything for the stale bot.
+        await instance.adapter.interruptTurn(bot.threadId).catch(() => {});
+        const providerTurn = activeProviderTurnByThread.get(bot.threadId);
+        if (providerTurn?.turnId === eventTurnId) activeProviderTurnByThread.delete(bot.threadId);
+        return;
+      }
+      if (!eventAdmission.bindReturnedTurnId(started.turnId)) {
+        await instance.adapter.interruptTurn(bot.threadId, started.turnId).catch(() => {});
+        return;
+      }
+      providerTurnAccepted = true;
+      // A very fast provider can legitimately emit turn.completed before its
+      // sendTurn promise continuation runs. In that case the run is already
+      // settled; do not mistake it for deletion or re-bind/restart polling.
+      const turnStillActive = runId
+        ? activeRunByThread.get(bot.threadId) === runId
+        : store.bot(bot.id)?.busy === true;
+      if (runId && turnStillActive) {
         workspace.bindTurn(runId, started.turnId);
         broadcastWorkspace();
       }
-      if (integrations.computer) startScreenPoller(bot.id);
+      if (integrations.computer && turnStillActive) startScreenPoller(bot.id);
     } catch (e) {
+      const providerTurn = activeProviderTurnByThread.get(bot.threadId);
+      if (providerTurn?.turnId === eventTurnId) activeProviderTurnByThread.delete(bot.threadId);
+      if (!isCurrentBot()) {
+        await cleanupLateProvision();
+        return;
+      }
+      if (!isCurrentTurn()) {
+        return;
+      }
       const message = e instanceof Error ? e.message : String(e);
       const failure = store.appendMessage(bot.threadId, {
         role: "bot",
@@ -708,6 +876,11 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
       }
       store.patchBot(bot.id, { busy: false });
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
+    } finally {
+      // A normally running turn owns the fence until turn.completed. Failed or
+      // cancelled dispatches must close it here so late callbacks stay stale.
+      if (!providerTurnAccepted || !eventAdmission.isCurrent() || !isCurrentBot()) eventAdmission.invalidate();
+      turnOperation.release();
     }
   })();
 }
@@ -726,55 +899,270 @@ function configStatus() {
 /** Rebuild the provider fleet after a config change so new keys take
  * effect without a server restart (kills any in-flight turns). */
 async function reloadProviders() {
-  bus.detachAll();
-  await registry.disposeAll();
-  await registry.load(instanceConfigs(cfg));
-  bus.attach(registry.instances());
-  // disposeAll terminates old turns after the bus is detached, so their
-  // completion events cannot clear persisted UI state for us.
-  for (const bot of store.bots) {
-    if (!bot.busy) continue;
-    store.patchBot(bot.id, { busy: false });
-    const runId = activeRunByThread.get(bot.threadId);
-    if (runId) {
-      workspace.completeRun(runId, false, "Providers reloaded while the task was running.");
-      activeRunByThread.delete(bot.threadId);
+  const configs = instanceConfigs(cfg);
+  const reload = providerFleetGate.reload(async (fleet) => {
+    // A superseded queued reload must not detach the newer fleet.
+    if (!fleet.isLatest()) return;
+    bus.detachAll();
+    await registry.disposeAll();
+    if (!fleet.isLatest()) return;
+    await registry.load(configs);
+    if (!fleet.isLatest()) {
+      // A later reload was admitted while this fleet was being created.
+      await registry.disposeAll();
+      return;
     }
-    clearThreadEventState(bot.threadId);
-    broadcast({ kind: "bot", bot: store.bot(bot.id) });
-  }
-  broadcastWorkspace();
+    bus.attach(registry.instances());
+    // disposeAll terminates old turns after the bus is detached, so their
+    // completion events cannot clear persisted UI state for us.
+    for (const bot of store.bots) {
+      if (!bot.busy) continue;
+      store.patchBot(bot.id, { busy: false });
+      const runId = activeRunByThread.get(bot.threadId);
+      if (runId) {
+        workspace.completeRun(runId, false, "Providers reloaded while the task was running.");
+        activeRunByThread.delete(bot.threadId);
+      }
+      activeProviderTurnByThread.delete(bot.threadId);
+      clearThreadEventState(bot.threadId);
+      broadcast({ kind: "bot", bot: store.bot(bot.id) });
+    }
+    broadcastWorkspace();
+  });
+  // reload() invalidated the fleet generation synchronously above. Retire all
+  // accepted event ids in the same stack, before the queued reload can await.
+  for (const bot of store.bots) turnEventFence.invalidate(bot.threadId);
+  await reload;
 }
 
 async function runRoutine(routineId: string, manual = false) {
-  const routine = workspace.snapshot().routines.find((candidate) => candidate.id === routineId);
-  if (!routine) throw Object.assign(new Error("no such routine"), { status: 404 });
-  const bot = store.bot(routine.botId);
-  workspace.advanceRoutine(routine.id);
-  if (!bot) {
-    workspace.markRoutineFailure(routine.id, "The routine's bot no longer exists.");
-    broadcastWorkspace();
-    if (manual) throw Object.assign(new Error("the routine's bot no longer exists"), { status: 409 });
-    return;
-  }
-  if (bot.busy) {
-    workspace.markRoutineFailure(routine.id, "The bot was already working when this routine became due.");
-    broadcastWorkspace();
-    if (manual) throw Object.assign(new Error("the bot is already working"), { status: 409 });
-    return;
-  }
-  broadcastWorkspace();
   try {
-    await startTurn(bot.id, routine.prompt, {
-      source: "routine",
-      routineId: routine.id,
-      taskTitle: routine.name,
+    const owner = workspace.snapshot().routines.find((candidate) => candidate.id === routineId);
+    if (!owner) throw Object.assign(new Error("no such routine"), { status: 404 });
+    await botResourceGate.run(owner.botId, async () => {
+      const routine = workspace.snapshot().routines.find((candidate) => candidate.id === routineId);
+      const bot = store.bot(owner.botId);
+      if (!routine || routine !== owner || routine.botId !== owner.botId) {
+        throw Object.assign(new Error("no such routine"), { status: 404 });
+      }
+      if (!bot) {
+        workspace.markRoutineFailure(routine.id, "The routine's bot no longer exists.");
+        broadcastWorkspace();
+        if (manual) throw Object.assign(new Error("the routine's bot no longer exists"), { status: 409 });
+        return;
+      }
+      if (!isCanonicalBotOperation(bot)) {
+        throw Object.assign(new Error("the bot is being deleted"), { status: 409 });
+      }
+      workspace.advanceRoutine(routine.id);
+      if (bot.busy) {
+        workspace.markRoutineFailure(routine.id, "The bot was already working when this routine became due.");
+        broadcastWorkspace();
+        if (manual) throw Object.assign(new Error("the bot is already working"), { status: 409 });
+        return;
+      }
+      broadcastWorkspace();
+      try {
+        await startTurn(bot.id, routine.prompt, {
+          source: "routine",
+          routineId: routine.id,
+          taskTitle: routine.name,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        workspace.markRoutineFailure(routine.id, message);
+        broadcastWorkspace();
+        if (manual) throw error;
+      }
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    workspace.markRoutineFailure(routine.id, message);
-    broadcastWorkspace();
+    // A scheduled run racing a manual delete is simply obsolete: the delete
+    // transaction owns removal of that routine. Manual callers receive the
+    // bounded conflict so they never observe an acknowledged lost mutation.
+    if (!manual && (error as { status?: unknown })?.status === 409) return;
     if (manual) throw error;
+    throw error;
+  }
+}
+
+interface DeleteBotOptions {
+  operationId?: string;
+  /** An eligible automatic cleanup has no live turn to interrupt. Resource
+   * and turn admission gates still close synchronously before deletion waits,
+   * so new work cannot slip into the cross-store commit. */
+  automatic?: boolean;
+}
+
+/** Archive a bot-owned Box without turning provider downtime into a durable
+ * deletion blocker. Both manual DELETE and temporary expiry call the same
+ * canonical transaction below; the late-provision fence above reuses this
+ * observer for the one substrate race that can finish after metadata commit. */
+async function archiveBotComputerForDeletion(botId: string, context: "bot deletion" | "late provisioning") {
+  const result = await box.archiveBoxForBotDeletion(cfg, botId);
+  if (result.outcome === "warning") {
+    // The helper deliberately redacts provider responses and credentials.
+    console.warn(`cloud computer cleanup warning during ${context} for bot ${botId}: ${result.warning}`);
+  }
+  return result;
+}
+
+function automaticDeletionStillEligible(bot: BotRecord): boolean {
+  return store.bot(bot.id) === bot && isTemporaryBotCleanupEligible({
+    bot,
+    workspace: workspace.snapshot(),
+    messages: store.messagesFor(bot.threadId),
+    hasActiveTurn: activeRunByThread.has(bot.threadId),
+    isPendingRequest: (requestId) => askMessageByRequest.has(threadEventKey(bot.threadId, requestId)),
+  });
+}
+
+/** The one canonical bot deletion transaction, shared by explicit DELETE and
+ * temporary-bot expiry. Files are quarantined before either metadata store is
+ * committed. Irreversible purge is post-commit garbage collection: a purge
+ * failure may leave private quarantine bytes behind, but can never restore a
+ * bot whose transcript was already partly destroyed. */
+async function deleteBotTransactionally(botId: string, options: DeleteBotOptions = {}) {
+  const bot = store.bot(botId);
+  if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
+  if (deletingBotIds.has(bot.id)) throw Object.assign(new Error("the bot is already being deleted"), { status: 409 });
+  // The sweeper's candidate snapshot is advisory. A Keep permanently PATCH or
+  // newly durable work may commit before this transaction closes admission.
+  if (options.automatic && !automaticDeletionStillEligible(bot)) return { deleted: false as const };
+  // Close admission synchronously before the first await. Operations already
+  // inside the gate finish first, so their bytes/capabilities are included in
+  // this delete; anything arriving later receives a bounded conflict.
+  const resourceBarrier = botResourceGate.beginDeletion(bot.id);
+  deletingBotIds.add(bot.id);
+  turnEventFence.invalidate(bot.threadId);
+  try {
+    await resourceBarrier.idle;
+    if (options.automatic && !automaticDeletionStillEligible(bot)) return { deleted: false as const };
+    // Manual deletion is allowed to stop current work. Automatic cleanup gets
+    // here only after the sweeper proves there is no active turn/work state.
+    if (!options.automatic) {
+      const activeProviderTurn = activeProviderTurnByThread.get(bot.threadId);
+      const activeInstanceId = activeProviderTurn?.instanceId ?? bot.modelSelection.instanceId;
+      await registry.get(activeInstanceId)?.adapter
+        .interruptTurn(bot.threadId, activeProviderTurn?.turnId)
+        .catch(() => {});
+    }
+    stopScreenPoller(bot.id);
+    const runId = activeRunByThread.get(bot.threadId);
+    if (runId) {
+      workspace.completeRun(runId, false, "interrupted");
+      activeRunByThread.delete(bot.threadId);
+    }
+    // Invalidate before any provider or filesystem await. A failed deletion
+    // reopens the bot gate, never the callbacks from its pre-delete turn.
+    activeProviderTurnByThread.delete(bot.threadId);
+    clearThreadEventState(bot.threadId);
+
+    // Preserve the durable owner identity until the bounded stop attempt has
+    // resolved. Provider downtime only produces an observable warning; every
+    // created Box retains its provider-side TTL as the final billing backstop.
+    const computerCleanup = await archiveBotComputerForDeletion(bot.id, "bot deletion");
+
+    let stagedFiles: StagedFileDeletion | null = null;
+    let stagedBotWorkspace: StagedFileDeletion | null = null;
+    let eventLogTransaction: ReturnType<typeof bus.prepareThreadDeletion> | null = null;
+    let workspaceTransaction: ReturnType<typeof workspace.removeBotDataTransaction> | null = null;
+    let botTransaction: ReturnType<typeof store.deleteBotRecordTransaction> | null = null;
+    try {
+      eventLogTransaction = bus.prepareThreadDeletion(bot.threadId);
+      // Same-volume rename is the prepare phase: no bytes are destroyed until
+      // both metadata stores commit, and every path can still be restored.
+      stagedFiles = stageFilesForDeletion([
+        ...store.botDeletionFiles(bot.id),
+        { path: join(EVENTS_DIR, `${bot.threadId}.ndjson`), label: "event log" },
+        { path: join(NATIVE_DIR, `${bot.threadId}.ndjson`), label: "native log" },
+        ...workspace.botDeletionFiles(bot.id),
+      ]);
+      stagedBotWorkspace = stageBotWorkspaceForDeletion(bot.id);
+      workspaceTransaction = workspace.removeBotDataTransaction(bot.id);
+      botTransaction = store.deleteBotRecordTransaction(bot.id);
+      if (!botTransaction) throw Object.assign(new Error("bot disappeared during deletion"), { status: 500 });
+
+      botTransaction.finalize();
+      eventLogTransaction.finalize();
+    } catch (error) {
+      const rollbackErrors: unknown[] = [];
+      for (const rollback of [
+        botTransaction?.rollback,
+        workspaceTransaction?.rollback,
+        stagedBotWorkspace?.rollback,
+        stagedFiles?.rollback,
+        eventLogTransaction?.rollback,
+      ]) {
+        if (!rollback) continue;
+        try {
+          rollback();
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      // The bot remains the durable retry anchor when cleanup cannot finish.
+      try {
+        const patched = store.patchBot(bot.id, { busy: false });
+        if (patched) broadcast({ kind: "bot", bot: patched });
+      } catch {}
+      if (computerCleanup.outcome === "stop-requested") {
+        const resumed = await box.resumeBoxAfterDeletionRollback(cfg, bot.id);
+        if (resumed.outcome === "warning") {
+          console.warn(`cloud computer resume warning after deletion rollback for bot ${bot.id}: ${resumed.warning}`);
+        }
+      }
+      broadcastWorkspace();
+      if (rollbackErrors.length) {
+        throw Object.assign(new Error("bot deletion failed and could not be fully rolled back"), {
+          status: 500,
+          cause: new AggregateError([error, ...rollbackErrors]),
+        });
+      }
+      throw error;
+    }
+
+    // Metadata deletion and the event-log liveness gate are now committed. Purge
+    // each quarantine independently and never attempt an impossible rollback
+    // after an unlink/recursive removal has begun.
+    purgeCommittedFileDeletions(
+      [stagedFiles, stagedBotWorkspace],
+      (error) => console.error("could not purge committed bot deletion quarantine", error),
+    );
+
+    // Capabilities are in-memory snapshots, so revoke them before clients can
+    // observe bot.deleted. No preview remains usable after that event.
+    fileCapabilities.revokeBot(bot.id);
+    broadcast(
+      { kind: "bot.deleted", botId: bot.id, ...(options.operationId ? { operationId: options.operationId } : {}) },
+      { remoteDeletedBotWasVisible: !bot.hidden },
+    );
+    broadcastWorkspace();
+    return { deleted: true as const, removed: workspaceTransaction!.removed, computerCleanup };
+  } finally {
+    deletingBotIds.delete(bot.id);
+    resourceBarrier.release();
+  }
+}
+
+let sweepingTemporaryBots = false;
+async function dispatchTemporaryBotCleanup() {
+  if (sweepingTemporaryBots) return;
+  sweepingTemporaryBots = true;
+  try {
+    const result = await sweepTemporaryBots({
+      bots: () => store.bots,
+      workspace: () => workspace.snapshot(),
+      messagesFor: (threadId) => store.messagesFor(threadId),
+      hasActiveTurn: (threadId) => activeRunByThread.has(threadId),
+      isPendingRequest: (threadId, requestId) => askMessageByRequest.has(threadEventKey(threadId, requestId)),
+      deleteBot: (botId) => deleteBotTransactionally(botId, { automatic: true }).then((result) => result.deleted),
+    });
+    for (const failed of result.failed) {
+      const message = failed.error instanceof Error ? failed.error.message : String(failed.error);
+      console.error(`temporary bot cleanup failed for ${failed.botId}: ${message}`);
+    }
+  } finally {
+    sweepingTemporaryBots = false;
   }
 }
 
@@ -793,6 +1181,10 @@ const routineTimer = setInterval(() => void dispatchDueRoutines(), 30_000);
 routineTimer.unref();
 const initialRoutineTimer = setTimeout(() => void dispatchDueRoutines(), 1_000);
 initialRoutineTimer.unref();
+const temporaryBotTimer = setInterval(() => void dispatchTemporaryBotCleanup(), 30_000);
+temporaryBotTimer.unref();
+const initialTemporaryBotTimer = setTimeout(() => void dispatchTemporaryBotCleanup(), 1_000);
+initialTemporaryBotTimer.unref();
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -825,6 +1217,7 @@ function readBody(req: IncomingMessage): Promise<any> {
         fail(Object.assign(new Error("invalid JSON body"), { status: 400 }));
       }
     });
+    req.on("aborted", () => fail(Object.assign(new Error("request body was aborted"), { status: 400 })));
     req.on("error", (error) => fail(error));
   });
 }
@@ -856,60 +1249,63 @@ function readBytes(req: IncomingMessage, maxBytes = ATTACHMENT_MAX_FILE_BYTES): 
       done = true;
       resolve(Buffer.concat(chunks));
     });
+    req.on("aborted", () => fail(Object.assign(new Error("attachment upload was aborted"), { status: 400 })));
     req.on("error", fail);
   });
 }
 
 async function uploadAttachment(req: IncomingMessage, res: ServerResponse, botId: string) {
-  const bot = store.bot(botId);
-  if (!bot) return json(res, 404, { error: "no such bot" });
-  // Count is checked before consuming a body. Content-Length, when present,
-  // also lets us reject a storage-quota violation before buffering bytes.
-  workspace.assertAttachmentCapacity(bot.id, 0);
-  const declaredLength = Array.isArray(req.headers["content-length"])
-    ? req.headers["content-length"][0]
-    : req.headers["content-length"];
-  if (declaredLength !== undefined) {
-    const expectedBytes = Number(declaredLength);
-    if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0) {
-      throw Object.assign(new Error("invalid attachment content length"), { status: 400 });
+  return botResourceGate.run(botId, async () => {
+    const bot = store.bot(botId);
+    if (!bot) return json(res, 404, { error: "no such bot" });
+    // Count is checked before consuming a body. Content-Length, when present,
+    // also lets us reject a storage-quota violation before buffering bytes.
+    workspace.assertAttachmentCapacity(bot.id, 0);
+    const declaredLength = Array.isArray(req.headers["content-length"])
+      ? req.headers["content-length"][0]
+      : req.headers["content-length"];
+    if (declaredLength !== undefined) {
+      const expectedBytes = Number(declaredLength);
+      if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0) {
+        throw Object.assign(new Error("invalid attachment content length"), { status: 400 });
+      }
+      if (expectedBytes > ATTACHMENT_MAX_FILE_BYTES) {
+        throw Object.assign(new Error("attachment is larger than 25 MB"), { status: 413 });
+      }
+      workspace.assertAttachmentCapacity(bot.id, expectedBytes);
     }
-    if (expectedBytes > ATTACHMENT_MAX_FILE_BYTES) {
-      throw Object.assign(new Error("attachment is larger than 25 MB"), { status: 413 });
+    const rawHeader = Array.isArray(req.headers["x-file-name"])
+      ? req.headers["x-file-name"][0]
+      : req.headers["x-file-name"];
+    let requestedName = "attachment";
+    try {
+      requestedName = decodeURIComponent(String(rawHeader || "attachment"));
+    } catch {
+      throw Object.assign(new Error("invalid attachment name"), { status: 400 });
     }
-    workspace.assertAttachmentCapacity(bot.id, expectedBytes);
-  }
-  const rawHeader = Array.isArray(req.headers["x-file-name"])
-    ? req.headers["x-file-name"][0]
-    : req.headers["x-file-name"];
-  let requestedName = "attachment";
-  try {
-    requestedName = decodeURIComponent(String(rawHeader || "attachment"));
-  } catch {
-    throw Object.assign(new Error("invalid attachment name"), { status: 400 });
-  }
-  const safeName = basename(requestedName)
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .trim()
-    .slice(0, 180) || "attachment";
-  const bytes = await readBytes(req);
-  if (!bytes.length) return json(res, 400, { error: "attachment is empty" });
-  // The exact post-read check does not trust a missing or incorrect header.
-  workspace.assertAttachmentCapacity(bot.id, bytes.length);
-  const directory = join(ATTACHMENTS_DIR, bot.id);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const storedPath = join(directory, `${randomBytes(12).toString("hex")}-${safeName}`);
-  writeFileAtomic(storedPath, bytes);
-  const attachment = workspace.createAttachment({
-    botId: bot.id,
-    threadId: bot.threadId,
-    name: safeName,
-    mime: String(req.headers["content-type"] || "application/octet-stream").slice(0, 120),
-    size: bytes.length,
-    storedPath,
+    const safeName = basename(requestedName)
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .trim()
+      .slice(0, 180) || "attachment";
+    const bytes = await readBytes(req);
+    if (!bytes.length) return json(res, 400, { error: "attachment is empty" });
+    // The exact post-read check does not trust a missing or incorrect header.
+    workspace.assertAttachmentCapacity(bot.id, bytes.length);
+    const directory = join(ATTACHMENTS_DIR, bot.id);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const storedPath = join(directory, `${randomBytes(12).toString("hex")}-${safeName}`);
+    writeFileAtomic(storedPath, bytes);
+    const attachment = workspace.createAttachment({
+      botId: bot.id,
+      threadId: bot.threadId,
+      name: safeName,
+      mime: String(req.headers["content-type"] || "application/octet-stream").slice(0, 120),
+      size: bytes.length,
+      storedPath,
+    });
+    broadcastWorkspace();
+    return json(res, 201, { attachment: publicAttachment(attachment) });
   });
-  broadcastWorkspace();
-  return json(res, 201, { attachment: publicAttachment(attachment) });
 }
 
 const SECURITY_HEADERS = {
@@ -925,6 +1321,7 @@ const DOCUMENT_CSP = [
   "img-src 'self' data: https:",
   "connect-src 'self' http://127.0.0.1:8799 http://127.0.0.1:5199 http://localhost:8799 http://localhost:5199 ws://127.0.0.1:5199 ws://localhost:5199",
   "font-src 'self' data:",
+  "worker-src 'self'",
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'self'",
@@ -1217,35 +1614,74 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
     if (method === "POST" && path === "/api/routines") {
       const body = await readBody(req);
       const botId = String(body.botId ?? "");
-      if (!store.bot(botId)) return json(res, 404, { error: "no such bot" });
-      const routine = workspace.createRoutine({
-        botId,
-        name: String(body.name ?? ""),
-        prompt: String(body.prompt ?? ""),
-        schedule: parseRoutineSchedule(body.schedule),
-        enabled: body.enabled === undefined ? true : Boolean(body.enabled),
+      return await botResourceGate.run(botId, async () => {
+        const bot = store.bot(botId);
+        if (!bot || (surface === "remote" && bot.hidden)) return json(res, 404, { error: "no such bot" });
+        // Body parsing happened before admission because the owner id lives in
+        // the payload. Re-resolve both canonical identities immediately before
+        // the durable write; DELETE cannot start while this lease is held.
+        if (store.bot(botId) !== bot || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        const routine = workspace.createRoutine({
+          botId,
+          name: String(body.name ?? ""),
+          prompt: String(body.prompt ?? ""),
+          schedule: parseRoutineSchedule(body.schedule),
+          enabled: body.enabled === undefined ? true : Boolean(body.enabled),
+        });
+        broadcastWorkspace();
+        return json(res, 201, { routine });
       });
-      broadcastWorkspace();
-      return json(res, 201, { routine });
     }
     m = path.match(/^\/api\/routines\/([\w-]+)$/);
     if (m && method === "PATCH") {
-      const body = await readBody(req);
-      const routine = workspace.patchRoutine(m[1], {
-        ...(body.name !== undefined ? { name: String(body.name) } : {}),
-        ...(body.prompt !== undefined ? { prompt: String(body.prompt) } : {}),
-        ...(body.schedule !== undefined ? { schedule: parseRoutineSchedule(body.schedule) } : {}),
-        ...(body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {}),
+      const routineId = m[1];
+      const owner = workspace.snapshot().routines.find((candidate) => candidate.id === routineId);
+      if (!owner) return json(res, 404, { error: "no such routine" });
+      return await botResourceGate.run(owner.botId, async () => {
+        const bot = store.bot(owner.botId);
+        const current = workspace.snapshot().routines.find((candidate) => candidate.id === routineId);
+        if (!bot || !current || current !== owner || current.botId !== owner.botId) {
+          return json(res, 404, { error: "no such routine" });
+        }
+        if (surface === "remote" && bot.hidden) return json(res, 404, { error: "no such routine" });
+        const body = await readBody(req);
+        if (
+          store.bot(bot.id) !== bot ||
+          workspace.snapshot().routines.find((candidate) => candidate.id === routineId) !== owner ||
+          !isCanonicalBotOperation(bot)
+        ) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        const routine = workspace.patchRoutine(routineId, {
+          ...(body.name !== undefined ? { name: String(body.name) } : {}),
+          ...(body.prompt !== undefined ? { prompt: String(body.prompt) } : {}),
+          ...(body.schedule !== undefined ? { schedule: parseRoutineSchedule(body.schedule) } : {}),
+          ...(body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {}),
+        });
+        if (!routine) return json(res, 404, { error: "no such routine" });
+        broadcastWorkspace();
+        return json(res, 200, { routine });
       });
-      if (!routine) return json(res, 404, { error: "no such routine" });
-      broadcastWorkspace();
-      return json(res, 200, { routine });
     }
     m = path.match(/^\/api\/routines\/([\w-]+)$/);
     if (m && method === "DELETE") {
-      if (!workspace.deleteRoutine(m[1])) return json(res, 404, { error: "no such routine" });
-      broadcastWorkspace();
-      return json(res, 200, { ok: true });
+      const routineId = m[1];
+      const owner = workspace.snapshot().routines.find((candidate) => candidate.id === routineId);
+      if (!owner) return json(res, 404, { error: "no such routine" });
+      return await botResourceGate.run(owner.botId, async () => {
+        const bot = store.bot(owner.botId);
+        const current = workspace.snapshot().routines.find((candidate) => candidate.id === routineId);
+        if (!bot || !current || current !== owner || current.botId !== owner.botId) {
+          return json(res, 404, { error: "no such routine" });
+        }
+        if (surface === "remote" && bot.hidden) return json(res, 404, { error: "no such routine" });
+        if (!isCanonicalBotOperation(bot)) return json(res, 409, { error: "the bot is being deleted" });
+        if (!workspace.deleteRoutine(routineId)) return json(res, 404, { error: "no such routine" });
+        broadcastWorkspace();
+        return json(res, 200, { ok: true });
+      });
     }
     m = path.match(/^\/api\/routines\/([\w-]+)\/run$/);
     if (m && method === "POST") {
@@ -1254,21 +1690,33 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
     }
     m = path.match(/^\/api\/tasks\/([\w-]+)\/teach$/);
     if (m && method === "POST") {
-      const task = workspace.task(m[1]);
+      const taskId = m[1];
+      const task = workspace.task(taskId);
       if (!task) return json(res, 404, { error: "no such task" });
-      const body = await readBody(req);
-      const timezone = String(body.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
-      const routine = workspace.createRoutine({
-        botId: task.botId,
-        name: String(body.name || task.title),
-        prompt: task.prompt,
-        schedule: body.schedule
-          ? parseRoutineSchedule(body.schedule)
-          : { kind: "daily", time: "09:00", timezone },
-        enabled: body.enabled === undefined ? false : Boolean(body.enabled),
+      return await botResourceGate.run(task.botId, async () => {
+        const bot = store.bot(task.botId);
+        const current = workspace.task(taskId);
+        if (!bot || !current || current !== task || current.botId !== task.botId) {
+          return json(res, 404, { error: "no such task" });
+        }
+        if (surface === "remote" && bot.hidden) return json(res, 404, { error: "no such task" });
+        const body = await readBody(req);
+        if (store.bot(bot.id) !== bot || workspace.task(taskId) !== task || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        const timezone = String(body.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+        const routine = workspace.createRoutine({
+          botId: task.botId,
+          name: String(body.name || task.title),
+          prompt: task.prompt,
+          schedule: body.schedule
+            ? parseRoutineSchedule(body.schedule)
+            : { kind: "daily", time: "09:00", timezone },
+          enabled: body.enabled === undefined ? false : Boolean(body.enabled),
+        });
+        broadcastWorkspace();
+        return json(res, 201, { routine });
       });
-      broadcastWorkspace();
-      return json(res, 201, { routine });
     }
     m = path.match(/^\/api\/tasks\/([\w-]+)\/retry$/);
     if (m && method === "POST") {
@@ -1301,12 +1749,86 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
     }
     if (m && method === "DELETE") {
       const attachment = workspace.attachment(m[1]);
+      if (!attachment) return json(res, 404, { error: "no such attachment" });
       if (surface === "remote" && attachment && store.bot(attachment.botId)?.hidden) {
         return json(res, 404, { error: "no such attachment" });
       }
-      if (!workspace.deleteAttachment(m[1])) return json(res, 404, { error: "no such attachment" });
-      broadcastWorkspace();
-      return json(res, 200, { ok: true });
+      return await botResourceGate.run(attachment.botId, async () => {
+        const bot = store.bot(attachment.botId);
+        const current = workspace.attachment(attachment.id);
+        if (!bot || !current || current !== attachment || current.botId !== attachment.botId) {
+          return json(res, 404, { error: "no such attachment" });
+        }
+        if (!isCanonicalBotOperation(bot)) return json(res, 409, { error: "the bot is being deleted" });
+        if (!workspace.deleteAttachment(attachment.id)) return json(res, 404, { error: "no such attachment" });
+        broadcastWorkspace();
+        return json(res, 200, { ok: true });
+      });
+    }
+
+    // ── bounded, opaque file capabilities (desktop/web host only) ──
+    m = path.match(/^\/api\/bots\/([\w-]+)\/files\/resolve$/);
+    if (m && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "file previews are local-only" });
+      return await botResourceGate.run(m[1], async () => {
+        const bot = store.bot(m![1]);
+        if (!bot) return json(res, 404, { error: "no such bot" });
+        const body = await readBody(req);
+        const requested = body.path;
+        const file = typeof requested === "string" && requested.trim().startsWith("/workspace/")
+          ? await box.readWorkspaceFile(cfg, bot.id, requested)
+          : readLocalBotFile(bot.id, requested);
+        const capability = fileCapabilities.issue(bot.id, file);
+        res.setHeader("cache-control", "no-store");
+        return json(res, 201, { file: publicFileCapability(capability, file.source) });
+      });
+    }
+    m = path.match(/^\/api\/attachments\/([\w-]+)\/files\/resolve$/);
+    if (m && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "file previews are local-only" });
+      const attachment = workspace.attachment(m[1]);
+      if (!attachment) return json(res, 404, { error: "no such attachment" });
+      return await botResourceGate.run(attachment.botId, async () => {
+        const current = workspace.attachment(m![1]);
+        if (!current || current.botId !== attachment.botId || !store.bot(current.botId)) {
+          return json(res, 404, { error: "no such attachment" });
+        }
+        const file = readStoredAttachmentFile(current.storedPath, current.name);
+        const capability = fileCapabilities.issue(current.botId, file);
+        res.setHeader("cache-control", "no-store");
+        return json(res, 201, { file: publicFileCapability(capability, file.source) });
+      });
+    }
+    m = path.match(/^\/api\/files\/([A-Za-z0-9_-]{43})\/(preview|download)$/);
+    if (m && method === "GET") {
+      if (surface !== "local") return json(res, 403, { error: "file previews are local-only" });
+      const capability = fileCapabilities.get(m[1]);
+      if (!capability) return json(res, 404, { error: "file preview expired or does not exist" });
+      const encodedName = encodeURIComponent(capability.name);
+      if (m[2] === "download") {
+        res.writeHead(200, {
+          ...SECURITY_HEADERS,
+          "cache-control": "no-store",
+          "content-type": capability.mime,
+          "content-length": String(capability.bytes.length),
+          "content-disposition": `attachment; filename*=UTF-8''${encodedName}`,
+        });
+        return res.end(capability.bytes);
+      }
+      if (capability.kind === "pdf") {
+        res.writeHead(200, {
+          ...SECURITY_HEADERS,
+          "cache-control": "no-store",
+          "content-type": capability.mime,
+          "content-length": String(capability.bytes.length),
+          // The app fetches these bytes into the bundled PDF.js worker. Marking
+          // direct navigation as a download avoids entering a browser plugin.
+          "content-disposition": `attachment; filename*=UTF-8''${encodedName}`,
+        });
+        return res.end(capability.bytes);
+      }
+      res.setHeader("cache-control", "no-store");
+      return json(res, 200, { preview: await buildStructuredPreview(capability.kind, capability.bytes) });
     }
     // ── bots ──
     if (method === "GET" && path === "/api/bots") {
@@ -1322,9 +1844,16 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
     }
     if (method === "POST" && path === "/api/bots") {
       const body = await readBody(req);
-      if (surface === "remote" && Object.keys(body).some((key) => !["name", "title"].includes(key))) {
-        return json(res, 403, { error: "mobile bot creation only accepts name and title" });
+      if (surface === "remote" && Object.keys(body).some((key) => !["name", "title", "temporary", "ttlMinutes"].includes(key))) {
+        return json(res, 403, { error: "mobile bot creation only accepts name, title, and temporary lifetime" });
       }
+      if (body.temporary !== undefined && typeof body.temporary !== "boolean") {
+        return json(res, 400, { error: "temporary must be a boolean" });
+      }
+      if (body.ttlMinutes !== undefined && body.temporary !== true) {
+        return json(res, 400, { error: "ttlMinutes requires temporary: true" });
+      }
+      const lifecycle = body.temporary === true ? temporaryBotLifecycle(body.ttlMinutes) : undefined;
       const requestedName =
         body.name === undefined
           ? undefined
@@ -1334,7 +1863,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         body.title === undefined
           ? undefined
           : String(body.title).replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 120);
-      const bot = store.createBot();
+      const bot = store.createBot({ lifecycle });
       const patch: Record<string, unknown> = { modelSelection: await defaultSelection() };
       if (requestedName !== undefined) patch.name = requestedName;
       if (requestedTitle !== undefined) patch.title = requestedTitle;
@@ -1350,67 +1879,79 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
     }
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
     if (m && method === "PATCH") {
-      const body = await readBody(req);
-      if (surface === "remote") {
-        if (Object.keys(body).length !== 1 || typeof body.unread !== "boolean") {
-          return json(res, 403, { error: "mobile bot updates only accept unread" });
+      const botId = m[1];
+      return await botResourceGate.run(botId, async () => {
+        const owner = store.bot(botId);
+        if (!owner) return json(res, 404, { error: "no such bot" });
+        const body = await readBody(req);
+        // The active gate makes DELETE wait, but re-resolve canonical ownership
+        // after body parsing before mutating the record or lifecycle.
+        if (store.bot(botId) !== owner || !isCanonicalBotOperation(owner)) {
+          return json(res, 409, { error: "the bot is being deleted" });
         }
-        if (store.bot(m[1])?.hidden) return json(res, 404, { error: "no such bot" });
-        const bot = store.patchBot(m[1], { unread: body.unread });
-        if (!bot) return json(res, 404, { error: "no such bot" });
-        broadcast({ kind: "bot", bot });
-        return json(res, 200, { bot: publicMobileBot(bot, undefined, MOBILE_BOOTSTRAP_MESSAGE_LIMIT, visibleRemoteBotIds()) });
-      }
-      const remoteWasVisible = Boolean(store.bot(m[1]) && !store.bot(m[1])!.hidden);
-      const patch: Record<string, unknown> = {};
-      for (const key of [
-        "name",
-        "title",
-        "description",
-        "notifications",
-        "modelSelection",
-        "unread",
-        "computer",
-        "color",
-        "mascotExpression",
-        "pinned",
-        "hidden",
-        "appsEnabled",
-        "collaborationEnabled",
-      ] as const) {
-        if (body[key] !== undefined) patch[key] = body[key];
-      }
-      if (body.avatar !== undefined) {
-        const avatar = parseBotAvatar(body.avatar);
-        if (!avatar) return json(res, 400, { error: "invalid avatar" });
-        patch.avatar = avatar;
-      }
-      if (body.sectionId !== undefined) {
-        const sectionId = body.sectionId === null || body.sectionId === "" ? null : String(body.sectionId);
-        if (sectionId && !workspace.snapshot().sections.some((section) => section.id === sectionId)) {
-          return json(res, 400, { error: "no such section" });
+        if (surface === "remote") {
+          const keys = Object.keys(body);
+          const marksRead = keys.length === 1 && typeof body.unread === "boolean";
+          const makesPermanent = keys.length === 1 && body.temporary === false;
+          if (!marksRead && !makesPermanent) {
+            return json(res, 403, { error: "mobile bot updates only accept unread or conversion to permanent" });
+          }
+          if (owner.hidden) return json(res, 404, { error: "no such bot" });
+          const bot = makesPermanent
+            ? store.setBotLifecycle(botId, null)
+            : store.patchBot(botId, { unread: body.unread });
+          if (!bot) return json(res, 409, { error: "the bot is being deleted" });
+          broadcast({ kind: "bot", bot: makesPermanent ? { ...bot, lifecycle: null } : bot });
+          return json(res, 200, { bot: publicMobileBot(bot, undefined, MOBILE_BOOTSTRAP_MESSAGE_LIMIT, visibleRemoteBotIds()) });
         }
-        patch.sectionId = sectionId;
-      }
-      if (body.approvalPolicy !== undefined) {
-        if (!["ask", "allow", "deny"].includes(body.approvalPolicy)) {
-          return json(res, 400, { error: "unknown approval policy" });
+        const remoteWasVisible = !owner.hidden;
+        const patch: Record<string, unknown> = {};
+        if (body.temporary !== undefined && typeof body.temporary !== "boolean") {
+          return json(res, 400, { error: "temporary must be a boolean" });
         }
-        patch.approvalPolicy = body.approvalPolicy;
-      }
-      const bot = store.patchBot(m[1], patch);
-      if (!bot) return json(res, 404, { error: "no such bot" });
-      if (remoteWasVisible && bot.hidden) {
-        // Desktop sees the full local patch; companions only learn that a
-        // formerly-visible row disappeared, never the hidden record itself.
-        broadcast(
-          { kind: "bot", bot },
-          { remoteOverride: { kind: "bot.deleted", botId: bot.id }, remoteDeletedBotWasVisible: true },
-        );
-      } else {
-        broadcast({ kind: "bot", bot });
-      }
-      return json(res, 200, { bot });
+        if (body.ttlMinutes !== undefined && body.temporary !== true) {
+          return json(res, 400, { error: "ttlMinutes requires temporary: true" });
+        }
+        if (body.modelSelection !== undefined && owner.busy) {
+          return json(res, 409, { error: "interrupt the active turn before changing its provider" });
+        }
+        const lifecycleMutation = body.temporary !== undefined;
+        if (body.temporary === true) patch.lifecycle = temporaryBotLifecycle(body.ttlMinutes);
+        for (const key of [
+          "name", "title", "description", "notifications", "modelSelection", "unread", "computer", "color",
+          "mascotExpression", "pinned", "hidden", "appsEnabled", "collaborationEnabled",
+        ] as const) {
+          if (body[key] !== undefined) patch[key] = body[key];
+        }
+        if (body.avatar !== undefined) {
+          const avatar = parseBotAvatar(body.avatar);
+          if (!avatar) return json(res, 400, { error: "invalid avatar" });
+          patch.avatar = avatar;
+        }
+        if (body.sectionId !== undefined) {
+          const sectionId = body.sectionId === null || body.sectionId === "" ? null : String(body.sectionId);
+          if (sectionId && !workspace.snapshot().sections.some((section) => section.id === sectionId)) {
+            return json(res, 400, { error: "no such section" });
+          }
+          patch.sectionId = sectionId;
+        }
+        if (body.approvalPolicy !== undefined) {
+          if (!["ask", "allow", "deny"].includes(body.approvalPolicy)) {
+            return json(res, 400, { error: "unknown approval policy" });
+          }
+          patch.approvalPolicy = body.approvalPolicy;
+        }
+        const bot = store.patchBot(botId, patch, { clearLifecycle: lifecycleMutation && body.temporary === false });
+        if (!bot) return json(res, 409, { error: "the bot is being deleted" });
+        const botEvent = lifecycleMutation && body.temporary === false ? { ...bot, lifecycle: null } : bot;
+        if (remoteWasVisible && bot.hidden) {
+          broadcast(
+            { kind: "bot", bot: botEvent },
+            { remoteOverride: { kind: "bot.deleted", botId: bot.id }, remoteDeletedBotWasVisible: true },
+          );
+        } else broadcast({ kind: "bot", bot: botEvent });
+        return json(res, 200, { bot });
+      });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
     if (m && method === "DELETE") {
@@ -1418,74 +1959,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       if (!bot) return json(res, 404, { error: "no such bot" });
       const rawOperationId = String(req.headers["x-cumea-operation-id"] ?? "");
       const operationId = /^[\w-]{1,100}$/.test(rawOperationId) ? rawOperationId : undefined;
-      // a running turn dies with its bot
-      await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => {});
-      stopScreenPoller(bot.id);
-      const runId = activeRunByThread.get(bot.threadId);
-      if (runId) {
-        workspace.completeRun(runId, false, "interrupted");
-        activeRunByThread.delete(bot.threadId);
-      }
-      clearThreadEventState(bot.threadId);
-      let stagedFiles: StagedFileDeletion | null = null;
-      let workspaceTransaction: ReturnType<typeof workspace.removeBotDataTransaction> | null = null;
-      let botTransaction: ReturnType<typeof store.deleteBotRecordTransaction> | null = null;
-      try {
-        // Same-volume rename is the prepare phase: no bytes are destroyed
-        // until both metadata stores have committed, and every path can be
-        // restored if either commit fails.
-        stagedFiles = stageFilesForDeletion([
-          ...store.botDeletionFiles(bot.id),
-          { path: join(EVENTS_DIR, `${bot.threadId}.ndjson`), label: "event log" },
-          { path: join(NATIVE_DIR, `${bot.threadId}.ndjson`), label: "native log" },
-          ...workspace.botDeletionFiles(bot.id),
-        ]);
-        workspaceTransaction = workspace.removeBotDataTransaction(bot.id);
-        botTransaction = store.deleteBotRecordTransaction(bot.id);
-        if (!botTransaction) throw Object.assign(new Error("bot disappeared during deletion"), { status: 500 });
-
-        // A purge failure rolls metadata and all remaining quarantined bytes
-        // back below. Only after a complete purge may the transcript cache be
-        // forgotten and a deletion event be broadcast.
-        stagedFiles.purge();
-        botTransaction.finalize();
-      } catch (error) {
-        const rollbackErrors: unknown[] = [];
-        for (const rollback of [
-          botTransaction?.rollback,
-          workspaceTransaction?.rollback,
-          stagedFiles?.rollback,
-        ]) {
-          if (!rollback) continue;
-          try {
-            rollback();
-          } catch (rollbackError) {
-            rollbackErrors.push(rollbackError);
-          }
-        }
-        // The bot remains the durable retry anchor when cleanup cannot
-        // complete. Its in-flight work was already stopped, so reflect that
-        // honestly; persistence can itself be the failing boundary, hence the
-        // best-effort patch without masking the original delete error.
-        try {
-          const patched = store.patchBot(bot.id, { busy: false });
-          if (patched) broadcast({ kind: "bot", bot: patched });
-        } catch {}
-        broadcastWorkspace();
-        if (rollbackErrors.length) {
-          throw Object.assign(new Error("bot deletion failed and could not be fully rolled back"), {
-            status: 500,
-            cause: new AggregateError([error, ...rollbackErrors]),
-          });
-        }
-        throw error;
-      }
-      broadcast(
-        { kind: "bot.deleted", botId: bot.id, ...(operationId ? { operationId } : {}) },
-        { remoteDeletedBotWasVisible: !bot.hidden },
-      );
-      broadcastWorkspace();
-      return json(res, 200, { ok: true, removed: workspaceTransaction.removed });
+      const result = await deleteBotTransactionally(bot.id, { operationId });
+      return json(res, 200, { ok: true, removed: result.removed, computerCleanup: result.computerCleanup });
     }
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/attachments$/);
@@ -1499,20 +1974,27 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
     // onboarding/ask cards persist their answered/dismissed state
     m = path.match(/^\/api\/bots\/([\w-]+)\/cards\/([\w-]+)$/);
     if (m && method === "PATCH") {
-      const bot = store.bot(m[1]);
-      if (!bot) return json(res, 404, { error: "no such bot" });
-      const existing = store.messagesFor(bot.threadId).find((msg) => msg.id === m![2]);
-      if (!existing?.card) return json(res, 404, { error: "no such card" });
-      const body = await readBody(req);
-      const patched = store.patchMessage(bot.threadId, m[2], {
-        card: {
-          ...existing.card,
-          ...(body.answered !== undefined ? { answered: body.answered } : {}),
-          ...(body.dismissed !== undefined ? { dismissed: body.dismissed } : {}),
-        },
+      const botId = m[1];
+      const messageId = m[2];
+      return await botResourceGate.run(botId, async () => {
+        const bot = store.bot(botId);
+        if (!bot) return json(res, 404, { error: "no such bot" });
+        const existing = store.messagesFor(bot.threadId).find((msg) => msg.id === messageId);
+        if (!existing?.card) return json(res, 404, { error: "no such card" });
+        const body = await readBody(req);
+        if (store.bot(bot.id) !== bot || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        const patched = store.patchMessage(bot.threadId, messageId, {
+          card: {
+            ...existing.card,
+            ...(body.answered !== undefined ? { answered: body.answered } : {}),
+            ...(body.dismissed !== undefined ? { dismissed: body.dismissed } : {}),
+          },
+        });
+        broadcast({ kind: "message.patch", threadId: bot.threadId, message: patched });
+        return json(res, 200, { message: patched });
       });
-      broadcast({ kind: "message.patch", threadId: bot.threadId, message: patched });
-      return json(res, 200, { message: patched });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/messages$/);
     if (m) {
@@ -1579,6 +2061,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       const bot = store.bot(m[1]);
       if (!bot || (surface === "remote" && bot.hidden)) return json(res, 404, { error: "no such bot" });
       const body = await readBody(req);
+      if (!isCanonicalBotOperation(bot)) return json(res, 409, { error: "the bot is being deleted" });
       const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
       if (!requestId) return json(res, 400, { error: "requestId required" });
       const requestKey = threadEventKey(bot.threadId, requestId);
@@ -1609,26 +2092,43 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
           return json(res, 400, { error: "approval policy applies only to permission requests" });
         }
       }
-      await instance.adapter.respondToRequest(bot.threadId, requestId, {
-        behavior: body.behavior,
-        message: body.message,
-      });
-      // Persist a remembered policy only after the owning provider accepted
-      // this exact pending request. A stale or forged request must never be
-      // able to mutate future approval behavior.
-      if (body.rememberPolicy !== undefined) {
-        const patched = store.patchBot(bot.id, { approvalPolicy: body.rememberPolicy });
-        if (patched) broadcast({ kind: "bot", bot: patched });
+      const approvalOperation = botResourceGate.beginDetachedOperation(bot.id);
+      try {
+        if (!isCanonicalBotOperation(bot, approvalOperation)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        await instance.adapter.respondToRequest(bot.threadId, requestId, {
+          behavior: body.behavior,
+          message: body.message,
+        });
+        if (!isCanonicalBotOperation(bot, approvalOperation)) {
+          return json(res, 409, { error: "the bot was deleted while the response was pending" });
+        }
+        // Persist a remembered policy only after the owning provider accepted
+        // this exact pending request. A stale or forged request must never be
+        // able to mutate future approval behavior.
+        if (body.rememberPolicy !== undefined) {
+          const patched = store.patchBot(bot.id, { approvalPolicy: body.rememberPolicy });
+          if (patched) broadcast({ kind: "bot", bot: patched });
+        }
+        return json(res, 200, { ok: true });
+      } finally {
+        approvalOperation.release();
       }
-      return json(res, 200, { ok: true });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/interrupt$/);
     if (m && method === "POST") {
-      const bot = store.bot(m[1]);
-      if (!bot || (surface === "remote" && bot.hidden)) return json(res, 404, { error: "no such bot" });
-      const instance = registry.get(bot.modelSelection.instanceId);
-      await instance?.adapter.interruptTurn(bot.threadId);
-      return json(res, 200, { ok: true });
+      const botId = m[1];
+      return await botResourceGate.run(botId, async () => {
+        const bot = store.bot(botId);
+        if (!bot || (surface === "remote" && bot.hidden)) return json(res, 404, { error: "no such bot" });
+        const instance = registry.get(bot.modelSelection.instanceId);
+        await instance?.adapter.interruptTurn(bot.threadId);
+        if (store.bot(bot.id) !== bot || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        return json(res, 200, { ok: true });
+      });
     }
 
     // identity handshake for the packaged app's port fallback: the forked
@@ -1687,26 +2187,78 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
 
     // ── the bot's cloud computer (Box) ──
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer$/);
-    if (m && method === "GET") return json(res, 200, await box.boxStatus(cfg, m[1]));
+    if (m && method === "GET") {
+      const botId = m[1];
+      return await botResourceGate.run(botId, async () => {
+        const bot = store.bot(botId);
+        if (!bot) return json(res, 404, { error: "no such bot" });
+        const status = await box.boxStatus(cfg, bot.id);
+        if (store.bot(bot.id) !== bot || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        return json(res, 200, status);
+      });
+    }
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/(provision|join|sleep|exec|screenshot)$/);
     if (m && method === "POST") {
       const botId = m[1];
       const bot = store.bot(botId);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      switch (m[2]) {
-        case "provision":
-          return json(res, 200, await box.provisionBox(cfg, botId, bot.name));
-        case "join":
-          return json(res, 200, await box.joinBox(cfg, botId));
-        case "sleep":
-          return json(res, 200, await box.sleepBox(cfg, botId));
-        case "exec": {
-          const body = await readBody(req);
-          return json(res, 200, await box.execOnBox(cfg, botId, String(body.command ?? "")));
+      if (m[2] === "provision") {
+        const operation = botResourceGate.beginDetachedOperation(bot.id);
+        let provisionedBoxId: string | undefined;
+        let cleanupAttempted = false;
+        const cleanupStaleProvision = async () => {
+          if (cleanupAttempted || !shouldCleanupStaleProvision(store.bot(bot.id))) return;
+          cleanupAttempted = true;
+          if (provisionedBoxId) {
+            const cleanup = await box.archiveBoxByIdForDeletion(cfg, provisionedBoxId);
+            if (cleanup.outcome === "warning") {
+              console.warn(`cloud computer cleanup warning during late provisioning for bot ${bot.id}: ${cleanup.warning}`);
+            }
+          } else await archiveBotComputerForDeletion(bot.id, "late provisioning");
+        };
+        try {
+          if (!isCanonicalBotOperation(bot, operation)) throw Object.assign(new Error("the bot is being deleted"), { status: 409 });
+          const result = await box.provisionBox(cfg, bot.id, bot.name);
+          provisionedBoxId = result.boxId;
+          if (!isCanonicalBotOperation(bot, operation)) {
+            await cleanupStaleProvision();
+            throw Object.assign(new Error("the bot was deleted while its computer was provisioning"), { status: 409 });
+          }
+          return json(res, 200, result);
+        } catch (error) {
+          if (!isCanonicalBotOperation(bot, operation)) {
+            await cleanupStaleProvision();
+            throw Object.assign(new Error("the bot was deleted while its computer was provisioning"), { status: 409 });
+          }
+          throw error;
+        } finally {
+          operation.release();
         }
-        case "screenshot":
-          return json(res, 200, await box.screenshotBox(cfg, botId));
       }
+      return await botResourceGate.run(bot.id, async () => {
+        if (store.bot(bot.id) !== bot || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        const body = m![2] === "exec" ? await readBody(req) : null;
+        if (store.bot(bot.id) !== bot || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        const result = m![2] === "join"
+          ? await box.joinBox(cfg, bot.id)
+          : m![2] === "sleep"
+            ? await box.sleepBox(cfg, bot.id)
+            : m![2] === "exec"
+              ? await box.execOnBox(cfg, bot.id, String(body?.command ?? ""))
+              : await box.screenshotBox(cfg, bot.id);
+        // DELETE cannot enter while this active lease is held. Still resolve
+        // ownership after the provider await before returning URLs/output/png.
+        if (store.bot(bot.id) !== bot || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        return json(res, 200, result);
+      });
     }
 
     // packaged app: the server serves the built UI too (window → :8799 for
@@ -1759,8 +2311,16 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     clearInterval(routineTimer);
     clearTimeout(initialRoutineTimer);
-    remoteServer?.close();
-    server.close();
-    void registry.disposeAll().finally(() => process.exit(0));
+    clearInterval(temporaryBotTimer);
+    clearTimeout(initialTemporaryBotTimer);
+    try {
+      bus.flushLog();
+    } catch (error) {
+      console.error("event log shutdown flush failed", error);
+    } finally {
+      remoteServer?.close();
+      server.close();
+      void registry.disposeAll().finally(() => process.exit(0));
+    }
   });
 }

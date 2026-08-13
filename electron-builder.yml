@@ -50,8 +50,8 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
-    NSMicrophoneUsageDescription: Cumea uses the microphone for voice dictation into the composer.
-    NSSpeechRecognitionUsageDescription: Cumea transcribes your voice on-device to type messages for you.
+    NSMicrophoneUsageDescription: Cumea uses the microphone only while you dictate a message.
+    NSSpeechRecognitionUsageDescription: Cumea uses Apple Speech Recognition to turn dictation into text. Apple may process audio online when on-device recognition is unavailable.
     NSScreenCaptureUsageDescription: Cumea captures the screen only when a local bot needs to see and interact with the interface you ask it to control.
     NSAppleEventsUsageDescription: Cumea uses Automation only when a requested local-computer action needs to communicate with another app.
   # Notarization runs manually after the build (notarytool + staple),

@@ -1,77 +1,41 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, Check, FileText, ListChecks, Loader2, Monitor, Square, X } from "lucide-react";
-import { useStore, formatTime, type Bot, type Message } from "@/state/store";
+import { api, useStore, formatTime, type Bot, type Message } from "@/state/store";
 import { CumeaAvatar } from "./Avatar";
 import { expressionForBot } from "@/lib/mascot";
 import { avatarForBot, avatarStateForBot } from "@/lib/mote";
 import { OptionCard } from "./OptionCard";
 import { Composer } from "./Composer";
 import { cn } from "@/lib/cn";
+import { SafeMarkdown } from "./SafeMarkdown";
+import { FileViewer, type FileCapabilityView } from "./FileViewer";
 
-// Minimal markdown for bot bubbles: **bold**, `code`, headings, lists.
-// Rendered as React nodes — model output never reaches the DOM as HTML.
-function inlineMd(text: string, keyBase: string): React.ReactNode[] {
-  const parts: React.ReactNode[] = [];
-  const re = /(\*\*[^*]+\*\*|`[^`]+`)/g;
-  let last = 0;
-  let i = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
-    const tok = m[0];
-    if (tok.startsWith("**")) {
-      parts.push(<strong key={`${keyBase}-${i++}`}>{tok.slice(2, -2)}</strong>);
-    } else {
-      parts.push(
-        <code key={`${keyBase}-${i++}`} className="rounded bg-inset px-1 py-px text-[13px]">
-          {tok.slice(1, -1)}
-        </code>,
-      );
-    }
-    last = m.index + tok.length;
+function checkedFileCapability(value: unknown): FileCapabilityView {
+  const file = value && typeof value === "object" ? value as Record<string, unknown> : null;
+  if (
+    !file ||
+    typeof file.token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(file.token) ||
+    typeof file.name !== "string" || !file.name || file.name.length > 180 || /[\u0000-\u001f\u007f]/.test(file.name) ||
+    typeof file.mime !== "string" || file.mime.length > 120 ||
+    !["markdown", "pdf", "docx"].includes(String(file.kind)) ||
+    !["local", "cloud"].includes(String(file.source)) ||
+    typeof file.size !== "number" || !Number.isSafeInteger(file.size) || file.size <= 0 || file.size > 25 * 1024 * 1024 ||
+    typeof file.expiresAt !== "number" || !Number.isFinite(file.expiresAt)
+  ) {
+    throw new Error("The host returned an invalid file capability");
   }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts;
+  return {
+    token: file.token,
+    name: file.name,
+    mime: file.mime,
+    kind: file.kind as FileCapabilityView["kind"],
+    size: file.size,
+    source: file.source as FileCapabilityView["source"],
+    expiresAt: file.expiresAt,
+  };
 }
 
-function Markdownish({ text }: { text: string }) {
-  return (
-    <>
-      {text.split("\n").map((line, i) => {
-        const heading = line.match(/^#{1,4}\s+(.*)$/);
-        if (heading) {
-          return (
-            <div key={i} className="mt-1.5 font-semibold">
-              {inlineMd(heading[1], `h${i}`)}
-            </div>
-          );
-        }
-        const bullet = line.match(/^\s*[-•*]\s+(.*)$/);
-        if (bullet) {
-          return (
-            <div key={i} className="flex gap-2 pl-1">
-              <span className="text-ink-secondary">•</span>
-              <span className="min-w-0">{inlineMd(bullet[1], `b${i}`)}</span>
-            </div>
-          );
-        }
-        const numbered = line.match(/^\s*(\d+)\.\s+(.*)$/);
-        if (numbered) {
-          return (
-            <div key={i} className="flex gap-2 pl-1">
-              <span className="text-ink-secondary">{numbered[1]}.</span>
-              <span className="min-w-0">{inlineMd(numbered[2], `n${i}`)}</span>
-            </div>
-          );
-        }
-        if (!line.trim()) return <div key={i} className="h-2.5" />;
-        return <div key={i}>{inlineMd(line, `p${i}`)}</div>;
-      })}
-    </>
-  );
-}
-
-function Bubble({ message }: { message: Message }) {
+function Bubble({ message, onOpenPath, onOpenAttachment }: { message: Message; onOpenPath: (path: string) => void; onOpenAttachment: (id: string) => void }) {
   const user = message.role === "user";
   return (
     <div className={cn("flex w-full", user ? "justify-end" : "justify-start")}>
@@ -81,18 +45,19 @@ function Bubble({ message }: { message: Message }) {
           user ? "whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
         )}
       >
-        {user ? message.text : <Markdownish text={message.text ?? ""} />}
+        {user ? <div className="whitespace-pre-wrap">{message.text}</div> : <SafeMarkdown text={message.text ?? ""} onOpenFile={onOpenPath} />}
         {message.attachments?.length ? (
           <div className="mt-2 flex flex-wrap gap-2 border-t border-hairline/30 pt-2">
             {message.attachments.map((attachment) => (
-              <a
+              <button
+                type="button"
                 key={attachment.id}
-                href={`/api/attachments/${attachment.id}`}
+                onClick={() => onOpenAttachment(attachment.id)}
                 className="flex max-w-[260px] items-center gap-2 rounded-lg bg-inset px-2.5 py-1.5 text-[12px] text-ink hover:bg-raised"
               >
                 <FileText size={13} className="shrink-0 text-ink-secondary" />
                 <span className="truncate">{attachment.name}</span>
-              </a>
+              </button>
             ))}
           </div>
         ) : null}
@@ -160,11 +125,11 @@ function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
   );
 }
 
-function StreamingBubble({ text }: { text: string }) {
+function StreamingBubble({ text, onOpenPath }: { text: string; onOpenPath: (path: string) => void }) {
   return (
     <div className="flex w-full justify-start">
       <div className="max-w-[70%] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
-        <Markdownish text={text} />
+        <SafeMarkdown text={text} onOpenFile={onOpenPath} />
         <span className="ml-0.5 inline-block h-[14px] w-[2px] animate-pulse bg-ink-secondary align-middle" />
       </div>
     </div>
@@ -174,6 +139,8 @@ function StreamingBubble({ text }: { text: string }) {
 export function ChatView({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [fileViewer, setFileViewer] = useState<FileCapabilityView | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
 
   const streaming = state.streaming[bot.threadId];
   const provisioning = state.provisioning[bot.id];
@@ -183,7 +150,27 @@ export function ChatView({ bot }: { bot: Bot }) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [bot.id, bot.messages.length, streaming, bot.busy]);
 
+  useEffect(() => {
+    setFileViewer(null);
+    setFileError(null);
+  }, [bot.id]);
+
   const first = bot.messages[0];
+
+  const resolveFile = useCallback(async (endpoint: string, path?: string) => {
+    setFileError(null);
+    try {
+      const body = await api(endpoint, {
+        method: "POST",
+        ...(path !== undefined ? { body: JSON.stringify({ path }) } : {}),
+      });
+      setFileViewer(checkedFileCapability(body.file));
+    } catch (reason) {
+      setFileError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, []);
+  const openPath = useCallback((path: string) => void resolveFile(`/api/bots/${bot.id}/files/resolve`, path), [bot.id, resolveFile]);
+  const openAttachment = useCallback((id: string) => void resolveFile(`/api/attachments/${id}/files/resolve`), [resolveFile]);
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
@@ -250,6 +237,14 @@ export function ChatView({ bot }: { bot: Bot }) {
           </div>
         </div>
       )}
+      {fileError && (
+        <div className="mx-auto w-full max-w-[900px] px-5">
+          <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+            <span>{fileError}</span>
+            <button type="button" onClick={() => setFileError(null)} aria-label="Dismiss file error"><X size={14} /></button>
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-5">
@@ -270,7 +265,7 @@ export function ChatView({ bot }: { bot: Bot }) {
               case "handoff":
                 return <HandoffCard key={m.id} message={m} />;
               default:
-                return <Bubble key={m.id} message={m} />;
+                return <Bubble key={m.id} message={m} onOpenPath={openPath} onOpenAttachment={openAttachment} />;
             }
           })}
           {provisioning && (
@@ -282,7 +277,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             </div>
           )}
           {streaming ? (
-            <StreamingBubble text={streaming} />
+            <StreamingBubble text={streaming} onOpenPath={openPath} />
           ) : (
             bot.busy && (
               <div className="flex justify-start">
@@ -298,6 +293,7 @@ export function ChatView({ bot }: { bot: Bot }) {
       </div>
 
       <Composer bot={bot} />
+      {fileViewer && <FileViewer file={fileViewer} onClose={() => setFileViewer(null)} />}
     </main>
   );
 }

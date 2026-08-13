@@ -30,7 +30,10 @@ visible team:
 - explicit per-action approval cards, with remembered Ask / Always / Never policies per bot;
 - optional local or cloud computer use;
 - optional connected-app tools through Composio;
-- sections, real sidebar search, file attachments, reusable routines, and a “Needs you” inbox;
+- sections, real sidebar search, file attachments, clickable agent output paths with safe Markdown,
+  PDF, and DOCX previews, reusable routines, and a “Needs you” inbox;
+- permanent agents plus 24-hour Quick bots that expire only after work, routines, and live approval
+  requests are safely settled, with an explicit “Keep permanently” action;
 - persistent Mote-based bot avatars with shape, palette, upload, semantic activity states, and
   reduced-motion behavior;
 - an agent-first Expo companion for pairing, search, chat, stop, approvals, and routine status;
@@ -44,7 +47,7 @@ of agents.
 | Surface | Current responsibility |
 |---|---|
 | Desktop or user-owned VM | Provider authentication, agent configuration, computer/app access, attachments, task/run history, routine creation and scheduling, pairing, and device revocation |
-| Mobile companion | Onboarding and secure pairing, agent-list home, search, per-agent chat, text/file send and stop, bot creation, “Needs you” responses, routine status, Mote avatar state, and optional read-only computer preview |
+| Mobile companion | Onboarding and secure pairing, agent-list home, search, per-agent chat, text/file send and stop, permanent/Quick bot creation, “Needs you” responses, routine status, Mote avatar state, and optional read-only computer preview |
 
 Mobile does not run providers on the phone and Cumea does not supply a managed VM. For work to
 continue after a laptop is closed, the user must keep the same Cumea harness running on an
@@ -52,18 +55,26 @@ authenticated machine they control. The mobile client consumes a narrowed authen
 reconciles a fresh bootstrap snapshot after each connection, pauses in the background, and reconnects
 unexpected closures with bounded backoff.
 
-Push/background notifications, paired-host routine editing,
-voice dictation, and signed physical-device acceptance are not complete. Demo mode is explicitly
-local sample data and is not evidence that a provider task ran.
+Push/background notifications, paired-host routine editing, and signed physical-device acceptance
+are not complete. Mobile dictation is implemented through the native iOS/Android speech service,
+but its microphone and permission flow has not yet been accepted on physical devices. Demo mode is
+explicitly local sample data and is not evidence that a provider task ran.
 
 ## Privacy and security defaults
 
 - Cumea ships with **no analytics or telemetry SDK**.
+- Desktop dictation uses Apple's Speech framework. Cumea requires on-device recognition when the
+  Mac reports it as available; otherwise Apple Speech Recognition may process microphone audio
+  over the network. Cumea does not persist a dictation recording.
 - App data is stored under `~/.cumea/`; there is no migration from or shared state with OpenMausBot.
 - Attachments are owner-local files under `~/.cumea/attachments/`; no Cumea-operated upload service
   exists. When a bot uses a third-party model or app, that provider may still receive the file path
   or file contents as part of the requested work. Uploads are bounded to 25 MiB each and to a
   persistent quota of 100 files / 250 MiB per bot.
+- Local agent deliverables live in an explicit per-bot workspace. A path printed in chat is never
+  opened directly: the host checks workspace containment, file type and size, then returns a
+  short-lived opaque capability. Cloud-computer deliverables use the same model under `/workspace`.
+  See [the file-preview threat model](docs/file-preview-security.md).
 - Files already referenced by the task audit trail are retained and cannot yet be reclaimed from
   the UI. Long-lived attachment-heavy agents may therefore reach that quota; the current recovery
   path is deleting the agent after reviewing the impact; that operation removes the agent's files
@@ -117,8 +128,10 @@ Requirements:
 
 The Node harness and UI are portable. `package:linux` and `package:win` produce unsigned preview
 artifacts, but they have not been exercised on physical Linux/Windows machines in this tranche.
-Local computer control and on-device dictation remain explicitly macOS-only; cloud computers,
-chat, tasks, routines, sections, attachments, and supported provider CLIs degrade independently.
+Desktop local-computer control and desktop dictation remain explicitly macOS-only. The Expo mobile
+companion targets native iOS and Android dictation in a development or distribution build; Expo Go
+does not contain the speech module. Cloud computers, chat, tasks, routines, sections, attachments,
+and supported provider CLIs degrade independently.
 
 ```sh
 git clone https://github.com/metaforismo/Cumea.git
@@ -214,9 +227,12 @@ Preview.
 | `server/pairing.ts` | expiring one-time pairing sessions, hashed device tokens, and revocation |
 | `server/mobile.ts` | allowlisted mobile bot/message projections and sanitized remote SSE events |
 | `server/workspace.ts` | durable sections, attachments, tasks, runs, artifacts, and schedules |
+| `server/file-capabilities.ts` | bounded per-bot file resolution and opaque preview capabilities |
+| `server/document-preview.ts` | fail-closed Markdown/PDF identification and semantic DOCX parsing |
+| `server/temporary-bots.ts` | bounded Quick-bot lifecycle and safe expiry eligibility |
 | `server/contracts.ts` | provider driver and canonical event contracts |
 | `server/drivers/` | Claude, Codex, Grok, Gemini, computer, and peer-agent adapters |
-| `server/harness/` | provider registry and event bus |
+| `server/harness/` | provider registry, event bus, and bounded batched event-log persistence |
 | `electron/` | desktop shell, native permissions, dictation, and local computer use |
 | `apps/mobile/` | Expo Router companion, agent-list home, pairing, chat, approvals, and routines |
 
@@ -226,7 +242,7 @@ event stream, and the UI folds that stream into visible conversation state.
 ## Direction
 
 The immediate priorities are push/background notification delivery, signed physical-device
-acceptance, voice input on mobile, demonstrated desktop-workflow
+acceptance (including the native dictation permission flow), demonstrated desktop-workflow
 recording, wider provider-tool parity, and hands-on Linux/Windows validation. The Grok-like
 three-pane desktop model and agent-list-first mobile model remain the product direction; this work
 extends their capabilities rather than replacing either interface.

@@ -527,7 +527,7 @@ body {
   .cumea-eyes { transform: none; }
 }
 
-:where(button, a, input, textarea, select):focus-visible {
+:where(button, a, summary, input, textarea, select):focus-visible {
   outline: 2px solid color-mix(in srgb, var(--color-accent, #6ea8ff) 75%, white);
   outline-offset: 2px;
 }
