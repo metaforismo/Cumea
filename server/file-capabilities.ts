@@ -155,7 +155,14 @@ function cleanRequestedPath(value: unknown): string {
  * bounded read so a path swap fails closed instead of returning another file.
  */
 export function readLocalBotFile(botId: string, requestedValue: unknown): ResolvedBotFile {
-  const root = realpathSync(botWorkspaceDirectory(botId));
+  const workspace = botWorkspacePath(botId);
+  let root: string;
+  try {
+    root = realpathSync(workspace);
+  } catch (error) {
+    if (errno(error) === "ENOENT") throw httpError(404, "file not found in this bot's workspace");
+    throw httpError(410, "this bot's workspace is unavailable");
+  }
   const requested = cleanRequestedPath(requestedValue);
   const candidate = resolve(root, requested);
   if (!isContained(root, candidate)) throw httpError(403, "file is outside this bot's workspace");

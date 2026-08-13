@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -69,6 +69,7 @@ describe("file capability boundary", () => {
     writeFileSync(join(workspace, "nested", "report.md"), "report");
     const transaction = capabilities.stageBotWorkspaceForDeletion("bot-delete");
     expect(() => capabilities.readLocalBotFile("bot-delete", "nested/report.md")).toThrow(/not found/i);
+    expect(existsSync(workspace)).toBe(false);
     transaction.rollback();
     expect(capabilities.readLocalBotFile("bot-delete", "nested/report.md").bytes.toString()).toBe("report");
 
