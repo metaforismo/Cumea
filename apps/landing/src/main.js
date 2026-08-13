@@ -149,10 +149,10 @@ function getMoteEyeColor(hex) {
 }
 
 const avatars = {
-  inbox: { kind: "mote", shapeId: "drop", color: "#7651d6", motion: "playful" },
+  inbox: { kind: "mote", shapeId: "drop", color: "#2f8de3", motion: "playful" },
   sales: { kind: "mote", shapeId: "peak", color: "#f56a16", motion: "playful" },
   chief: { kind: "mote", shapeId: "drop", color: "#16a79d", motion: "calm" },
-  milind: { kind: "mote", shapeId: "soft", color: "#d72879", motion: "calm" },
+  research: { kind: "mote", shapeId: "soft", color: "#d72879", motion: "calm" },
 };
 
 let moteSerial = 0;
@@ -191,7 +191,7 @@ function fillMoteSlot(slot, avatar, size) {
   slot.replaceChildren(renderMote(avatar, size, slot.classList.contains("is-working")));
 }
 
-const ORDER = ["inbox", "sales", "chief"];
+const ORDER = ["inbox", "sales", "chief", "research"];
 const DURATION = 12800;
 const DWELL = 3600;
 const INPUT_LIMIT = 280;
@@ -238,7 +238,7 @@ const CONFIG_CARD = {
 
 const SCENARIOS = {
   inbox: {
-    name: "Atlas",
+    name: "Inbox Manager",
     role: "Mail · local host",
     reply: "Noted. I’ll keep this in the preview thread — nothing was sent from this page.",
     complete: [
@@ -260,7 +260,7 @@ const SCENARIOS = {
     ],
   },
   sales: {
-    name: "Pixel",
+    name: "Sales Outbound",
     role: "Outreach · local host",
     reply: "Got it. In Cumea that would stay a draft until you approve.",
     complete: [
@@ -282,7 +282,7 @@ const SCENARIOS = {
     ],
   },
   chief: {
-    name: "Scout",
+    name: "Chief of Staff",
     role: "Calendar · local host",
     reply: "Understood. I’ll wait for you — this page did not change your calendar.",
     complete: [
@@ -301,6 +301,28 @@ const SCENARIOS = {
       { at: 4300, type: "stream", text: "Venue is held. The contract is ready for your signature line." },
       { at: 7800, type: "activity", title: "files.hold" },
       { at: 9200, type: "options", card: APPROVAL_CARDS.chief, preview: "waiting on you", state: "Needs you" },
+    ],
+  },
+  research: {
+    name: "Research Analyst",
+    role: "Research · local host",
+    reply: "I’ll add that to the brief in this preview. No source or file was changed.",
+    complete: [
+      { kind: "context", text: "Yesterday" },
+      { kind: "user", text: "compare the launch notes and show me what changed." },
+      { kind: "activity", title: "files.read" },
+      { kind: "bot", text: "I found four material changes and linked each one back to its source." },
+      { kind: "activity", title: "brief.ready" },
+      { kind: "bot", text: "The brief is ready for your review. Nothing was published." },
+    ],
+    stages: [
+      { at: 0, type: "context", text: "Yesterday", preview: "brief ready for review", state: "Done" },
+      { at: 900, type: "user", text: "compare the launch notes and show me what changed.", state: "Working" },
+      { at: 1800, type: "working" },
+      { at: 3000, type: "activity", title: "files.read" },
+      { at: 4300, type: "stream", text: "I found four material changes and linked each one back to its source." },
+      { at: 7800, type: "activity", title: "brief.ready" },
+      { at: 9200, type: "bot", text: "The brief is ready for your review. Nothing was published.", preview: "brief ready for review", state: "Done" },
     ],
   },
 };
@@ -360,6 +382,7 @@ const localState = {
   inbox: { mode: "cloud", asleep: false, approval: null, config: null, configShown: false, routines: [] },
   sales: { mode: "local", asleep: false, approval: null, config: null, configShown: false, routines: [] },
   chief: { mode: "cloud", asleep: false, approval: null, config: null, configShown: false, routines: [] },
+  research: { mode: "local", asleep: false, approval: null, config: null, configShown: false, routines: [] },
 };
 
 let currentId = "inbox";
@@ -1330,3 +1353,161 @@ agentSearch?.addEventListener("input", () => {
     row.hidden = Boolean(query) && !name.includes(query);
   });
 });
+
+const MOBILE_ORDER = ["chief", "sales", "inbox", "research"];
+const mobileDemo = document.querySelector("[data-mobile-demo]");
+const mobileHome = document.querySelector("[data-mobile-home]");
+const mobileChat = document.querySelector("[data-mobile-chat]");
+const mobileList = document.querySelector("[data-mobile-agent-list]");
+const mobileMessages = document.querySelector("[data-mobile-messages]");
+const mobileChatMote = document.querySelector("[data-mobile-chat-mote]");
+const mobileChatName = document.querySelector("[data-mobile-chat-name]");
+const mobileChatRole = document.querySelector("[data-mobile-chat-role]");
+const mobileInput = document.querySelector("[data-mobile-input]");
+let mobileId = "inbox";
+
+function mobilePreview(id) {
+  return {
+    chief: ["Waiting on your venue approval", "Now", "Working"],
+    sales: ["18 first-touch drafts held", "3:10 AM", "Needs you"],
+    inbox: ["41 unread archived · Dana held", "12:11 AM", "Needs you"],
+    research: ["Launch brief ready for review", "Yesterday", "Done"],
+  }[id];
+}
+
+function renderMobileList() {
+  if (!mobileList) return;
+  mobileList.replaceChildren();
+  MOBILE_ORDER.forEach((id) => {
+    const [preview, time, state] = mobilePreview(id);
+    const button = el("button", "mobile-agent-row");
+    button.type = "button";
+    button.dataset.mobileAgent = id;
+    const mote = el("span", "mobile-row-mote");
+    mote.append(renderMote(avatars[id], 48, state === "Working"));
+    const copy = el("span", "mobile-row-copy");
+    const title = el("span", "mobile-row-title");
+    title.append(el("strong", "", SCENARIOS[id].name));
+    if (state !== "Done") title.append(el("small", state === "Working" ? "is-working" : "is-needs", state));
+    copy.append(title, el("span", "mobile-row-preview", preview));
+    button.append(mote, copy, el("time", "", time));
+    button.addEventListener("click", () => openMobileChat(id));
+    mobileList.append(button);
+  });
+}
+
+function renderMobileMessages(id) {
+  if (!mobileMessages) return;
+  mobileMessages.replaceChildren();
+  SCENARIOS[id].complete.forEach((item) => {
+    if (item.kind === "context") mobileMessages.append(el("p", "mobile-context", item.text));
+    if (item.kind === "user") mobileMessages.append(el("p", "mobile-bubble mobile-user", item.text));
+    if (item.kind === "bot") mobileMessages.append(el("p", "mobile-bubble mobile-bot", item.text));
+    if (item.kind === "activity") mobileMessages.append(el("p", "mobile-activity", `✓  ${item.title}`));
+    if (item.kind === "options") {
+      const card = el("div", "mobile-needs-card");
+      card.append(el("strong", "", item.card.title), el("p", "", item.card.subtitle));
+      item.card.options.slice(0, 2).forEach((option) => {
+        const button = el("button", "", option);
+        button.type = "button";
+        button.addEventListener("click", () => {
+          card.classList.add("is-resolved");
+          card.querySelectorAll("button").forEach((itemButton) => { itemButton.disabled = true; });
+        });
+        card.append(button);
+      });
+      mobileMessages.append(card);
+    }
+  });
+  mobileMessages.scrollTop = mobileMessages.scrollHeight;
+}
+
+function openMobileChat(id) {
+  if (!SCENARIOS[id] || !mobileHome || !mobileChat) return;
+  mobileId = id;
+  mobileChatName.textContent = SCENARIOS[id].name;
+  mobileChatRole.textContent = SCENARIOS[id].role.replace("local host", "host online");
+  mobileInput.placeholder = `Message ${SCENARIOS[id].name}`;
+  mobileChatMote.replaceChildren(renderMote(avatars[id], 34));
+  renderMobileMessages(id);
+  mobileHome.hidden = true;
+  mobileChat.hidden = false;
+  mobileDemo?.classList.add("is-chat-open");
+  document.querySelector("[data-mobile-back]")?.focus({ preventScroll: true });
+}
+
+document.querySelectorAll("[data-mobile-agent]").forEach((button) => {
+  button.addEventListener("click", () => openMobileChat(button.dataset.mobileAgent));
+});
+
+document.querySelector("[data-mobile-back]")?.addEventListener("click", () => {
+  mobileChat.hidden = true;
+  mobileHome.hidden = false;
+  mobileDemo?.classList.remove("is-chat-open");
+});
+
+document.querySelector("[data-mobile-composer]")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const message = mobileInput?.value.trim();
+  if (!message || !mobileMessages) return;
+  mobileMessages.append(el("p", "mobile-bubble mobile-user", message));
+  mobileInput.value = "";
+  window.setTimeout(() => {
+    if (!mobileMessages) return;
+    mobileMessages.append(el("p", "mobile-bubble mobile-bot", SCENARIOS[mobileId].reply));
+    mobileMessages.scrollTop = mobileMessages.scrollHeight;
+  }, prefersReducedMotion() ? 0 : 450);
+  mobileMessages.scrollTop = mobileMessages.scrollHeight;
+});
+
+renderMobileList();
+
+const SURFACE_NOTES = {
+  desktop: "Your models and credentials stay on the host you control.",
+  mobile: "Mobile is a paired control surface, not a second model runtime.",
+};
+
+document.querySelectorAll("[data-surface]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const surface = button.dataset.surface;
+    document.querySelectorAll("[data-surface]").forEach((item) => item.setAttribute("aria-selected", String(item === button)));
+    const stage = document.querySelector("[data-continuity-stage]");
+    if (stage) stage.dataset.activeSurface = surface;
+    const note = document.querySelector("[data-surface-note]");
+    if (note) note.textContent = SURFACE_NOTES[surface];
+  });
+});
+
+const JOBS = {
+  chief: { status: "Working on your host", title: "Keep the week moving.", copy: "Coordinate the calendar, hold decisions that need your judgment, and keep every handoff visible.", proof: "Venue held · contract waiting for approval", shot: approvalShot },
+  sales: { status: "Drafts held for approval", title: "Research before outreach.", copy: "Read the account list, draft in your voice, and leave every message unsent until you approve it.", proof: "40 accounts · 18 drafts · 0 sent", shot: heroShot },
+  inbox: { status: "Needs you", title: "Clear the noise, keep the judgment.", copy: "Archive routine mail, draft replies, and surface the one thread where your decision matters.", proof: "41 read · Dana held for your review", shot: approvalShot },
+  research: { status: "Brief ready", title: "Trace claims back to sources.", copy: "Compare material, organize the changes, and return a reviewable brief without publishing it.", proof: "4 changes · sources attached · 0 published", shot: marketplaceShot },
+};
+
+document.querySelectorAll("[data-job]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const job = JOBS[button.dataset.job];
+    document.querySelectorAll("[data-job]").forEach((item) => item.setAttribute("aria-selected", String(item === button)));
+    document.querySelector("[data-job-status]").textContent = job.status;
+    document.querySelector("[data-job-title]").textContent = job.title;
+    document.querySelector("[data-job-copy]").textContent = job.copy;
+    document.querySelector("[data-job-proof]").textContent = job.proof;
+    const image = document.querySelector("[data-job-scene] img");
+    if (image) image.src = job.shot;
+  });
+});
+
+const revealNodes = document.querySelectorAll(".reveal");
+if (prefersReducedMotion() || !("IntersectionObserver" in window)) {
+  revealNodes.forEach((node) => node.classList.add("is-visible"));
+} else {
+  const revealObserver = new IntersectionObserver((entries, observer) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      entry.target.classList.add("is-visible");
+      observer.unobserve(entry.target);
+    });
+  }, { threshold: 0.14 });
+  revealNodes.forEach((node) => revealObserver.observe(node));
+}

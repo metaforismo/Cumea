@@ -102,10 +102,10 @@
                 <input type="search" data-agent-search placeholder="Search" autocomplete="off" spellcheck="false" aria-label="Search bots" />
               </label>
               <div class="agent-scroll">
-                <button type="button" class="agent" data-scenario="chief" aria-pressed="false"><span class="mote-slot" data-mote="chief" aria-hidden="true"></span><span><strong>Scout</strong><small data-preview>venue booked, contract held…</small></span><span class="agent-meta"><span class="state-pill working" data-state>Working</span><time>Now</time></span></button>
-                <button type="button" class="agent" data-scenario="sales" aria-pressed="false"><span class="mote-slot" data-mote="sales" aria-hidden="true"></span><span><strong>Pixel</strong><small data-preview>drafting first-touch notes…</small></span><span class="agent-meta"><span class="state-pill" data-state>Unread</span><time>3:10 AM</time></span></button>
-                <button type="button" class="agent active" data-scenario="inbox" aria-pressed="true"><span class="mote-slot" data-mote="inbox" aria-hidden="true"></span><span><strong>Atlas</strong><small data-preview>1 item waiting for your read</small></span><span class="agent-meta"><span class="state-pill needs" data-state>Needs you</span><time>12:11 AM</time></span></button>
-                <div class="agent" data-static-agent><span class="mote-slot" data-mote="milind" aria-hidden="true"></span><span><strong>Milind</strong><small>Research summary ready</small></span><time>Yesterday</time></div>
+                <button type="button" class="agent" data-scenario="chief" aria-pressed="false"><span class="mote-slot" data-mote="chief" aria-hidden="true"></span><span><strong>Chief of Staff</strong><small data-preview>venue booked, contract held…</small></span><span class="agent-meta"><span class="state-pill working" data-state>Working</span><time>Now</time></span></button>
+                <button type="button" class="agent" data-scenario="sales" aria-pressed="false"><span class="mote-slot" data-mote="sales" aria-hidden="true"></span><span><strong>Sales Outbound</strong><small data-preview>drafting first-touch notes…</small></span><span class="agent-meta"><span class="state-pill" data-state>Unread</span><time>3:10 AM</time></span></button>
+                <button type="button" class="agent active" data-scenario="inbox" aria-pressed="true"><span class="mote-slot" data-mote="inbox" aria-hidden="true"></span><span><strong>Inbox Manager</strong><small data-preview>1 item waiting for your read</small></span><span class="agent-meta"><span class="state-pill needs" data-state>Needs you</span><time>12:11 AM</time></span></button>
+                <button type="button" class="agent" data-scenario="research" aria-pressed="false"><span class="mote-slot" data-mote="research" aria-hidden="true"></span><span><strong>Research Analyst</strong><small data-preview>brief ready for review</small></span><span class="agent-meta"><span class="state-pill" data-state>Done</span><time>Yesterday</time></span></button>
               </div>
               <div class="sidebar-bottom">
                 <button type="button" class="plugins-row" data-plugins>
@@ -125,13 +125,13 @@
             </aside>
 
             <article class="conversation" aria-label="Cumea conversation preview">
-              <div class="scenario-tabs" aria-label="Example agents"><button type="button" data-scenario="chief" aria-pressed="false">Scout</button><button type="button" data-scenario="sales" aria-pressed="false">Pixel</button><button type="button" data-scenario="inbox" aria-pressed="true">Atlas</button><button type="button" data-host-tab aria-pressed="false">Account</button></div>
+              <div class="scenario-tabs" aria-label="Example agents"><button type="button" data-scenario="chief" aria-pressed="false">Chief</button><button type="button" data-scenario="sales" aria-pressed="false">Sales</button><button type="button" data-scenario="inbox" aria-pressed="true">Inbox</button><button type="button" data-scenario="research" aria-pressed="false">Research</button><button type="button" data-host-tab aria-pressed="false">Account</button></div>
               <div class="host-sheet" data-host-sheet hidden><span class="host-avatar" aria-hidden="true">MS</span><p><strong>Milind Soni</strong><span>Local workspace · host online</span></p><small>Illustrative local identity · not a sign-in</small></div>
               <header class="conversation-header">
-                <button type="button" class="mote-trigger" data-mote-trigger aria-haspopup="dialog" aria-controls="mote-editor" aria-expanded="false" aria-label="Customize Atlas’s appearance">
+                <button type="button" class="mote-trigger" data-mote-trigger aria-haspopup="dialog" aria-controls="mote-editor" aria-expanded="false" aria-label="Customize Inbox Manager’s appearance">
                   <span class="mote-slot small" data-header-mote aria-hidden="true"></span>
                 </button>
-                <span class="header-copy"><strong data-agent-name>Atlas</strong><small data-agent-role>Mail · local host</small></span>
+                <span class="header-copy"><strong data-agent-name>Inbox Manager</strong><small data-agent-role>Mail · local host</small></span>
                 <span class="working is-needs" data-header-state><i></i> Needs you</span>
                 <div class="header-actions">
                   <button type="button" class="model-trigger" data-model-trigger aria-expanded="false" aria-controls="model-menu">
@@ -161,8 +161,8 @@
                   <button type="button" class="composer-icon" data-composer-attach aria-label="Attach a local preview file">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
                   </button>
-                  <label class="visually-hidden" for="composer-input">Message Atlas</label>
-                  <textarea id="composer-input" data-composer-input rows="1" maxlength="280" placeholder="Message Atlas" aria-describedby="composer-help"></textarea>
+                  <label class="visually-hidden" for="composer-input">Message Inbox Manager</label>
+                  <textarea id="composer-input" data-composer-input rows="1" maxlength="280" placeholder="Message Inbox Manager" aria-describedby="composer-help"></textarea>
                   <button type="button" class="composer-icon" data-composer-action aria-label="Voice dictation needs the desktop app">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19v3"/><path d="M8 22h8"/><rect width="6" height="13" x="9" y="2" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/></svg>
                   </button>
@@ -184,7 +184,7 @@
                 </button>
               </header>
               <div class="computer-body">
-                <div class="screen-label"><span data-screen-name>Atlas’s screen</span><span data-screen-mode></span></div>
+                <div class="screen-label"><span data-screen-name>Inbox Manager’s screen</span><span data-screen-mode></span></div>
                 <div class="screen-preview" data-screen-preview></div>
                 <div class="computer-actions" data-cloud-actions>
                   <button type="button" data-open-desktop>
@@ -218,59 +218,101 @@
             </aside>
             <p class="demo-toast" role="status" aria-live="polite" data-demo-toast></p>
           </div>
+
+          <div class="mobile-app-demo" data-mobile-demo aria-label="Interactive preview of the Cumea mobile app">
+            <section class="mobile-app-home" data-mobile-home aria-label="Your bots">
+              <header class="mobile-home-header">
+                <button type="button" class="mobile-profile" aria-label="Open profile preview">MS</button>
+                <div><strong>Your bots</strong><small><i></i> Host online</small></div>
+                <button type="button" class="mobile-round" aria-label="Search bots"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button>
+                <button type="button" class="mobile-round" aria-label="New bot preview"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5v14"/></svg></button>
+              </header>
+              <button type="button" class="mobile-attention" data-mobile-agent="inbox"><span><i></i><strong>2 items need you</strong></span><span>Review →</span></button>
+              <div class="mobile-agent-list" data-mobile-agent-list></div>
+              <div class="mobile-routines"><span><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 8v5l3 2"/><circle cx="12" cy="12" r="9"/></svg></span><div><strong>Routines</strong><small>3 active on your host</small></div><span>›</span></div>
+            </section>
+            <section class="mobile-app-chat" data-mobile-chat hidden aria-label="Bot conversation">
+              <header class="mobile-chat-header">
+                <button type="button" class="mobile-round" data-mobile-back aria-label="Back to your bots"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg></button>
+                <span class="mobile-chat-mote" data-mobile-chat-mote></span>
+                <div><strong data-mobile-chat-name>Inbox Manager</strong><small data-mobile-chat-role>Mail · host online</small></div>
+                <button type="button" class="mobile-round" aria-label="Open computer preview"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
+              </header>
+              <div class="mobile-chat-messages" data-mobile-messages></div>
+              <form class="mobile-composer" data-mobile-composer>
+                <button type="button" class="mobile-compose-button" aria-label="Attach a file"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5v14"/></svg></button>
+                <label class="visually-hidden" for="mobile-message">Message selected bot</label>
+                <input id="mobile-message" data-mobile-input maxlength="160" placeholder="Message Inbox Manager" />
+                <button type="submit" class="mobile-compose-button mobile-send" aria-label="Send preview message"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 7-7 7 7M12 19V5"/></svg></button>
+              </form>
+              <p class="mobile-preview-note">Interactive preview · nothing is sent</p>
+            </section>
+          </div>
         </div>
       </section>
 
-      <section class="story section shell" id="threads" aria-labelledby="threads-title">
-        <div class="story-intro">
-          <p class="kicker">The workspace</p>
-          <h2 id="threads-title">Built around the conversation.</h2>
-          <p>Agents live in named, persistent threads. Their model, tools, computer, and anything waiting for you stay in one place.</p>
-        </div>
-        <figure class="app-shot story-main-shot">
-          <img data-app-shot="hero" alt="Actual Cumea desktop workspace with agent sidebar and conversation" loading="lazy" />
-          <figcaption>Actual Cumea desktop preview</figcaption>
-        </figure>
-        <div class="story-points" aria-label="Workspace features">
-          <article><span>01</span><h3>Persistent threads</h3><p>Return to the same agent and the same task history.</p></article>
-          <article><span>02</span><h3>Provider choice</h3><p>Use supported model CLIs and accounts you already control.</p></article>
-          <article><span>03</span><h3>Needs You</h3><p>Keep questions and approvals visible before work continues.</p></article>
-        </div>
-        <div class="story-detail-grid">
-          <figure class="app-shot"><img data-app-shot="model" alt="Cumea model picker showing configured providers" loading="lazy" /><figcaption>Choose a configured provider</figcaption></figure>
-          <figure class="app-shot"><img data-app-shot="marketplace" alt="Cumea connected-app marketplace" loading="lazy" /><figcaption>Connect only the apps an agent needs</figcaption></figure>
+      <section class="continuity section-dark" id="threads" aria-labelledby="continuity-title">
+        <div class="shell continuity-grid reveal">
+          <div class="continuity-copy">
+            <p class="kicker">Desktop to pocket</p>
+            <h2 id="continuity-title">One workspace.<br />Two places.</h2>
+            <p>The host keeps working on your machine. The mobile app pairs with it so you can message a bot, approve a decision, stop a run, or check status away from your desk.</p>
+            <div class="surface-switch" role="tablist" aria-label="Cumea surfaces">
+              <button type="button" role="tab" aria-selected="true" data-surface="desktop">Desktop</button>
+              <button type="button" role="tab" aria-selected="false" data-surface="mobile">Mobile</button>
+            </div>
+            <p class="surface-note" data-surface-note>Your models and credentials stay on the host you control.</p>
+          </div>
+          <div class="continuity-stage" data-continuity-stage data-active-surface="desktop">
+            <figure class="continuity-desktop"><img data-app-shot="hero" alt="Cumea desktop workspace" loading="lazy" /></figure>
+            <div class="continuity-phone" aria-hidden="true">
+              <div class="mini-phone-head"><span></span><strong>Your bots</strong><i></i></div>
+              <div class="mini-phone-alert">2 items need you <b>→</b></div>
+              <div class="mini-phone-row"><span class="mini-mote orange"></span><p><strong>Chief of Staff</strong><small>Waiting on you</small></p><time>Now</time></div>
+              <div class="mini-phone-row"><span class="mini-mote teal"></span><p><strong>Inbox Manager</strong><small>41 unread archived</small></p><time>12:11</time></div>
+              <div class="mini-phone-row"><span class="mini-mote pink"></span><p><strong>Research Analyst</strong><small>Brief ready</small></p><time>Yesterday</time></div>
+            </div>
+            <span class="handoff-line" aria-hidden="true"><i></i></span>
+          </div>
         </div>
       </section>
 
-      <section class="spotlight section shell" id="council" aria-labelledby="computer-title">
-        <div class="spotlight-copy">
-          <p class="kicker">Computer</p>
-          <h2 id="computer-title">A computer when the runtime supports it.</h2>
-          <p>Open the desktop, choose a local or cloud host, and inspect routines beside the thread. Cumea does not supply a managed VM.</p>
-          <dl class="compact-facts">
-            <div><dt>Runs on</dt><dd>Your Mac or a VM you administer</dd></div>
-            <div><dt>Stays visible</dt><dd>Computer state and routines remain beside the conversation</dd></div>
-          </dl>
+      <section class="jobs-section section" id="council" aria-labelledby="jobs-title">
+        <div class="shell reveal">
+          <p class="kicker">Clear jobs, clear threads</p>
+          <div class="jobs-heading"><h2 id="jobs-title">Give each bot a job.</h2><p>No cast of fantasy names to decode. Each thread says what it owns, what it is doing, and when it needs you.</p></div>
+          <div class="job-selector" role="tablist" aria-label="Example bot jobs">
+            <button type="button" role="tab" aria-selected="true" data-job="chief">Chief of Staff</button>
+            <button type="button" role="tab" aria-selected="false" data-job="sales">Sales Outbound</button>
+            <button type="button" role="tab" aria-selected="false" data-job="inbox">Inbox Manager</button>
+            <button type="button" role="tab" aria-selected="false" data-job="research">Research Analyst</button>
+          </div>
+          <div class="job-scene" data-job-scene>
+            <div class="job-scene-copy"><span data-job-status>Working on your host</span><h3 data-job-title>Keep the week moving.</h3><p data-job-copy>Coordinate the calendar, hold decisions that need your judgment, and keep every handoff visible.</p><div class="job-proof"><i></i><span data-job-proof>Venue held · contract waiting for approval</span></div></div>
+            <figure class="job-scene-shot"><img data-app-shot="approval" alt="Cumea approval request inside a persistent thread" loading="lazy" /></figure>
+          </div>
         </div>
-        <figure class="app-shot spotlight-shot"><img data-app-shot="computer" alt="Cumea computer panel beside a conversation" loading="lazy" /><figcaption>Computer panel · optional capability</figcaption></figure>
       </section>
 
-      <section class="spotlight spotlight-reverse section shell" id="needs-you" aria-labelledby="needs-title">
-        <div class="spotlight-copy">
-          <p class="kicker">Agency</p>
-          <h2 id="needs-title">It comes back when it needs you.</h2>
-          <p>Questions and approval requests stay inside the thread and in a dedicated Needs You inbox. This landing preview never sends, deletes, or purchases anything.</p>
-          <p class="fine-print">Available behavior depends on the provider runtime and the permissions you configure.</p>
+      <section class="control-section section-dark" id="self-hosted" aria-labelledby="control-title">
+        <div class="shell control-heading reveal">
+          <p class="kicker">Control is the product</p>
+          <h2 id="control-title">Your host stays<br />the boundary.</h2>
+          <p>Cumea connects to provider CLIs you configure. The machine, provider accounts, credentials, and deployment remain yours.</p>
         </div>
-        <figure class="app-shot spotlight-shot"><img data-app-shot="approval" alt="Cumea Needs You approval card inside a conversation" loading="lazy" /><figcaption>Approval request inside the thread</figcaption></figure>
+        <div class="shell control-rows reveal">
+          <article><span>01</span><div><h3>Your models and keys</h3><p>Use supported providers and accounts already configured on your host.</p></div><figure><img data-app-shot="model" alt="Cumea model picker" loading="lazy" /></figure></article>
+          <article><span>02</span><div><h3>Your computer and routines</h3><p>Run locally or on a VM you administer. Computer use appears only when the runtime supports it.</p></div><figure><img data-app-shot="computer" alt="Cumea computer panel" loading="lazy" /></figure></article>
+          <article><span>03</span><div><h3>Your approval</h3><p>Questions return to the thread before work continues. This page never sends, deletes, or purchases anything.</p></div><figure><img data-app-shot="approval" alt="Cumea approval card" loading="lazy" /></figure></article>
+        </div>
       </section>
 
       <section class="runtime-section section shell" id="stack" aria-labelledby="stack-title">
-        <div class="runtime-heading">
+        <div class="runtime-heading reveal">
           <div><p class="kicker">Runtime</p><h2 id="stack-title">Bring your models, keys, and machine.</h2></div>
-          <p>Cumea talks to provider CLIs you already have. Credentials stay on your host and with the provider you control. Capabilities are mounted only when that runtime supports them.</p>
+          <p>Capabilities are mounted only when a provider runtime actually supports them. “Not yet” means not yet.</p>
         </div>
-        <div class="matrix-wrap">
+        <div class="matrix-wrap reveal">
           <table class="matrix">
             <caption>Documented provider capability. Support varies by runtime.</caption>
             <thead><tr><th scope="col">Runtime</th><th scope="col">Chat</th><th scope="col">Handoff</th><th scope="col">Connected apps</th><th scope="col">Local computer</th><th scope="col">Cloud computer</th></tr></thead>
@@ -281,19 +323,6 @@
               <tr><th scope="row">Box cloud agent</th><td>Yes</td><td>Not yet</td><td>Not yet</td><td>No</td><td>Yes</td></tr>
             </tbody>
           </table>
-        </div>
-      </section>
-
-      <section class="ownership section shell" id="self-hosted" aria-labelledby="ownership-title">
-        <div class="ownership-heading">
-          <p class="kicker">Ownership</p>
-          <h2 id="ownership-title">Your host stays the boundary.</h2>
-          <p>Cumea is early, open-source software. The machine, provider accounts, credentials, and deployment remain yours.</p>
-        </div>
-        <div class="ownership-grid">
-          <article><span>01</span><h3>Run it yourself</h3><p>Use your desktop or a VM you administer for always-on routines.</p></article>
-          <article><span>02</span><h3>Pair mobile</h3><p>Chat, stop, approve, and check status. Providers still run on the host.</p></article>
-          <article><span>03</span><h3>Inspect the code</h3><p>MIT licensed. Audit it, fork it, and keep the deployment under your control.</p></article>
         </div>
       </section>
       <section class="faq section shell" id="faq" aria-labelledby="faq-title">
