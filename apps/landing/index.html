@@ -21,7 +21,7 @@
     <link rel="manifest" href="/site.webmanifest" />
     <title>Cumea — AI teammates you actually own</title>
   </head>
-  <body>
+  <body id="top">
     <a class="skip-link" href="#main">Skip to content</a>
 
     <header class="site-header">
@@ -53,7 +53,7 @@
     </header>
 
     <main id="main">
-      <section class="hero" id="top" aria-labelledby="hero-title">
+      <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy shell">
           <p class="eyebrow">
             <span>MIT</span>
@@ -95,8 +95,8 @@
                 <div class="agent" data-static-agent><span class="mote-avatar magenta" aria-hidden="true"></span><span><strong>Milind</strong><small>Research summary ready</small></span><time>Yesterday</time></div>
               </div>
               <div class="sidebar-bottom">
-                <button type="button" class="plugins-row"><span aria-hidden="true">⌘</span> Plugins</button>
-                <div class="host-footer"><span class="host-avatar" aria-hidden="true">MS</span><span><strong>Milind Soni</strong><small>Local workspace</small></span><button type="button" class="settings-button" aria-label="Settings">⚙</button></div>
+                <span class="plugins-row"><span aria-hidden="true">⌘</span> Plugins</span>
+                <div class="host-footer"><span class="host-avatar" aria-hidden="true">MS</span><span><strong>Milind Soni</strong><small>Local workspace</small></span><span class="settings-button" aria-hidden="true">⚙</span></div>
               </div>
             </aside>
 
@@ -120,7 +120,7 @@
               </header>
               <div class="messages" data-messages tabindex="0"></div>
               <div class="composer" data-composer>
-                <button type="button" class="composer-attach" aria-label="Add an attachment">+</button>
+                <button type="button" class="composer-attach" aria-label="Attachments are disabled in this preview" disabled>+</button>
                 <label class="visually-hidden" for="composer-input">Message Atlas</label>
                 <textarea id="composer-input" data-composer-input rows="1" maxlength="280" placeholder="Message Atlas"></textarea>
                 <button type="button" class="composer-send" data-composer-send aria-label="Send preview message">↑</button>
@@ -132,7 +132,7 @@
             <aside class="computer-drawer" id="computer-drawer" data-computer-drawer hidden aria-label="Computer panel">
               <div class="drawer-head"><span><strong data-computer>Atlas’s computer</strong><small>Optional local runtime</small></span><button type="button" data-computer-close aria-label="Close computer panel">×</button></div>
               <figure class="drawer-screen"><img data-app-shot="computer" alt="Actual Cumea computer panel" /></figure>
-              <div class="drawer-actions"><button type="button">Open desktop</button><button type="button">Sleep</button></div>
+              <div class="drawer-actions" aria-label="Computer actions shown for illustration"><span>Open desktop</span><span>Sleep</span></div>
               <div class="runs-on"><span>Runs on</span><strong>Local</strong><span>Cloud</span></div>
               <div class="panel-heading"><strong>Routines</strong></div><div data-routines></div>
               <div class="panel-heading"><strong>Connected apps <em>optional</em></strong></div><div class="chips" data-chips><span>Gmail</span><span>Calendar</span><span>Linear</span></div>
@@ -141,169 +141,81 @@
         </div>
       </section>
 
-      <section class="product-proof section shell" id="threads" aria-labelledby="threads-title">
-        <div class="proof-copy"><p class="kicker">The app</p><h2 id="threads-title">A real workspace, not a chatbot skin.</h2><p>Named agents, persistent threads, streaming replies, attachments, model selection, computer access, and a clear place for anything that needs you.</p></div>
-        <figure class="app-shot app-shot-wide"><img data-app-shot="hero" alt="Actual Cumea desktop workspace with agent sidebar and conversation" loading="lazy" /><figcaption>Actual Cumea desktop preview</figcaption></figure>
-      </section>
-
-      <section class="media-pair section shell" id="council" aria-labelledby="council-title">
-        <div class="proof-copy"><p class="kicker">Computer</p><h2 id="council-title">Give an agent a machine when the runtime supports it.</h2><p>Open the desktop, choose a local or cloud host, and inspect routines without leaving the thread. Cumea does not provide a managed VM.</p></div>
-        <figure class="app-shot"><img data-app-shot="computer" alt="Cumea computer panel beside a conversation" loading="lazy" /><figcaption>Computer panel · optional capability</figcaption></figure>
-      </section>
-
-      <section class="detail-gallery section shell" aria-labelledby="details-title">
-        <div class="proof-copy">
-          <p class="kicker">Control</p>
-          <h2 id="details-title">The important controls stay close to the thread.</h2>
-          <p>Switch among provider CLIs you configured, or inspect connected apps. Availability follows the runtime — the interface does not pretend every provider supports every tool.</p>
+      <section class="story section shell" id="threads" aria-labelledby="threads-title">
+        <div class="story-intro">
+          <p class="kicker">The workspace</p>
+          <h2 id="threads-title">Built around the conversation.</h2>
+          <p>Agents live in named, persistent threads. Their model, tools, computer, and anything waiting for you stay in one place.</p>
         </div>
-        <div class="detail-grid">
-          <figure class="app-shot"><img data-app-shot="model" alt="Cumea model picker showing configured providers" loading="lazy" /><figcaption>Model picker</figcaption></figure>
-          <figure class="app-shot"><img data-app-shot="marketplace" alt="Cumea connected-app marketplace" loading="lazy" /><figcaption>Connected apps</figcaption></figure>
+        <figure class="app-shot story-main-shot">
+          <img data-app-shot="hero" alt="Actual Cumea desktop workspace with agent sidebar and conversation" loading="lazy" />
+          <figcaption>Actual Cumea desktop preview</figcaption>
+        </figure>
+        <div class="story-points" aria-label="Workspace features">
+          <article><span>01</span><h3>Persistent threads</h3><p>Return to the same agent and the same task history.</p></article>
+          <article><span>02</span><h3>Provider choice</h3><p>Use supported model CLIs and accounts you already control.</p></article>
+          <article><span>03</span><h3>Needs You</h3><p>Keep questions and approvals visible before work continues.</p></article>
+        </div>
+        <div class="story-detail-grid">
+          <figure class="app-shot"><img data-app-shot="model" alt="Cumea model picker showing configured providers" loading="lazy" /><figcaption>Choose a configured provider</figcaption></figure>
+          <figure class="app-shot"><img data-app-shot="marketplace" alt="Cumea connected-app marketplace" loading="lazy" /><figcaption>Connect only the apps an agent needs</figcaption></figure>
         </div>
       </section>
 
-      <section class="stack section shell" id="stack" aria-labelledby="stack-title">
-        <div class="section-intro">
-          <p class="kicker">Runtime</p>
-          <h2 id="stack-title">Your models, tools, and machine.</h2>
-          <p>Cumea talks to provider CLIs you already have. Optional connected apps and optional local or cloud computer use are mounted only when that runtime supports them. Credentials stay on your host and with the provider you control. Cumea does not supply a managed VM.</p>
+      <section class="spotlight section shell" id="council" aria-labelledby="computer-title">
+        <div class="spotlight-copy">
+          <p class="kicker">Computer</p>
+          <h2 id="computer-title">A computer when the runtime supports it.</h2>
+          <p>Open the desktop, choose a local or cloud host, and inspect routines beside the thread. Cumea does not supply a managed VM.</p>
+          <dl class="compact-facts">
+            <div><dt>Runs on</dt><dd>Your Mac or a VM you administer</dd></div>
+            <div><dt>Stays visible</dt><dd>Computer state and routines remain beside the conversation</dd></div>
+          </dl>
+        </div>
+        <figure class="app-shot spotlight-shot"><img data-app-shot="computer" alt="Cumea computer panel beside a conversation" loading="lazy" /><figcaption>Computer panel · optional capability</figcaption></figure>
+      </section>
+
+      <section class="spotlight spotlight-reverse section shell" id="needs-you" aria-labelledby="needs-title">
+        <div class="spotlight-copy">
+          <p class="kicker">Agency</p>
+          <h2 id="needs-title">It comes back when it needs you.</h2>
+          <p>Questions and approval requests stay inside the thread and in a dedicated Needs You inbox. This landing preview never sends, deletes, or purchases anything.</p>
+          <p class="fine-print">Available behavior depends on the provider runtime and the permissions you configure.</p>
+        </div>
+        <figure class="app-shot spotlight-shot"><img data-app-shot="approval" alt="Cumea Needs You approval card inside a conversation" loading="lazy" /><figcaption>Approval request inside the thread</figcaption></figure>
+      </section>
+
+      <section class="runtime-section section shell" id="stack" aria-labelledby="stack-title">
+        <div class="runtime-heading">
+          <div><p class="kicker">Runtime</p><h2 id="stack-title">Bring your models, keys, and machine.</h2></div>
+          <p>Cumea talks to provider CLIs you already have. Credentials stay on your host and with the provider you control. Capabilities are mounted only when that runtime supports them.</p>
         </div>
         <div class="matrix-wrap">
           <table class="matrix">
             <caption>Documented provider capability. Support varies by runtime.</caption>
-            <thead>
-              <tr>
-                <th scope="col">Runtime</th>
-                <th scope="col">Chat</th>
-                <th scope="col">Handoff</th>
-                <th scope="col">Connected apps</th>
-                <th scope="col">Local computer</th>
-                <th scope="col">Cloud computer</th>
-              </tr>
-            </thead>
+            <thead><tr><th scope="col">Runtime</th><th scope="col">Chat</th><th scope="col">Handoff</th><th scope="col">Connected apps</th><th scope="col">Local computer</th><th scope="col">Cloud computer</th></tr></thead>
             <tbody>
-              <tr>
-                <th scope="row">Claude Agent</th>
-                <td>Yes</td>
-                <td>Yes</td>
-                <td>Yes</td>
-                <td>macOS</td>
-                <td>Yes</td>
-              </tr>
-              <tr>
-                <th scope="row">Grok / Gemini ACP</th>
-                <td>Yes</td>
-                <td>Yes</td>
-                <td>Not yet</td>
-                <td>macOS</td>
-                <td>Not yet</td>
-              </tr>
-              <tr>
-                <th scope="row">Codex app-server</th>
-                <td>Yes</td>
-                <td>Not yet</td>
-                <td>Not yet</td>
-                <td>Not yet</td>
-                <td>Not yet</td>
-              </tr>
-              <tr>
-                <th scope="row">Box cloud agent</th>
-                <td>Yes</td>
-                <td>Not yet</td>
-                <td>Not yet</td>
-                <td>No</td>
-                <td>Yes</td>
-              </tr>
+              <tr><th scope="row">Claude Agent</th><td>Yes</td><td>Yes</td><td>Yes</td><td>macOS</td><td>Yes</td></tr>
+              <tr><th scope="row">Grok / Gemini ACP</th><td>Yes</td><td>Yes</td><td>Not yet</td><td>macOS</td><td>Not yet</td></tr>
+              <tr><th scope="row">Codex app-server</th><td>Yes</td><td>Not yet</td><td>Not yet</td><td>Not yet</td><td>Not yet</td></tr>
+              <tr><th scope="row">Box cloud agent</th><td>Yes</td><td>Not yet</td><td>Not yet</td><td>No</td><td>Yes</td></tr>
             </tbody>
           </table>
         </div>
       </section>
 
-      <section class="feature section shell" id="needs-you" aria-labelledby="needs-title">
-        <div>
-          <p class="kicker">Approvals</p>
-          <h2 id="needs-title">When Cumea needs you.</h2>
-          <p>Irreversible work waits in a Needs You inbox. You choose Ask, Always, or Never per agent. This landing preview never sends, deletes, or purchases anything.</p>
+      <section class="ownership section shell" id="self-hosted" aria-labelledby="ownership-title">
+        <div class="ownership-heading">
+          <p class="kicker">Ownership</p>
+          <h2 id="ownership-title">Your host stays the boundary.</h2>
+          <p>Cumea is early, open-source software. The machine, provider accounts, credentials, and deployment remain yours.</p>
         </div>
-        <figure class="app-shot"><img data-app-shot="approval" alt="Cumea Needs You approval card inside a conversation" loading="lazy" /><figcaption>Approval request inside the thread</figcaption></figure>
-      </section>
-
-      <section class="feature section shell" id="surfaces" aria-labelledby="surfaces-title">
-        <div>
-          <p class="kicker">Surfaces</p>
-          <h2 id="surfaces-title">Desktop host, mobile control surface.</h2>
-          <p>Pair the mobile companion to a host you run. It opens on the agent list. You can chat, stop, approve, and check routine status. It does not run providers or administer credentials on the phone. The host must stay online for remote or routine work.</p>
-        </div>
-        <dl class="surface-list">
-          <div>
-            <dt>Desktop or your VM</dt>
-            <dd>Providers, credentials, attachments, routines, pairing, and durable task history.</dd>
-          </div>
-          <div>
-            <dt>Mobile companion</dt>
-            <dd>Paired control: search, chat, stop, Needs You, routine status. No provider runtime on the phone.</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section class="jobs section shell" id="jobs" aria-labelledby="jobs-title">
-        <div class="section-intro">
-          <p class="kicker">Jobs</p>
-          <h2 id="jobs-title">Give each agent a job.</h2>
-          <p>Illustrative threads from typical roles. Changing a tab updates the sample run only.</p>
-        </div>
-        <div class="job-board" data-jobs>
-          <div class="job-tabs" role="tablist" aria-label="Example jobs">
-            <button type="button" role="tab" id="job-tab-inbox" aria-selected="true" aria-controls="job-panel" data-job="inbox">Inbox Manager</button>
-            <button type="button" role="tab" id="job-tab-research" aria-selected="false" aria-controls="job-panel" data-job="research">Research Agent</button>
-            <button type="button" role="tab" id="job-tab-chief" aria-selected="false" aria-controls="job-panel" data-job="chief">Chief of Staff</button>
-            <button type="button" role="tab" id="job-tab-triage" aria-selected="false" aria-controls="job-panel" data-job="triage">Bug Triage</button>
-          </div>
-          <div class="job-panel" id="job-panel" role="tabpanel" aria-labelledby="job-tab-inbox" data-job-panel>
-            <p class="job-kicker">Run summary · illustrative</p>
-            <h3>Inbox Manager</h3>
-            <p>Named thread on your host. Reads mail through an optional connected app, drafts in your voice, and stops at Needs You before anything leaves.</p>
-            <ul>
-              <li>41 threads read · 26 archived</li>
-              <li>6 drafts held · 1 flagged for you</li>
-              <li>No send until you approve</li>
-            </ul>
-          </div>
+        <div class="ownership-grid">
+          <article><span>01</span><h3>Run it yourself</h3><p>Use your desktop or a VM you administer for always-on routines.</p></article>
+          <article><span>02</span><h3>Pair mobile</h3><p>Chat, stop, approve, and check status. Providers still run on the host.</p></article>
+          <article><span>03</span><h3>Inspect the code</h3><p>MIT licensed. Audit it, fork it, and keep the deployment under your control.</p></article>
         </div>
       </section>
-
-      <section class="principles section shell" id="self-hosted" aria-labelledby="principles-title">
-        <div class="section-intro">
-          <p class="kicker">Built around ownership</p>
-          <h2 id="principles-title">Capable without taking the keys away.</h2>
-          <p>Cumea is early software with a simple boundary: the host, provider accounts, and data remain under your control.</p>
-        </div>
-        <div class="principle-list">
-          <article tabindex="0">
-            <span>01</span>
-            <div>
-              <h3>Run it yourself</h3>
-              <p>Use your Mac for local work or a VM you administer for always-on routines. Cumea does not rent you a host.</p>
-            </div>
-          </article>
-          <article tabindex="0">
-            <span>02</span>
-            <div>
-              <h3>Bring your providers</h3>
-              <p>Connect supported model CLIs with accounts and credentials you control. Capability varies by runtime.</p>
-            </div>
-          </article>
-          <article tabindex="0">
-            <span>03</span>
-            <div>
-              <h3>Inspect every layer</h3>
-              <p>The code is MIT licensed. Audit it, fork it, and keep the deployment yours.</p>
-            </div>
-          </article>
-        </div>
-      </section>
-
       <section class="faq section shell" id="faq" aria-labelledby="faq-title">
         <div class="section-intro">
           <p class="kicker">FAQ</p>

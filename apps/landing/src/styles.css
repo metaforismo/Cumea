@@ -1666,7 +1666,7 @@ h2 {
 .drawer-screen { height: 8.9rem; margin: .65rem 0 .5rem; overflow: hidden; border: 1px solid rgba(255,255,255,.08); border-radius: .62rem; background: #111; }
 .drawer-screen img { width: 100%; height: 100%; object-fit: cover; object-position: 76% 42%; }
 .drawer-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem; }
-.drawer-actions button { min-height: 1.9rem; border: 1px solid rgba(255,255,255,.08); border-radius: .5rem; background: #1b1b1b; color: rgba(255,255,255,.62); font-size: .52rem; }
+.drawer-actions span { display: grid; min-height: 1.9rem; place-items: center; border: 1px solid rgba(255,255,255,.08); border-radius: .5rem; background: #1b1b1b; color: rgba(255,255,255,.62); font-size: .52rem; }
 .runs-on { display: grid; grid-template-columns: 1fr auto auto; gap: .55rem; margin-top: .55rem; padding: .45rem .55rem; border-radius: .55rem; background: #171717; color: rgba(255,255,255,.32); font-size: .5rem; }
 .runs-on strong { color: rgba(255,255,255,.72); }
 
@@ -1724,4 +1724,136 @@ h2 {
 @media (max-width: 21rem) {
   .model-trigger { max-width: 6.4rem; padding-inline: .45rem; }
   .scenario-tabs button { font-size: .58rem; }
+}
+
+/* Cohesive landing narrative */
+.story,
+.spotlight,
+.runtime-section,
+.ownership,
+.faq {
+  padding-block: clamp(4.25rem, 6vw, 5.25rem);
+}
+
+.story { display: grid; gap: 2rem; }
+.story-intro { max-width: 34rem; }
+.story-intro > p:last-child,
+.spotlight-copy > p,
+.runtime-heading > p,
+.ownership-heading > p {
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-size: .94rem;
+}
+.story h2,
+.spotlight h2,
+.runtime-section h2,
+.ownership h2 { font-size: clamp(2.1rem, 4.2vw, 3rem); }
+.story-main-shot img { border-radius: 1.25rem; }
+.story-points,
+.ownership-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.story-points article,
+.ownership-grid article {
+  min-width: 0;
+  padding: 1.25rem 1.2rem 1.35rem 0;
+}
+.story-points article + article,
+.ownership-grid article + article {
+  padding-left: 1.2rem;
+  border-left: 1px solid var(--line);
+}
+.story-points span,
+.ownership-grid span {
+  color: var(--faint);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: .62rem;
+}
+.story-points h3,
+.ownership-grid h3 { margin: .55rem 0 .3rem; font-size: .9rem; }
+.story-points p,
+.ownership-grid p { margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.55; }
+.story-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.1rem;
+}
+.story-detail-grid img { aspect-ratio: 16 / 9.2; object-fit: cover; border-radius: 1rem; }
+.story-detail-grid figure:first-child img { object-position: 55% 46%; }
+.story-detail-grid figure:last-child img { object-position: 50% 52%; }
+
+.spotlight {
+  display: grid;
+  grid-template-columns: minmax(0, .78fr) minmax(0, 1.22fr);
+  align-items: center;
+  gap: clamp(2.5rem, 7vw, 5rem);
+  border-top: 1px solid var(--line);
+}
+.spotlight-reverse { grid-template-columns: minmax(0, 1.22fr) minmax(0, .78fr); }
+.spotlight-reverse .spotlight-copy { order: 2; }
+.spotlight-shot img { border-radius: 1.05rem; }
+.spotlight-reverse .spotlight-shot img { aspect-ratio: 16 / 10; object-fit: cover; object-position: 52% 48%; }
+.compact-facts { margin: 1.4rem 0 0; border-top: 1px solid var(--line); }
+.compact-facts div { display: grid; grid-template-columns: 5rem 1fr; gap: 1rem; padding: .75rem 0; border-bottom: 1px solid var(--line); }
+.compact-facts dt { color: var(--faint); font-size: .7rem; }
+.compact-facts dd { margin: 0; font-size: .72rem; line-height: 1.5; }
+.spotlight-copy .fine-print { color: var(--faint); font-size: .72rem; }
+
+.runtime-section { border-top: 1px solid var(--line); }
+.runtime-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  align-items: end;
+  gap: 3rem;
+  margin-bottom: 2.2rem;
+}
+.runtime-heading > p { margin: 0; }
+.runtime-section .matrix-wrap { border-top: 1px solid var(--line-strong); }
+.runtime-section .matrix th,
+.runtime-section .matrix td { padding-block: .78rem; }
+
+.ownership {
+  display: grid;
+  gap: 2.25rem;
+  border-top: 1px solid var(--line);
+}
+.ownership-heading { max-width: 38rem; }
+.faq .section-intro { position: static; }
+
+.composer-attach:disabled { cursor: default; opacity: .62; }
+
+@media (hover: hover) and (pointer: fine) {
+  .model-trigger:hover,
+  .icon-tool:hover,
+  .model-menu button:hover { background: rgba(255,255,255,.08); color: #fff; }
+}
+
+@media (max-width: 54rem) {
+  .spotlight,
+  .spotlight-reverse,
+  .runtime-heading { grid-template-columns: 1fr; }
+  .spotlight-reverse .spotlight-copy { order: 0; }
+  .runtime-heading { gap: 1rem; }
+}
+
+@media (max-width: 35rem) {
+  .story,
+  .spotlight,
+  .runtime-section,
+  .ownership,
+  .faq { padding-block: 3.8rem; }
+  .story { gap: 1.4rem; }
+  .story-points,
+  .ownership-grid,
+  .story-detail-grid { grid-template-columns: 1fr; }
+  .story-points article,
+  .ownership-grid article { padding: 1rem 0; }
+  .story-points article + article,
+  .ownership-grid article + article { padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
+  .spotlight { gap: 1.7rem; }
+  .runtime-section .matrix-wrap { margin-inline: -1rem; padding-inline: 1rem; }
 }

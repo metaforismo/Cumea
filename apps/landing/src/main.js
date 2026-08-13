@@ -509,8 +509,13 @@ function applyStage(id, stage) {
   if (stage.type === "context") {
     messagesNode.replaceChildren();
     messagesNode.append(renderItem({ kind: "context", text: stage.text }));
+    const openingMessage = SCENARIOS[id].complete.find((item) => item.kind === "user");
+    if (openingMessage) messagesNode.append(renderItem(openingMessage));
   } else if (stage.type === "user" || stage.type === "bot") {
-    messagesNode.append(renderItem({ kind: stage.type, text: stage.text }));
+    const lastMessage = messagesNode.querySelector(".message:last-of-type");
+    if (lastMessage?.textContent !== stage.text) {
+      messagesNode.append(renderItem({ kind: stage.type, text: stage.text }));
+    }
   } else if (stage.type === "working") {
     messagesNode.append(renderItem({ kind: "working" }));
   } else if (stage.type === "stream") {
@@ -743,7 +748,12 @@ if (demoRoot) {
   );
   observer.observe(demoRoot);
 
-  if (prefersReducedMotion()) renderComplete("inbox");
+  renderComplete("inbox");
+  if (!prefersReducedMotion()) {
+    applied = SCENARIOS.inbox.stages.length - 1;
+    elapsed = DURATION;
+    completedAt = performance.now();
+  }
 }
 
 function sendPreview() {
