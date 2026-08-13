@@ -125,6 +125,12 @@ export interface ProviderAdapter {
      * the harness only offers agents tooling (and prompts about it) to
      * drivers that can actually hand it to the agent. */
     agentsMcp?: boolean;
+    /** True when connected-app MCP integrations can actually be mounted. */
+    composioMcp?: boolean;
+    /** True when the local computer MCP integration can be mounted. */
+    localComputerMcp?: boolean;
+    /** True when the cloud computer MCP integration can be mounted. */
+    cloudComputerMcp?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;

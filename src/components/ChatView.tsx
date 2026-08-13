@@ -1,11 +1,11 @@
 import { useEffect, useRef } from "react";
-import { Check, Loader2, Monitor, Square, X } from "lucide-react";
+import { ArrowRight, Check, FileText, ListChecks, Loader2, Monitor, Square, X } from "lucide-react";
 import { useStore, formatTime, type Bot, type Message } from "@/state/store";
 import { CumeaAvatar } from "./Avatar";
 import { expressionForBot } from "@/lib/mascot";
+import { avatarForBot, avatarStateForBot } from "@/lib/mote";
 import { OptionCard } from "./OptionCard";
 import { Composer } from "./Composer";
-import { ModelPicker } from "./ModelPicker";
 import { cn } from "@/lib/cn";
 
 // Minimal markdown for bot bubbles: **bold**, `code`, headings, lists.
@@ -82,6 +82,41 @@ function Bubble({ message }: { message: Message }) {
         )}
       >
         {user ? message.text : <Markdownish text={message.text ?? ""} />}
+        {message.attachments?.length ? (
+          <div className="mt-2 flex flex-wrap gap-2 border-t border-hairline/30 pt-2">
+            {message.attachments.map((attachment) => (
+              <a
+                key={attachment.id}
+                href={`/api/attachments/${attachment.id}`}
+                className="flex max-w-[260px] items-center gap-2 rounded-lg bg-inset px-2.5 py-1.5 text-[12px] text-ink hover:bg-raised"
+              >
+                <FileText size={13} className="shrink-0 text-ink-secondary" />
+                <span className="truncate">{attachment.name}</span>
+              </a>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function HandoffCard({ message }: { message: Message }) {
+  const handoff = message.handoff;
+  if (!handoff) return null;
+  return (
+    <div className="flex justify-start">
+      <div className="w-full max-w-[620px] rounded-2xl border border-hairline/50 bg-card p-3.5">
+        <div className="flex items-center gap-2 text-[13px] font-medium text-ink">
+          <span>{handoff.fromName}</span>
+          <ArrowRight size={14} className="text-ink-secondary" />
+          <span>{handoff.toName}</span>
+          <span className={cn("ml-auto rounded-full px-2 py-0.5 text-[10px]", handoff.status === "completed" ? "bg-success/10 text-success" : handoff.status === "failed" ? "bg-danger/10 text-danger" : "bg-accent/10 text-accent")}>
+            {handoff.status}
+          </span>
+        </div>
+        <div className="mt-2 text-[12px] leading-relaxed text-ink-secondary">{handoff.prompt}</div>
+        {handoff.reply && <div className="mt-2 rounded-lg bg-inset px-2.5 py-2 text-[12px] leading-relaxed text-ink">{handoff.reply}</div>}
       </div>
     </div>
   );
@@ -160,11 +195,14 @@ export function ChatView({ bot }: { bot: Bot }) {
           title="Bot settings"
         >
           <CumeaAvatar
-            color={bot.color}
+            avatar={avatarForBot(bot)}
             expression={expressionForBot(bot)}
             size={28}
             motion={mascotMotion?.kind ?? "none"}
             motionKey={mascotMotion?.nonce ?? 0}
+            state={avatarStateForBot(bot)}
+            label={`${bot.name} avatar`}
+            ambient
           />
           <span className="text-[15px] font-semibold text-ink">{bot.name}</span>
           {bot.busy && <Loader2 size={14} className="animate-spin text-ink-secondary" />}
@@ -180,7 +218,17 @@ export function ChatView({ bot }: { bot: Bot }) {
               Stop
             </button>
           )}
-          <ModelPicker bot={bot} />
+          <button
+            onClick={() => dispatch({ type: "toggleWork", tab: "activity" })}
+            className={cn(
+              "rounded-md p-1.5 hover:bg-raised",
+              state.workOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
+            )}
+            aria-label="Open work: Needs you, activity, routines, and sections"
+            title="Work: Needs you, activity, routines, and sections"
+          >
+            <ListChecks size={18} />
+          </button>
           <button
             onClick={() => dispatch({ type: "toggleComputer" })}
             className={cn(
@@ -219,6 +267,8 @@ export function ChatView({ bot }: { bot: Bot }) {
                 return <ActivityChip key={m.id} message={m} />;
               case "screen":
                 return m.png ? <ScreenFrame key={m.id} png={m.png} mime={m.mime} /> : null;
+              case "handoff":
+                return <HandoffCard key={m.id} message={m} />;
               default:
                 return <Bubble key={m.id} message={m} />;
             }

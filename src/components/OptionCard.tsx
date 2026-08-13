@@ -12,14 +12,34 @@ export function OptionCard({
   botId: string;
   message: Message;
 }) {
-  const { dispatch } = useStore();
+  const { answerCard, dismissCard } = useStore();
   const [custom, setCustom] = useState("");
+  const [pending, setPending] = useState(false);
   const card = message.card;
   if (!card || card.dismissed) return null;
 
-  const answer = (text: string) => {
-    if (!text.trim()) return;
-    dispatch({ type: "answerCard", botId, messageId: message.id, answer: text.trim() });
+  const answer = async (text: string) => {
+    if (!text.trim() || pending) return;
+    setPending(true);
+    try {
+      await answerCard({ botId, messageId: message.id, answer: text.trim() });
+    } catch {
+      // The store keeps the card unresolved and presents the error banner.
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const dismiss = async () => {
+    if (pending) return;
+    setPending(true);
+    try {
+      await dismissCard({ botId, messageId: message.id });
+    } catch {
+      // The host did not confirm dismissal; keep Needs You visible.
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -30,12 +50,14 @@ export function OptionCard({
           <div className="mt-0.5 text-[14px] text-ink-secondary">
             {card.subtitle}
           </div>
+          {card.tool && <div className="mt-1 font-mono text-[11px] text-ink-secondary">{card.tool}</div>}
         </div>
         <button
-          onClick={() =>
-            dispatch({ type: "dismissCard", botId, messageId: message.id })
-          }
+          type="button"
+          onClick={() => void dismiss()}
+          disabled={pending}
           className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
+          aria-label="Dismiss request"
         >
           <X size={16} />
         </button>
@@ -45,8 +67,8 @@ export function OptionCard({
         {card.options.map((opt, i) => (
           <button
             key={opt}
-            disabled={!!card.answered}
-            onClick={() => answer(opt)}
+            disabled={!!card.answered || pending}
+            onClick={() => void answer(opt)}
             className={cn(
               "flex w-full items-center gap-3 px-3 py-3 text-left text-[15px] text-ink",
               i > 0 && "border-t border-hairline/40",
@@ -63,11 +85,14 @@ export function OptionCard({
         ))}
       </div>
 
-      {!card.answered && (
+      {!card.answered && card.requestType !== "permission" && (
         <input
           value={custom}
           onChange={(e) => setCustom(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && answer(custom)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.nativeEvent.isComposing) void answer(custom);
+          }}
+          disabled={pending}
           placeholder="Type your own answer"
           className="mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:outline-none focus:border-hairline"
         />

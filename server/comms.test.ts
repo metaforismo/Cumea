@@ -162,6 +162,9 @@ posixOnly("comms e2e (fake ACP fleet)", () => {
       // visibility: A's thread shows the outbound ask as an activity note
       const note = askerBot.messages.find((m: any) => m.kind === "activity" && m.tool?.name?.startsWith("asked @Helper"));
       expect(note).toBeTruthy();
+      const handoff = askerBot.messages.find((m: any) => m.kind === "handoff" && m.handoff?.toName === "Helper");
+      expect(handoff?.handoff).toMatchObject({ status: "completed" });
+      expect(handoff?.handoff.reply).toContain("hello from fake acp");
 
       // B's thread received the attributed message and ran a real turn
       const helperBot = (await api("GET", "/api/bots")).body.bots.find((b: any) => b.id === helper.id);
@@ -169,6 +172,11 @@ posixOnly("comms e2e (fake ACP fleet)", () => {
       expect(inbound.text).toContain("[Message from @Asker");
       expect(inbound.text).toContain("ping from fake");
       expect(helperBot.busy).toBeFalsy();
+
+      const work = await api("GET", "/api/work");
+      expect(work.body.workspace.tasks.some((task: any) => task.botId === asker.id && task.status === "completed")).toBe(true);
+      expect(work.body.workspace.tasks.some((task: any) => task.botId === helper.id && task.source === "handoff")).toBe(true);
+      expect(work.body.workspace.runs.some((run: any) => run.steps.some((step: any) => step.kind === "handoff"))).toBe(true);
     },
     40_000,
   );

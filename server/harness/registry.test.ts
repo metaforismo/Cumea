@@ -17,6 +17,8 @@ describe("ProviderRegistry", () => {
     expect(live!.driverKind).toBe("fake");
     expect(live!.displayName).toBe("Bot A");
     expect(registry.instances()).toHaveLength(1);
+    const [described] = await registry.describe();
+    expect(described.capabilities).toEqual({ sessionModelSwitch: "unsupported" });
   });
 
   it("uses defaultConfig when the entry has no config", async () => {
@@ -38,6 +40,7 @@ describe("ProviderRegistry", () => {
     expect(described.snapshot.reason).toContain("from-the-future");
     expect(described.displayName).toBe("Tomorrow");
     expect(described.models.options).toHaveLength(0);
+    expect(described.capabilities).toEqual({ sessionModelSwitch: "unsupported" });
   });
 
   it("downgrades a config-decode failure to a shadow with the error as reason", async () => {

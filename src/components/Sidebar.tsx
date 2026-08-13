@@ -1,25 +1,30 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Bell,
   BellDot,
   ClipboardCopy,
   Copy,
   EyeOff,
+  Folder,
   FolderPlus,
+  Loader2,
   Pencil,
   Pin,
   PinOff,
   Plus,
   Search,
   Settings,
-  Puzzle,
   Trash2,
 } from "lucide-react";
-import { useStore, formatTime, type Bot } from "@/state/store";
+import { api, useStore, formatTime, type Bot } from "@/state/store";
 import { CumeaAvatar, InitialsAvatar } from "./Avatar";
 import { expressionForBot } from "@/lib/mascot";
+import { avatarForBot, avatarStateForBot } from "@/lib/mote";
 import { cn } from "@/lib/cn";
 
-const isElectron = navigator.userAgent.includes("Electron");
+const electronPlatform = window.cumea?.platform;
+const isElectron = Boolean(electronPlatform);
+const isMacElectron = electronPlatform === "darwin";
 
 /** "Ada Lovelace" → "AL", "ada" → "A", "you@x.dev" → "Y", unset → "?" */
 function profileInitials(profile?: { name?: string; email?: string }): string {
@@ -51,7 +56,17 @@ interface MenuState {
   y: number;
 }
 
-function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => void }) {
+function BotContextMenu({
+  menu,
+  onClose,
+  onMove,
+  onDelete,
+}: {
+  menu: MenuState;
+  onClose: () => void;
+  onMove: (botId: string) => void;
+  onDelete: (botId: string) => void;
+}) {
   const { state, dispatch } = useStore();
   const bot = state.bots.find((b) => b.id === menu.botId);
 
@@ -113,10 +128,7 @@ function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => voi
           bot.pinned ? "Unpin" : "Pin",
           () => dispatch({ type: "updateBot", botId: bot.id, patch: { pinned: !bot.pinned } }),
         ),
-        item(<FolderPlus size={16} className="text-ink-secondary" />, "Move to new section", undefined, {
-          disabled: true,
-          hint: "Coming soon",
-        }),
+        item(<FolderPlus size={16} className="text-ink-secondary" />, "Move to section", () => onMove(bot.id)),
         item(<BellDot size={16} className="text-ink-secondary" />, "Mark as Unread", () =>
           dispatch({ type: "markUnread", botId: bot.id }),
         ),
@@ -136,10 +148,176 @@ function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => voi
         item(<EyeOff size={16} className="text-ink-secondary" />, "Hide from sidebar", () =>
           dispatch({ type: "updateBot", botId: bot.id, patch: { hidden: true } }),
         ),
-        item(<Trash2 size={16} />, "Delete", () => dispatch({ type: "deleteBot", botId: bot.id }), {
+        item(<Trash2 size={16} />, "Delete", () => onDelete(bot.id), {
           danger: true,
         }),
       ]}
+    </div>
+  );
+}
+
+function DeleteBotDialog({ botId, onClose }: { botId: string; onClose: () => void }) {
+  const { state, deleteBot } = useStore();
+  const bot = state.bots.find((candidate) => candidate.id === botId);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, []);
+
+  if (!bot) return null;
+  const titleId = `delete-bot-title-${bot.id}`;
+  const impactId = `delete-bot-impact-${bot.id}`;
+
+  const confirmDelete = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteBot(bot.id);
+      onClose();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <dialog
+      ref={dialogRef}
+      role="alertdialog"
+      aria-labelledby={titleId}
+      aria-describedby={impactId}
+      aria-busy={deleting}
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!deleting) onClose();
+      }}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !deleting) onClose();
+      }}
+      className="m-auto w-[calc(100%-2.5rem)] max-w-md border-0 bg-transparent p-0 text-left backdrop:bg-black/70"
+    >
+      <div className="rounded-2xl border border-hairline/60 bg-panel p-5 text-ink shadow-2xl shadow-black/70">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-danger/12 text-danger">
+            <Trash2 size={18} aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <h2 id={titleId} className="text-[16px] font-semibold">
+              Delete “{bot.name}”?
+            </h2>
+            <p id={impactId} className="mt-1.5 text-[13px] leading-relaxed text-ink-secondary">
+              This permanently deletes the conversation, uploaded files, routines, and task and run history for this bot.
+              {bot.busy ? " Its current work will be stopped." : ""} This cannot be undone.
+            </p>
+          </div>
+        </div>
+
+        {error && (
+          <div role="alert" className="mt-4 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">
+            Deletion didn’t complete, so {bot.name} remains available to retry. {error}
+          </div>
+        )}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            autoFocus
+            disabled={deleting}
+            onClick={onClose}
+            className="rounded-lg px-3.5 py-2 text-[13px] font-medium text-ink hover:bg-raised disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={deleting}
+            onClick={() => void confirmDelete()}
+            className="flex min-w-28 items-center justify-center gap-2 rounded-lg bg-danger px-3.5 py-2 text-[13px] font-semibold text-white hover:brightness-110 disabled:cursor-wait disabled:opacity-65"
+          >
+            {deleting && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+            {deleting ? "Deleting…" : `Delete ${bot.name}`}
+          </button>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
+function MoveSectionDialog({ botId, onClose }: { botId: string; onClose: () => void }) {
+  const { state, dispatch } = useStore();
+  const bot = state.bots.find((candidate) => candidate.id === botId);
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  if (!bot) return null;
+
+  const move = (sectionId: string | null) => {
+    dispatch({ type: "updateBot", botId, patch: { sectionId } });
+    onClose();
+  };
+  const create = async () => {
+    if (!name.trim()) return;
+    try {
+      const { section } = await api("/api/sections", {
+        method: "POST",
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      move(section.id);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-5" onMouseDown={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Move ${bot.name} to section`}
+        className="w-full max-w-sm rounded-2xl border border-hairline/50 bg-panel p-4 shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="mb-3 text-[15px] font-semibold text-ink">Move {bot.name}</div>
+        <div className="max-h-52 space-y-1 overflow-y-auto">
+          <button
+            onClick={() => move(null)}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[14px] text-ink hover:bg-raised"
+          >
+            <Folder size={15} className="text-ink-secondary" /> No section
+          </button>
+          {state.workspace.sections.map((section) => (
+            <button
+              key={section.id}
+              onClick={() => move(section.id)}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[14px] text-ink hover:bg-raised"
+            >
+              <Folder size={15} className="text-ink-secondary" /> {section.name}
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 flex gap-2 border-t border-hairline/40 pt-3">
+          <input
+            autoFocus
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && void create()}
+            placeholder="New section"
+            className="min-w-0 flex-1 rounded-lg bg-inset px-3 py-2 text-[13px] text-ink outline-none ring-accent-border focus:ring-1"
+          />
+          <button onClick={() => void create()} className="rounded-lg bg-ink px-3 py-2 text-[13px] font-medium text-app">
+            Create
+          </button>
+        </div>
+        {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
+      </div>
     </div>
   );
 }
@@ -162,11 +340,14 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
       )}
     >
       <CumeaAvatar
-        color={bot.color}
+        avatar={avatarForBot(bot)}
         expression={expressionForBot(bot)}
         size={44}
         motion={mascotMotion?.kind ?? "none"}
         motionKey={mascotMotion?.nonce ?? 0}
+        state={avatarStateForBot(bot)}
+        label={`${bot.name} avatar`}
+        ambient={selected}
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
@@ -196,35 +377,86 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
 export function Sidebar() {
   const { state, dispatch } = useStore();
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [moveBotId, setMoveBotId] = useState<string | null>(null);
+  const [deleteBotId, setDeleteBotId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  const visibleBots = state.bots
-    .filter((b) => !b.hidden)
-    .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, []);
+
+  const visibleBots = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return state.bots
+      .filter((bot) => !bot.hidden)
+      .filter((bot) => !needle || `${bot.name} ${bot.title} ${bot.description} ${preview(bot)}`.toLowerCase().includes(needle))
+      .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
+  }, [query, state.bots]);
+  const groups = [
+    ...state.workspace.sections.map((section) => ({
+      id: section.id,
+      name: section.name,
+      bots: visibleBots.filter((bot) => bot.sectionId === section.id),
+    })),
+    { id: "unsectioned", name: state.workspace.sections.length ? "Bots" : "", bots: visibleBots.filter((bot) => !bot.sectionId) },
+  ].filter((group) => group.bots.length > 0);
+  const attentionCount = state.bots.reduce(
+    (count, bot) => count + bot.messages.filter((message) => message.kind === "options" && message.card && !message.card.answered && !message.card.dismissed).length,
+    0,
+  );
+  const attentionLabel = attentionCount === 0
+    ? "Needs you, no pending items"
+    : `Needs you, ${attentionCount} pending ${attentionCount === 1 ? "item" : "items"}`;
+  const titlebarStyle = isElectron
+    ? ({ WebkitAppRegion: "drag" } as React.CSSProperties)
+    : undefined;
+  const titlebarActionsStyle = isElectron
+    ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties)
+    : undefined;
 
   return (
     <aside className="flex h-full w-[320px] shrink-0 flex-col border-r border-hairline/40 bg-panel">
-      {/* Titlebar: real traffic lights in Electron, faux ones in the browser */}
+      {/* Electron owns the macOS traffic lights. The browser gets ordinary web chrome. */}
       <div
         className="flex items-center justify-between px-4 pt-3.5 pb-1"
-        style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
+        style={titlebarStyle}
       >
-        {isElectron ? (
-          <div className="w-14" />
-        ) : (
-          <div className="flex items-center gap-2">
-            <span className="size-3 rounded-full bg-[#ff5f57]" />
-            <span className="size-3 rounded-full bg-[#febc2e]" />
-            <span className="size-3 rounded-full bg-[#28c840]" />
-          </div>
-        )}
-        <button
-          onClick={() => dispatch({ type: "newBot" })}
-          className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
-          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-          title="New bot"
-        >
-          <Plus size={20} strokeWidth={2} />
-        </button>
+        {isMacElectron ? <div className="w-14 shrink-0" aria-hidden="true" /> : <span aria-hidden="true" />}
+        <div className="flex items-center gap-1" style={titlebarActionsStyle}>
+          <button
+            onClick={() => dispatch({ type: "toggleWork", open: true, tab: "attention" })}
+            className="relative rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+            aria-label={attentionLabel}
+            aria-expanded={state.workOpen && state.workTab === "attention"}
+            title={attentionLabel}
+          >
+            <Bell size={18} strokeWidth={2} />
+            {attentionCount > 0 && (
+              <span
+                aria-hidden="true"
+                className="absolute -right-1 -top-1 min-w-4 rounded-full bg-danger px-1 text-center text-[9px] font-semibold leading-4 text-white"
+              >
+                {attentionCount > 99 ? "99+" : attentionCount}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => dispatch({ type: "newBot" })}
+            className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+            aria-label="New bot"
+            title="New bot"
+          >
+            <Plus size={20} strokeWidth={2} />
+          </button>
+        </div>
       </div>
 
       {/* Search */}
@@ -232,30 +464,36 @@ export function Sidebar() {
         <div className="flex items-center gap-2 rounded-lg bg-raised/70 px-3 py-2">
           <Search size={16} className="text-ink-secondary" />
           <input
+            ref={searchRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
             placeholder="Search"
+            aria-label="Search bots"
             className="w-full bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
           />
+          <span className="text-[10px] text-ink-secondary">⌘K</span>
         </div>
       </div>
 
       {/* Bot list */}
       <div className="flex-1 overflow-y-auto px-2">
         <div className="flex flex-col gap-0.5">
-          {visibleBots.map((b) => (
-            <BotListItem key={b.id} bot={b} onMenu={setMenu} />
+          {groups.map((group) => (
+            <div key={group.id} className="mb-2">
+              {group.name && (
+                <div className="flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-secondary">
+                  <Folder size={12} /> {group.name}
+                </div>
+              )}
+              {group.bots.map((bot) => <BotListItem key={bot.id} bot={bot} onMenu={setMenu} />)}
+            </div>
           ))}
+          {!groups.length && <div className="px-4 py-8 text-center text-[13px] text-ink-secondary">No matching bots</div>}
         </div>
       </div>
 
       {/* Footer */}
       <div className="px-3 pb-3 pt-2">
-        <button
-          onClick={() => dispatch({ type: "togglePlugins", open: true })}
-          className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"
-        >
-          <Puzzle size={20} className="text-ink-secondary" />
-          <span className="text-[14px] text-ink">Plugins</span>
-        </button>
         <div className="flex items-center">
           <button
             onClick={() => dispatch({ type: "toggleAppSettings" })}
@@ -276,7 +514,16 @@ export function Sidebar() {
         </div>
       </div>
 
-      {menu && <BotContextMenu menu={menu} onClose={() => setMenu(null)} />}
+      {menu && (
+        <BotContextMenu
+          menu={menu}
+          onClose={() => setMenu(null)}
+          onMove={setMoveBotId}
+          onDelete={setDeleteBotId}
+        />
+      )}
+      {moveBotId && <MoveSectionDialog botId={moveBotId} onClose={() => setMoveBotId(null)} />}
+      {deleteBotId && <DeleteBotDialog botId={deleteBotId} onClose={() => setDeleteBotId(null)} />}
     </aside>
   );
 }

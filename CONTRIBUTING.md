@@ -107,7 +107,7 @@ responses or events, no baking them into argv where another local process could 
 
 ## Before you open the PR
 
-- [ ] `pnpm typecheck`, `pnpm test`, and `pnpm identity:check` pass
+- [ ] `pnpm typecheck` and `pnpm test` pass
 - [ ] New server behavior has a test; driver changes keep the contract tests green
 - [ ] If server source changed, `pnpm build:server` regenerated `dist-server/`; no unrelated generated or lockfile churn
 - [ ] macOS-only code is platform-gated; nothing breaks the packaged app

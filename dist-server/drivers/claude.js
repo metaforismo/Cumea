@@ -239,6 +239,10 @@ export const ClaudeDriver = {
                 mcpServers.computer = { ...turn.integrations.localComputer };
                 allowed.push("mcp__computer");
             }
+            if (turn.integrations?.agents) {
+                mcpServers.agents = { ...turn.integrations.agents };
+                allowed.push("mcp__agents");
+            }
             // permission broker: anything acceptEdits would silently deny becomes
             // an Allow/Deny card in chat, and the agent gets ask_user. Skipped in
             // bypassPermissions (fullAuto) — nothing would ever ask.
@@ -422,7 +426,13 @@ export const ClaudeDriver = {
             snapshot,
             adapter: {
                 provider: DRIVER_KIND,
-                capabilities: { sessionModelSwitch: "in-session" },
+                capabilities: {
+                    sessionModelSwitch: "in-session",
+                    agentsMcp: true,
+                    composioMcp: true,
+                    localComputerMcp: true,
+                    cloudComputerMcp: true,
+                },
                 sendTurn,
                 interruptTurn: async (threadId) => active.get(threadId)?.stop(),
                 respondToRequest: async (threadId, requestId, decision) => {

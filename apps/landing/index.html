@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f7f7f5" />
+    <meta
+      name="description"
+      content="Cumea is an MIT-licensed, self-hosted workspace for AI teammates. Run it on your Mac or your own VM, and bring the provider accounts you already use."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Cumea — AI teammates you actually own" />
+    <meta
+      property="og:description"
+      content="Agents, routines and a mobile companion on infrastructure you control."
+    />
+    <meta property="og:image" content="/icon-cumea.webp" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/webp" href="/icon-cumea.webp" />
+    <link rel="apple-touch-icon" href="/icon-cumea.webp" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <title>Cumea — AI teammates you actually own</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header" data-site-header>
+      <nav class="nav shell" aria-label="Primary navigation">
+        <a class="brand" href="#top" aria-label="Cumea home">
+          <img src="/icon-cumea.webp" alt="" width="36" height="36" />
+          <span>Cumea</span>
+        </a>
+
+        <div class="nav-links" aria-label="Page sections">
+          <a href="#product">Product</a>
+          <a href="#agents">Agents</a>
+          <a href="#self-host">Self-host</a>
+          <a href="#docs">Docs</a>
+          <a data-github-link href="https://github.com/metaforismo/Cumea">GitHub</a>
+        </div>
+
+        <div class="nav-actions">
+          <a
+            class="star-link"
+            data-github-link
+            href="https://github.com/metaforismo/Cumea"
+            aria-label="View Cumea on GitHub"
+          >
+            <span aria-hidden="true">★</span>
+            <span>Open source</span>
+          </a>
+          <a
+            class="button button-primary button-small"
+            data-download-link
+            data-disabled
+            href="#download"
+            aria-disabled="true"
+            aria-describedby="download-status"
+          >
+            Download for macOS
+          </a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero shell" id="top" aria-labelledby="hero-title">
+        <div class="hero-copy" data-reveal>
+          <p class="eyebrow"><span>MIT</span> Self-hosted, from desktop to your own VM</p>
+          <h1 id="hero-title">AI teammates<br />you actually own.</h1>
+          <p class="hero-lede">
+            Give an agent real work. Cumea runs where you choose, connects to provider accounts you
+            control, and comes back when the work is done—or when it needs you.
+          </p>
+
+          <div class="hero-actions">
+            <a
+              class="button button-primary"
+              data-download-link
+              data-disabled
+              href="#download"
+              aria-disabled="true"
+              aria-describedby="download-status"
+            >
+              Download for macOS
+            </a>
+            <a
+              class="button button-secondary"
+              data-github-link
+              href="https://github.com/metaforismo/Cumea"
+            >
+              View on GitHub <span aria-hidden="true">↗</span>
+            </a>
+          </div>
+          <p class="availability" id="download-status">
+            macOS release coming soon. Today, Cumea builds from source.
+          </p>
+
+          <div class="quickstart" aria-label="Build from source quickstart">
+            <code><span aria-hidden="true">$</span> git clone https://github.com/metaforismo/Cumea.git</code>
+            <button class="copy-button" type="button" data-copy-command aria-label="Copy clone command">
+              Copy
+            </button>
+          </div>
+        </div>
+
+        <div class="hero-mark" aria-hidden="true" data-reveal data-reveal-delay="1">
+          <span class="hero-mark-halo"></span>
+          <img src="/icon-cumea.webp" alt="" width="560" height="560" />
+        </div>
+      </section>
+
+      <section class="product-stage shell" id="product" aria-labelledby="product-title">
+        <div class="section-heading centered" data-reveal>
+          <p class="kicker">The workspace</p>
+          <h2 id="product-title">A team, not a tangle of chats.</h2>
+          <p>Each agent has one durable home. Work stays legible even when the team grows.</p>
+        </div>
+
+        <div class="app-frame" data-reveal data-reveal-delay="1" aria-label="Cumea desktop product preview">
+          <div class="app-titlebar">
+            <div class="window-controls" aria-hidden="true"><i></i><i></i><i></i></div>
+            <span>Desktop host preview</span>
+            <div class="titlebar-actions" aria-hidden="true"><span>Needs you</span><b>1</b><i>+</i></div>
+          </div>
+
+          <div class="app-layout">
+            <aside class="agent-sidebar" aria-label="Example agent list">
+              <div class="mock-search">Search agents</div>
+              <div class="agent-row is-active">
+                <span class="mote mote-aqua" aria-hidden="true"></span>
+                <span><strong>Chief of Staff</strong><small>Venue booked. Brief is ready.</small></span>
+                <time>Now</time>
+              </div>
+              <div class="agent-row">
+                <span class="mote mote-orange mote-round" aria-hidden="true"></span>
+                <span><strong>Sales Outbound</strong><small>36 drafts held for review.</small></span>
+                <time>3:10</time>
+              </div>
+              <div class="agent-row has-alert">
+                <span class="mote mote-violet mote-square" aria-hidden="true"></span>
+                <span><strong>Inbox Manager</strong><small>One reply needs your call.</small></span>
+                <time>12:11</time>
+              </div>
+              <div class="agent-row">
+                <span class="mote mote-blue mote-drop" aria-hidden="true"></span>
+                <span><strong>Bug Triage</strong><small>Reproduced 4 of 6 reports.</small></span>
+                <time>Mon</time>
+              </div>
+              <div class="agent-row">
+                <span class="mote mote-pink mote-cloud" aria-hidden="true"></span>
+                <span><strong>News Scout</strong><small>Asia AI signals are ready.</small></span>
+                <time>8:00</time>
+              </div>
+            </aside>
+
+            <article class="conversation" aria-label="Example conversation">
+              <header class="conversation-header">
+                <span class="mote mote-aqua mote-small" aria-hidden="true"></span>
+                <div><strong>Chief of Staff</strong><small><i></i> working</small></div>
+                <button type="button" tabindex="-1">Computer</button>
+              </header>
+              <div class="messages">
+                <p class="message bot-message">
+                  I pulled the open threads together. The venue is confirmed; the customer note is
+                  drafted and waiting for your read.
+                </p>
+                <p class="message user-message">Send the venue update. Hold the customer note.</p>
+                <div class="result-card">
+                  <p><b>Sent</b><span>Venue confirmation</span></p>
+                  <p><b>Held</b><span>Customer note in drafts</span></p>
+                  <p><b>Remembered</b><span>Quiet-account sends need approval</span></p>
+                </div>
+                <p class="message bot-message compact">Done. I’ll keep that boundary next time.</p>
+              </div>
+              <div class="composer" aria-hidden="true"><span>+</span><p>Message Chief of Staff</p><b>↑</b></div>
+            </article>
+
+            <aside class="work-panel" aria-label="Example work panel">
+              <div class="computer-preview">
+                <div class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+                <code>$ cumea status<br /><span>✓ 3 agents working</span><br /><span>• 1 waiting for you</span></code>
+              </div>
+              <small>Chief of Staff’s computer</small>
+
+              <div class="panel-heading"><strong>Routines</strong><span>+</span></div>
+              <div class="routine-row"><i></i><span><b>Morning briefing</b><small>Weekdays at 8:00 AM</small></span></div>
+              <div class="routine-row"><i></i><span><b>Account health</b><small>Mondays at 9:00 AM</small></span></div>
+
+              <div class="panel-heading"><strong>Signed in</strong></div>
+              <div class="tool-chips"><span>Gmail</span><span>Calendar</span><span>Linear</span></div>
+            </aside>
+          </div>
+        </div>
+        <p class="mockup-note">The traffic-light controls belong to the desktop preview. The browser UI uses native web chrome.</p>
+      </section>
+
+      <section class="agent-story section shell" id="agents" aria-labelledby="agents-title">
+        <div class="section-heading" data-reveal>
+          <p class="kicker">Agent-first</p>
+          <h2 id="agents-title">Tell the teammate.<br />Skip the prompt ceremony.</h2>
+          <p>
+            Cumea is organized around persistent agents with a role, durable transcript, files and
+            one ongoing conversation—not disposable threads you have to rebuild every morning.
+          </p>
+        </div>
+
+        <div class="handoff-visual" data-reveal data-reveal-delay="1" aria-label="Example of agents handing work to one another">
+          <div class="handoff-card card-chief">
+            <span class="mote mote-orange mote-round" aria-hidden="true"></span>
+            <span><strong>Chief of Staff</strong><small>Owns the outcome</small></span>
+          </div>
+          <div class="handoff-path" aria-hidden="true"><span></span></div>
+          <div class="specialists">
+            <div class="handoff-card"><span class="mote mote-blue mote-square" aria-hidden="true"></span><span><strong>Developer</strong><small>Builds the fix</small></span></div>
+            <div class="handoff-card"><span class="mote mote-pink mote-cloud" aria-hidden="true"></span><span><strong>Researcher</strong><small>Finds the signal</small></span></div>
+            <div class="handoff-card"><span class="mote mote-aqua mote-drop" aria-hidden="true"></span><span><strong>Inbox Manager</strong><small>Leaves drafts ready</small></span></div>
+          </div>
+          <p class="handoff-caption"><span aria-hidden="true">↳</span> Agents can hand off work without making you the router.</p>
+        </div>
+      </section>
+
+      <section class="feature-grid-section section shell" aria-labelledby="feature-title">
+        <div class="section-heading centered" data-reveal>
+          <p class="kicker">Quietly capable</p>
+          <h2 id="feature-title">Real work. Clear boundaries.</h2>
+          <p>Power lives behind a conversational surface, with judgement calls kept visible.</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature-card feature-needs" data-reveal>
+            <div class="feature-demo needs-demo" aria-hidden="true">
+              <span class="mote mote-violet mote-large mote-attentive"></span>
+              <div><span class="status-dot"></span><b>Needs you</b><small>Approve the final send?</small></div>
+              <button type="button" tabindex="-1">Review</button>
+            </div>
+            <p class="feature-label">Needs you</p>
+            <h3>Autonomy without ambiguity.</h3>
+            <p>Agents keep moving until a real decision belongs to you. Approvals live in one focused inbox.</p>
+          </article>
+
+          <article class="feature-card feature-routines" data-reveal data-reveal-delay="1">
+            <div class="feature-demo routine-demo" aria-hidden="true">
+              <div><span>Morning signal scan</span><b>08:00</b></div>
+              <div><span>Inbox sweep</span><b>Every 6h</b></div>
+              <div><span>Weekly account health</span><b>Mon</b></div>
+            </div>
+            <p class="feature-label">Routines</p>
+            <h3>Useful again tomorrow.</h3>
+            <p>Schedule repeatable work, pause it, run it now, and keep a bounded auditable run history.</p>
+          </article>
+
+          <article class="feature-card feature-computer" data-reveal>
+            <div class="feature-demo screen-demo" aria-hidden="true">
+              <div class="screen-top"><i></i><i></i><i></i></div>
+              <div class="screen-content"><span></span><span></span><span></span><b>Working · checking account notes</b></div>
+            </div>
+            <p class="feature-label">Computer preview</p>
+            <h3>See where the work lands.</h3>
+            <p>Watch the desktop host when needed. Remote mobile preview is read-only and off by default.</p>
+          </article>
+
+          <article class="feature-card feature-mobile" data-reveal data-reveal-delay="1">
+            <div class="feature-demo phone-demo" aria-hidden="true">
+              <div class="phone-top"><span>C</span><b>⌕</b><b>+</b></div>
+              <div class="phone-agent"><span class="mote mote-pink mote-cloud mote-small"></span><p><b>News Scout</b><small>7 signals ready to read</small></p><time>8:01</time></div>
+              <div class="phone-agent"><span class="mote mote-orange mote-round mote-small"></span><p><b>Chief of Staff</b><small>Venue update sent</small></p><time>Now</time></div>
+              <div class="phone-agent"><span class="mote mote-violet mote-square mote-small"></span><p><b>Developer</b><small>Waiting on one decision</small></p><i></i></div>
+            </div>
+            <p class="feature-label">Mobile companion</p>
+            <h3>Your agents, from your pocket.</h3>
+            <p>Pair securely, open on the agent list, reply, stop work and resolve approvals from iOS or Android.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="host-section section" id="self-host" aria-labelledby="host-title">
+        <div class="shell host-grid">
+          <div class="host-copy" data-reveal>
+            <p class="kicker">Bring your own host</p>
+            <h2 id="host-title">Your machine.<br />Your provider accounts.<br />Your rules.</h2>
+            <p>
+              Run Cumea on this Mac, or keep it online on a VM you control. Cumea does not provide a
+              managed cloud computer, and it does not proxy your credentials through a Cumea service.
+            </p>
+            <a class="text-link" href="https://github.com/metaforismo/Cumea/blob/main/docs/self-hosted-mobile.md" data-docs-link>
+              Read the self-host guide <span aria-hidden="true">→</span>
+            </a>
+          </div>
+
+          <div class="host-stack" data-reveal data-reveal-delay="1">
+            <article>
+              <span>01</span>
+              <div><h3>Choose the host</h3><p>Your desktop for on-demand work, or your authenticated VM for always-on routines.</p></div>
+            </article>
+            <article>
+              <span>02</span>
+              <div><h3>Connect the providers you use</h3><p>Claude, Codex, Grok and Gemini adapters share one driver contract; capabilities stay explicit.</p></div>
+            </article>
+            <article>
+              <span>03</span>
+              <div><h3>Pair the companion</h3><p>A short-lived, one-use secret enrolls mobile. Device tokens can be revoked from the trusted host.</p></div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="security-section section shell" aria-labelledby="security-title">
+        <div class="security-card" data-reveal>
+          <div class="security-copy">
+            <p class="kicker">Security by boundary</p>
+            <h2 id="security-title">Private by default,<br />remote by choice.</h2>
+            <p>
+              The local harness stays on loopback. Remote access is a separate, opt-in listener that
+              requires HTTPS. Mobile receives a narrowed, authenticated event stream—not provider
+              system prompts, internal reasoning, provider-native errors, raw frames or configuration secrets.
+            </p>
+            <div class="security-links">
+              <a href="https://github.com/metaforismo/Cumea/blob/main/SECURITY.md" data-security-link>Security model <span aria-hidden="true">↗</span></a>
+              <a href="https://github.com/metaforismo/Cumea" data-github-link>Inspect the source <span aria-hidden="true">↗</span></a>
+            </div>
+          </div>
+          <dl class="security-list">
+            <div><dt>No telemetry SDK</dt><dd>Nothing phones home to Cumea.</dd></div>
+            <div><dt>Hashed device tokens</dt><dd>The host never stores bearer tokens in plaintext.</dd></div>
+            <div><dt>Revocable access</dt><dd>Trusted devices remain visible from the desktop.</dd></div>
+            <div><dt>MIT licensed</dt><dd>Audit it, fork it, and make it yours.</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="source-section section shell" id="docs" aria-labelledby="source-title">
+        <div class="source-card" data-reveal>
+          <div>
+            <p class="kicker">Start from source</p>
+            <h2 id="source-title">The honest download<br />is the repository, for now.</h2>
+            <p>There is no signed, notarized release yet. The current path is transparent and reproducible.</p>
+          </div>
+          <ol class="source-steps">
+            <li><span>1</span><code>git clone https://github.com/metaforismo/Cumea.git</code></li>
+            <li><span>2</span><code>cd Cumea &amp;&amp; pnpm install</code></li>
+            <li><span>3</span><code>pnpm dev:server</code><small>Terminal one</small></li>
+            <li><span>4</span><code>pnpm dev</code><small>Terminal two</small></li>
+          </ol>
+          <div class="source-actions">
+            <a class="button button-light" href="https://github.com/metaforismo/Cumea#run-from-source" data-docs-link>Read the docs</a>
+            <a class="button button-ghost" href="https://github.com/metaforismo/Cumea" data-github-link>View the repository</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="final-cta shell" id="download" aria-labelledby="cta-title">
+        <img src="/icon-cumea.webp" alt="" width="116" height="116" data-reveal />
+        <div data-reveal data-reveal-delay="1">
+          <p class="kicker">A council of agents. One clear voice.</p>
+          <h2 id="cta-title">Build your first teammate.</h2>
+          <p>Open source, self-hosted, and early. Bring a machine and a provider account you trust.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/metaforismo/Cumea" data-github-link>Build from source</a>
+            <a class="button button-secondary" href="https://github.com/metaforismo/Cumea/issues" data-issues-link>Follow the roadmap</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="#top"><img src="/icon-cumea.webp" alt="" width="32" height="32" /><span>Cumea</span></a>
+          <p>Open-source AI teammates on infrastructure you control.</p>
+        </div>
+        <div class="footer-links">
+          <div><strong>Product</strong><a href="#agents">Agents</a><a href="#self-host">Self-host</a><a href="#product">Desktop</a></div>
+          <div><strong>Project</strong><a data-github-link href="https://github.com/metaforismo/Cumea">GitHub</a><a data-docs-link href="https://github.com/metaforismo/Cumea#run-from-source">Docs</a><a data-issues-link href="https://github.com/metaforismo/Cumea/issues">Issues</a></div>
+          <div><strong>Trust</strong><a data-security-link href="https://github.com/metaforismo/Cumea/blob/main/SECURITY.md">Security</a><a href="https://github.com/metaforismo/Cumea/blob/main/LICENSE">MIT license</a><a href="https://github.com/metaforismo/Cumea/blob/main/THIRD_PARTY_NOTICES.md">Credits</a></div>
+        </div>
+      </div>
+      <div class="shell footer-base">
+        <p>Built from OpenMausBot. Avatar language adapted from Mote Studio. See repository notices for attribution.</p>
+        <p>© <span data-year></span> Cumea contributors.</p>
+      </div>
+    </footer>
+
+    <div class="copy-toast" role="status" aria-live="polite" data-copy-toast>Clone command copied</div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

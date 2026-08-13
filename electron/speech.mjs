@@ -28,6 +28,10 @@ function ensureBuilt() {
 
 export function startSpeech(win) {
   stopSpeech();
+  if (process.platform !== "darwin") {
+    if (!win.isDestroyed()) win.webContents.send("speech:end", { code: 1 });
+    return;
+  }
   ensureBuilt();
   const proc = spawn(BIN, [], { stdio: ["ignore", "pipe", "pipe"] });
   child = proc;

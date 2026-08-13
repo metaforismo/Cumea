@@ -23,7 +23,14 @@ if (argv.includes("--version")) {
   process.exit(0);
 }
 if (process.env.FAKE_ACP_DUMP) {
-  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: process.env }, null, 2));
+  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: process.env, calls: [] }, null, 2));
+}
+
+const calls: any[] = [];
+function dumpCall(msg: any) {
+  if (!process.env.FAKE_ACP_DUMP || !msg.method) return;
+  calls.push({ method: msg.method, params: msg.params });
+  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: process.env, calls }, null, 2));
 }
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
@@ -119,6 +126,7 @@ function handle(msg: any) {
     return;
   }
   if (!msg.method) return;
+  dumpCall(msg);
 
   switch (msg.method) {
     case "initialize": {

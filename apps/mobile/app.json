@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Cumea",
+    "slug": "cumea-mobile",
+    "version": "0.1.0",
+    "icon": "./assets/icon.png",
+    "platforms": ["ios", "android"],
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "icon": "./assets/icon.png",
+      "bundleIdentifier": "io.github.metaforismo.cumea.mobile"
+    },
+    "android": {
+      "package": "io.github.metaforismo.cumea.mobile",
+      "icon": "./assets/icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0a0a"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Cumea to scan a one-time pairing QR code from your own host.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true,
+          "faceIDPermission": "Allow Cumea to protect your host credentials."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@cumea/landing",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "typecheck": "node --check src/main.js"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "packageManager": "pnpm@10.33.0"
+}

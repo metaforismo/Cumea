@@ -28,6 +28,9 @@ it does not mean an upstream branch was merged without review.
 | [#30 Antigravity](https://github.com/milind-soni/OpenMausBot/pull/30) | Defer | Defaults to full-auto because the protocol lacks a headless consent hook. That does not meet Cumea's default consent boundary. |
 | [#22 AI Counsel](https://github.com/milind-soni/OpenMausBot/pull/22) | Optional plugin candidate | Large external/homelab coupling and turn-continuity limitations do not belong in the core fleet. |
 | [#31 morphing mascot](https://github.com/milind-soni/OpenMausBot/pull/31) | Defer | Polished work, but tightly coupled to the upstream identity while Cumea needs its own visual system. |
+| [#33 icon grid](https://github.com/milind-soni/OpenMausBot/pull/33) | Reimplemented independently | Cumea's supplied artwork is padded for native icon masks without copying upstream art. |
+| [#34 trial box TTL](https://github.com/milind-soni/OpenMausBot/pull/34), [#35 dictation locale](https://github.com/milind-soni/OpenMausBot/pull/35), [#36 connected-app prompt](https://github.com/milind-soni/OpenMausBot/pull/36), [#37 screen-frame gating](https://github.com/milind-soni/OpenMausBot/pull/37) | Reimplemented now | Small, bounded improvements that match Cumea's existing Box, speech, Composio, and computer-preview contracts. |
+| [#38 pasted images](https://github.com/milind-soni/OpenMausBot/pull/38), [#39 per-bot drafts](https://github.com/milind-soni/OpenMausBot/pull/39), [#40 multiline composer](https://github.com/milind-soni/OpenMausBot/pull/40) | Adapted now | Cumea reuses its own attachment pipeline, clears drafts on agent switches, guards IME composition, and supports Shift+Enter in an auto-growing composer. |
 | [#23 README diagram](https://github.com/milind-soni/OpenMausBot/pull/23) | Absorb concept | Documentation is being rewritten around Cumea rather than patching the upstream README. |
 | [#14 PATH detection](https://github.com/milind-soni/OpenMausBot/pull/14) | Superseded/selective | Much of the problem is already addressed by `env-path.ts`; remaining deterministic probe work can be added independently. |
 
@@ -43,8 +46,9 @@ it does not mean an upstream branch was merged without review.
 - **Not a default today:** Antigravity ([#26](https://github.com/milind-soni/OpenMausBot/issues/26))
   until its consent and authentication model is appropriate for a local agent workspace.
 
-This file records a time-bounded audit. Recheck upstream state and actual branch diffs before taking
-future work.
+This file records a time-bounded audit, refreshed on 2026-08-13 against upstream `main` at
+`8511f02557f19cf6ac1976d3115b08c0c4643754` and the open pull requests through #40. Recheck
+upstream state and actual branch diffs before taking future work.
 
 ## Dependency-update policy
 

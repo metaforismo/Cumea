@@ -1,0 +1,162 @@
+import type { AgentSummary, AttentionItem, ChatMessage, MobileSnapshot, RoutineSummary, ShapeId } from "@/host/types";
+
+const now = Date.now();
+const avatar = (shapeId: ShapeId, color: string) => ({
+  version: 1 as const,
+  kind: "mote" as const,
+  shapeId,
+  color,
+  motion: "playful" as const,
+});
+
+export const DEMO_AGENTS: AgentSummary[] = [
+  {
+    id: "demo-ea",
+    threadId: "thread-demo-ea",
+    name: "EA",
+    role: "Executive Assistant",
+    preview: "Got it — EA works.",
+    updatedAt: now - 2 * 60_000,
+    unread: true,
+    needsYou: false,
+    presence: "idle",
+    avatar: avatar("peak", "#d72879"),
+  },
+  {
+    id: "demo-content",
+    threadId: "thread-demo-content",
+    name: "Content Agent",
+    role: "Creates content",
+    preview: "Three launch drafts are ready for review.",
+    updatedAt: now - 21 * 60_000,
+    unread: false,
+    needsYou: true,
+    presence: "needs-you",
+    avatar: avatar("ripple", "#dc2944"),
+  },
+  {
+    id: "demo-chief",
+    threadId: "thread-demo-chief",
+    name: "Chief of Staff",
+    role: "My leader",
+    preview: "The weekly brief and open decisions are together.",
+    updatedAt: now - 33 * 60_000,
+    unread: false,
+    needsYou: false,
+    presence: "idle",
+    avatar: avatar("drop", "#f56a16"),
+  },
+  {
+    id: "demo-research",
+    threadId: "thread-demo-research",
+    name: "Research Agent",
+    role: "Research and synthesis",
+    preview: "Want me to hand the findings to Content Agent?",
+    updatedAt: now - 54 * 60_000,
+    unread: false,
+    needsYou: true,
+    presence: "needs-you",
+    avatar: avatar("soft", "#8b633d"),
+  },
+  {
+    id: "demo-developer",
+    threadId: "thread-demo-developer",
+    name: "Developer",
+    role: "Build apps and systems",
+    preview: "CI is green; the preview branch is ready.",
+    updatedAt: now - 71 * 60_000,
+    unread: false,
+    needsYou: false,
+    presence: "idle",
+    avatar: avatar("tile", "#2f8de3"),
+  },
+];
+
+export const DEMO_MESSAGES: Record<string, ChatMessage[]> = {
+  "demo-ea": [
+    {
+      id: "m-ea-1",
+      agentId: "demo-ea",
+      role: "agent",
+      kind: "text",
+      text: "I can triage your inbox, prepare meetings, and keep routines moving from your own Cumea host.",
+      createdAt: now - 70 * 60_000,
+      status: "done",
+    },
+    {
+      id: "m-ea-2",
+      agentId: "demo-ea",
+      role: "user",
+      kind: "text",
+      text: "Give me a short summary of today's open support threads.",
+      createdAt: now - 5 * 60_000,
+      status: "done",
+    },
+    {
+      id: "m-ea-3",
+      agentId: "demo-ea",
+      role: "agent",
+      kind: "text",
+      text: "Got it — EA works. Your real host will stream the answer here and keep provider credentials off this phone.",
+      createdAt: now - 2 * 60_000,
+      status: "done",
+    },
+  ],
+};
+
+export const DEMO_ATTENTION: AttentionItem[] = [
+  {
+    id: "attention-content",
+    requestId: "request-content",
+    agentId: "demo-content",
+    agentName: "Content Agent",
+    title: "Publish the launch thread?",
+    summary: "The agent prepared three posts and is waiting before anything leaves your account.",
+    choices: ["Always allow", "Allow once", "Never"],
+    requestType: "permission",
+    createdAt: now - 18 * 60_000,
+  },
+  {
+    id: "attention-research",
+    requestId: "request-research",
+    agentId: "demo-research",
+    agentName: "Research Agent",
+    title: "Hand findings to Content Agent?",
+    summary: "This shares the research bundle with another bot on the same user-owned host.",
+    choices: ["Allow once", "Never"],
+    requestType: "permission",
+    createdAt: now - 49 * 60_000,
+  },
+];
+
+export const DEMO_ROUTINES: RoutineSummary[] = [
+  {
+    id: "routine-brief",
+    agentId: "demo-chief",
+    agentName: "Chief of Staff",
+    name: "Morning briefing",
+    schedule: "Every weekday at 8:00 AM",
+    enabled: true,
+    nextRunAt: now + 16 * 60 * 60_000,
+    lastStatus: "completed",
+  },
+  {
+    id: "routine-inbox",
+    agentId: "demo-ea",
+    agentName: "EA",
+    name: "Inbox cleanup",
+    schedule: "Every 6 hours",
+    enabled: true,
+    nextRunAt: now + 4 * 60 * 60_000,
+    lastStatus: "completed",
+  },
+];
+
+export const DEMO_SNAPSHOT: MobileSnapshot = {
+  capabilities: { computerPreview: false },
+  profile: { name: "Cumea User" },
+  agents: DEMO_AGENTS,
+  attention: DEMO_ATTENTION,
+  routines: DEMO_ROUTINES,
+  serverTime: now,
+};

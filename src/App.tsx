@@ -9,6 +9,7 @@ import { SettingsPanel } from "@/components/SettingsPanel";
 import { PluginsPanel } from "@/components/PluginsPanel";
 import { ComputerPanel } from "@/components/ComputerPanel";
 import { AppSettingsPanel } from "@/components/AppSettingsPanel";
+import { WorkPanel } from "@/components/WorkPanel";
 
 function Shell() {
   const { state } = useStore();
@@ -34,6 +35,7 @@ function Shell() {
       {state.settingsOpen && bot && <SettingsPanel bot={bot} />}
       {state.computerOpen && bot && <ComputerPanel bot={bot} />}
       {state.appSettingsOpen && <AppSettingsPanel />}
+      {state.workOpen && <WorkPanel />}
       {state.pluginsOpen && <PluginsPanel />}
     </div>
   );

@@ -4,6 +4,7 @@
 // pure; everything async lives in the wrapped dispatch + SSE fold.
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -12,6 +13,8 @@ import {
   type ReactNode,
 } from "react";
 import type { CumeaColor, CumeaExpression, CumeaMotion } from "@/lib/mascot";
+import type { BotAvatarConfig } from "@/lib/mote";
+import { cardResponseDecision } from "./response-decision";
 
 export type { CumeaColor } from "@/lib/mascot";
 
@@ -23,14 +26,35 @@ export interface OptionCardData {
   dismissed?: boolean;
   /** Present when this card is a live provider ask (approval/question). */
   requestId?: string;
+  requestType?: "permission" | "question";
+  tool?: string;
+}
+
+export interface AttachmentRef {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
+export interface HandoffData {
+  fromBotId: string;
+  fromName: string;
+  toBotId: string;
+  toName: string;
+  prompt: string;
+  status: "requested" | "completed" | "failed";
+  reply?: string;
 }
 
 export interface Message {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen";
+  kind: "text" | "options" | "activity" | "screen" | "handoff";
   text?: string;
   card?: OptionCardData;
+  attachments?: AttachmentRef[];
+  handoff?: HandoffData;
   /** activity messages: tool name + outcome */
   tool?: { name: string; ok?: boolean };
   /** screen messages: a frame of the bot's computer (base64) */
@@ -53,6 +77,7 @@ export interface Bot {
   notifications: boolean;
   color: CumeaColor;
   mascotExpression?: CumeaExpression | null;
+  avatar?: BotAvatarConfig;
   unread: boolean;
   busy?: boolean;
   modelSelection: ModelSelection;
@@ -60,8 +85,103 @@ export interface Bot {
   computer?: "cloud" | "local" | "off";
   pinned?: boolean;
   hidden?: boolean;
+  sectionId?: string | null;
+  appsEnabled?: boolean;
+  collaborationEnabled?: boolean;
+  approvalPolicy?: "ask" | "allow" | "deny";
   messages: Message[];
 }
+
+export interface SectionRecord {
+  id: string;
+  name: string;
+  createdAt: number;
+}
+
+export interface RunStep {
+  id: string;
+  itemId?: string;
+  kind: "tool" | "approval" | "handoff";
+  title: string;
+  status: "running" | "needs_attention" | "completed" | "failed" | "denied";
+  startedAt: number;
+  completedAt?: number;
+}
+
+export interface RunArtifact {
+  id: string;
+  kind: "attachment" | "response" | "screen";
+  label: string;
+  attachmentId?: string;
+  messageId?: string;
+  mime?: string;
+  createdAt: number;
+}
+
+export interface TaskRecord {
+  id: string;
+  botId: string;
+  title: string;
+  prompt: string;
+  source: "message" | "routine" | "handoff";
+  sourceBotId?: string;
+  routineId?: string;
+  status: "queued" | "running" | "needs_attention" | "completed" | "failed" | "cancelled";
+  attachmentIds: string[];
+  latestRunId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RunRecord {
+  id: string;
+  taskId: string;
+  botId: string;
+  routineId?: string;
+  turnId?: string;
+  status: "running" | "needs_attention" | "completed" | "failed" | "cancelled";
+  steps: RunStep[];
+  artifacts: RunArtifact[];
+  startedAt: number;
+  completedAt?: number;
+  error?: string;
+}
+
+export type RoutineSchedule =
+  | { kind: "interval"; everyMinutes: number }
+  | { kind: "daily"; time: string; timezone: string }
+  | { kind: "weekly"; time: string; timezone: string; weekdays: number[] };
+
+export interface RoutineRecord {
+  id: string;
+  botId: string;
+  name: string;
+  prompt: string;
+  schedule: RoutineSchedule;
+  enabled: boolean;
+  nextRunAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  lastRunAt?: number;
+  lastStatus?: "running" | "completed" | "failed";
+  lastError?: string;
+}
+
+export interface WorkspaceSnapshot {
+  sections: SectionRecord[];
+  attachments: Array<AttachmentRef & { botId: string; threadId: string; createdAt: number }>;
+  tasks: TaskRecord[];
+  runs: RunRecord[];
+  routines: RoutineRecord[];
+}
+
+const EMPTY_WORKSPACE: WorkspaceSnapshot = {
+  sections: [],
+  attachments: [],
+  tasks: [],
+  runs: [],
+  routines: [],
+};
 
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
@@ -84,6 +204,13 @@ export interface InstanceInfo {
     version?: string | null;
   };
   models: { default: string; options: Array<{ id: string; label: string }> };
+  capabilities: {
+    sessionModelSwitch: "in-session" | "unsupported";
+    agentsMcp?: boolean;
+    composioMcp?: boolean;
+    localComputerMcp?: boolean;
+    cloudComputerMcp?: boolean;
+  };
 }
 
 interface AppState {
@@ -95,6 +222,9 @@ interface AppState {
   pluginsOpen: boolean;
   computerOpen: boolean;
   appSettingsOpen: boolean;
+  workOpen: boolean;
+  workTab: "attention" | "activity" | "routines" | "sections";
+  workspace: WorkspaceSnapshot;
   /** in-flight assistant text per threadId (content.delta fold) */
   streaming: Record<string, string>;
   /** latest live frame of a bot's computer, per botId */
@@ -114,13 +244,13 @@ type Action =
   | { type: "hydrate"; bots: Bot[] }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
+  | { type: "workspaceHydrated"; workspace: WorkspaceSnapshot }
   | { type: "select"; id: string }
-  | { type: "send"; botId: string; text: string }
-  | { type: "answerCard"; botId: string; messageId: string; answer: string }
-  | { type: "dismissCard"; botId: string; messageId: string }
+  | { type: "cardAnswered"; botId: string; messageId: string; answer: string }
+  | { type: "cardDismissed"; botId: string; messageId: string }
   | { type: "newBot" }
   | { type: "botAdded"; bot: Bot }
-  | { type: "deleteBot"; botId: string }
+  | { type: "botDeleted"; botId: string }
   | { type: "duplicateBot"; botId: string }
   | { type: "markUnread"; botId: string }
   | { type: "botPatched"; bot: Partial<Bot> & { id: string } }
@@ -138,6 +268,7 @@ type Action =
   | { type: "togglePlugins"; open?: boolean }
   | { type: "toggleComputer"; open?: boolean }
   | { type: "toggleAppSettings"; open?: boolean }
+  | { type: "toggleWork"; open?: boolean; tab?: "attention" | "activity" | "routines" | "sections" }
   | { type: "previewMascotMotion"; botId: string; kind: Exclude<CumeaMotion, "none"> }
   | {
       type: "updateBot";
@@ -145,7 +276,20 @@ type Action =
       patch: Partial<
         Pick<
           Bot,
-          "name" | "title" | "description" | "notifications" | "computer" | "color" | "mascotExpression" | "pinned" | "hidden"
+          | "name"
+          | "title"
+          | "description"
+          | "notifications"
+          | "computer"
+          | "color"
+          | "mascotExpression"
+          | "avatar"
+          | "pinned"
+          | "hidden"
+          | "sectionId"
+          | "appsEnabled"
+          | "collaborationEnabled"
+          | "approvalPolicy"
         >
       >;
     };
@@ -191,20 +335,23 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, instances: action.instances };
     case "configStatus":
       return { ...state, config: action.config };
+    case "workspaceHydrated":
+      return { ...state, workspace: action.workspace };
     case "select":
       return updateBot(
         withMascotMotion({ ...state, selectedId: action.id }, action.id, "switch"),
         action.id,
         (b) => ({ ...b, unread: false }),
       );
-    // optimistic card settle; the server's message.patch confirms it later
-    case "answerCard":
+    // These actions are only dispatched after the host accepts the response.
+    // The host's message.patch event remains the durable source of truth.
+    case "cardAnswered":
       return withMascotMotion(
         patchCard(state, action.botId, action.messageId, { answered: action.answer }),
         action.botId,
         "working",
       );
-    case "dismissCard":
+    case "cardDismissed":
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
     case "botAdded":
       return withMascotMotion({
@@ -212,11 +359,31 @@ function reducer(state: AppState, action: Action): AppState {
         bots: [action.bot, ...state.bots],
         selectedId: action.bot.id,
       }, action.bot.id, "arrive");
-    case "deleteBot": {
+    case "botDeleted": {
+      const deleted = state.bots.find((bot) => bot.id === action.botId);
       const bots = state.bots.filter((b) => b.id !== action.botId);
       const selectedId =
         state.selectedId === action.botId ? (bots.find((b) => !b.hidden)?.id ?? bots[0]?.id ?? "") : state.selectedId;
-      return { ...state, bots, selectedId };
+      const { [action.botId]: _screen, ...screens } = state.screens;
+      const { [action.botId]: _provisioning, ...provisioning } = state.provisioning;
+      const streaming = { ...state.streaming };
+      if (deleted) delete streaming[deleted.threadId];
+      return {
+        ...state,
+        bots,
+        selectedId,
+        screens,
+        provisioning,
+        streaming,
+        workspace: {
+          ...state.workspace,
+          attachments: state.workspace.attachments.filter((attachment) => attachment.botId !== action.botId),
+          tasks: state.workspace.tasks.filter((task) => task.botId !== action.botId),
+          runs: state.workspace.runs.filter((run) => run.botId !== action.botId),
+          routines: state.workspace.routines.filter((routine) => routine.botId !== action.botId),
+        },
+        mascotMotion: state.mascotMotion?.botId === action.botId ? null : state.mascotMotion,
+      };
     }
     case "markUnread":
       return updateBot(withMascotMotion(state, action.botId, "surprise"), action.botId, (b) => ({ ...b, unread: true }));
@@ -320,6 +487,7 @@ function reducer(state: AppState, action: Action): AppState {
         settingsOpen: open,
         computerOpen: open ? false : state.computerOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
+        workOpen: open ? false : state.workOpen,
       };
     }
     case "togglePlugins":
@@ -331,6 +499,7 @@ function reducer(state: AppState, action: Action): AppState {
         computerOpen: open,
         settingsOpen: open ? false : state.settingsOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
+        workOpen: open ? false : state.workOpen,
       };
     }
     case "toggleAppSettings": {
@@ -341,6 +510,18 @@ function reducer(state: AppState, action: Action): AppState {
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
+        workOpen: open ? false : state.workOpen,
+      };
+    }
+    case "toggleWork": {
+      const open = action.open ?? !state.workOpen;
+      return {
+        ...state,
+        workOpen: open,
+        workTab: action.tab ?? state.workTab,
+        settingsOpen: open ? false : state.settingsOpen,
+        computerOpen: open ? false : state.computerOpen,
+        appSettingsOpen: open ? false : state.appSettingsOpen,
       };
     }
     case "previewMascotMotion":
@@ -348,15 +529,13 @@ function reducer(state: AppState, action: Action): AppState {
     case "updateBot": {
       const mascotChanged =
         Object.prototype.hasOwnProperty.call(action.patch, "color") ||
-        Object.prototype.hasOwnProperty.call(action.patch, "mascotExpression");
+        Object.prototype.hasOwnProperty.call(action.patch, "mascotExpression") ||
+        Object.prototype.hasOwnProperty.call(action.patch, "avatar");
       const next = mascotChanged
         ? withMascotMotion(state, action.botId, "customize")
         : state;
       return updateBot(next, action.botId, (b) => ({ ...b, ...action.patch }));
     }
-    // handled entirely by the async wrapper
-    case "send":
-      return withMascotMotion(state, action.botId, "working");
     case "newBot":
     case "duplicateBot":
     case "interrupt":
@@ -373,6 +552,9 @@ const initialState: AppState = {
   pluginsOpen: false,
   computerOpen: false,
   appSettingsOpen: false,
+  workOpen: false,
+  workTab: "attention",
+  workspace: EMPTY_WORKSPACE,
   streaming: {},
   screens: {},
   provisioning: {},
@@ -392,9 +574,37 @@ export async function api(path: string, init?: RequestInit): Promise<any> {
   return body;
 }
 
+export async function uploadAttachment(
+  botId: string,
+  file: File,
+  options: { signal?: AbortSignal } = {},
+): Promise<AttachmentRef> {
+  const res = await fetch(`/api/bots/${botId}/attachments`, {
+    method: "POST",
+    headers: {
+      "content-type": file.type || "application/octet-stream",
+      "x-file-name": encodeURIComponent(file.name),
+    },
+    body: file,
+    signal: options.signal,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `${res.status} ${res.statusText}`);
+  return body.attachment as AttachmentRef;
+}
+
 const StoreContext = createContext<{
   state: AppState;
   dispatch: React.Dispatch<Action>;
+  sendMessage: (input: {
+    botId: string;
+    text: string;
+    attachments?: AttachmentRef[];
+    track?: boolean;
+  }) => Promise<void>;
+  answerCard: (input: { botId: string; messageId: string; answer: string }) => Promise<void>;
+  dismissCard: (input: { botId: string; messageId: string }) => Promise<void>;
+  deleteBot: (botId: string) => Promise<void>;
 } | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -404,66 +614,138 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // debounced PATCH per bot for text-field edits (name/title/description)
   const patchTimers = useRef(new Map<string, { timer: ReturnType<typeof setTimeout>; patch: Record<string, unknown> }>());
+  // A local DELETE receives an SSE tombstone before its HTTP response. Hold
+  // that event so a failed request never removes the bot from the desktop.
+  const pendingBotDeletes = useRef(new Map<string, string>());
+
+  const showError = useCallback((error: unknown) => {
+    rawDispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    setTimeout(() => rawDispatch({ type: "error", message: null }), 6000);
+  }, []);
+
+  const sendMessage = useCallback(async (input: {
+    botId: string;
+    text: string;
+    attachments?: AttachmentRef[];
+    track?: boolean;
+  }) => {
+    try {
+      await api(`/api/bots/${input.botId}/messages`, {
+        method: "POST",
+        body: JSON.stringify({
+          text: input.text,
+          attachmentIds: input.attachments?.map((attachment) => attachment.id) ?? [],
+          track: input.track,
+        }),
+      });
+      rawDispatch({ type: "previewMascotMotion", botId: input.botId, kind: "working" });
+    } catch (error) {
+      showError(error);
+      throw error;
+    }
+  }, [showError]);
+
+  const answerCard = useCallback(async (input: {
+    botId: string;
+    messageId: string;
+    answer: string;
+  }) => {
+    try {
+      const bot = stateRef.current.bots.find((candidate) => candidate.id === input.botId);
+      const card = bot?.messages.find((message) => message.id === input.messageId)?.card;
+      if (!card || card.answered || card.dismissed) {
+        throw new Error("This request is no longer available.");
+      }
+
+      if (card.requestId) {
+        const decision = cardResponseDecision(card.requestType, input.answer);
+        await api(`/api/bots/${input.botId}/respond`, {
+          method: "POST",
+          body: JSON.stringify({
+            requestId: card.requestId,
+            ...decision,
+          }),
+        });
+        rawDispatch({ type: "cardAnswered", ...input });
+        return;
+      }
+
+      await api(`/api/bots/${input.botId}/cards/${input.messageId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ answered: input.answer }),
+      });
+      rawDispatch({ type: "cardAnswered", ...input });
+
+      // Onboarding answers are also conversational turns. The card is already
+      // durably settled if this second request fails, so keep that host-confirmed
+      // state while still surfacing the delivery error.
+      await api(`/api/bots/${input.botId}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ text: input.answer, track: false }),
+      });
+    } catch (error) {
+      showError(error);
+      throw error;
+    }
+  }, [showError]);
+
+  const dismissCard = useCallback(async (input: { botId: string; messageId: string }) => {
+    try {
+      const bot = stateRef.current.bots.find((candidate) => candidate.id === input.botId);
+      const card = bot?.messages.find((message) => message.id === input.messageId)?.card;
+      if (!card || card.answered || card.dismissed) {
+        throw new Error("This request is no longer available.");
+      }
+
+      if (card.requestId) {
+        await api(`/api/bots/${input.botId}/respond`, {
+          method: "POST",
+          body: JSON.stringify({
+            requestId: card.requestId,
+            behavior: card.requestType === "permission" ? "deny" : "answer",
+            message: "Dismissed by user.",
+          }),
+        });
+      } else {
+        await api(`/api/bots/${input.botId}/cards/${input.messageId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ dismissed: true }),
+        });
+      }
+      rawDispatch({ type: "cardDismissed", ...input });
+    } catch (error) {
+      showError(error);
+      throw error;
+    }
+  }, [showError]);
+
+  const deleteBot = useCallback(async (botId: string) => {
+    if (pendingBotDeletes.current.has(botId)) return;
+    const operationId = crypto.randomUUID();
+    pendingBotDeletes.current.set(botId, operationId);
+    try {
+      await api(`/api/bots/${botId}`, {
+        method: "DELETE",
+        headers: { "x-cumea-operation-id": operationId },
+      });
+      const pendingPatch = patchTimers.current.get(botId);
+      if (pendingPatch) clearTimeout(pendingPatch.timer);
+      patchTimers.current.delete(botId);
+      rawDispatch({ type: "botDeleted", botId });
+    } catch (error) {
+      showError(error);
+      throw error;
+    } finally {
+      if (pendingBotDeletes.current.get(botId) === operationId) {
+        pendingBotDeletes.current.delete(botId);
+      }
+    }
+  }, [showError]);
 
   const dispatch = useMemo(() => {
-    const showError = (e: unknown) => {
-      rawDispatch({ type: "error", message: e instanceof Error ? e.message : String(e) });
-      setTimeout(() => rawDispatch({ type: "error", message: null }), 6000);
-    };
-    // fire-and-forget card persistence; the route is optional server-side
-    const persistCard = (botId: string, messageId: string, patch: Partial<OptionCardData>) => {
-      fetch(`/api/bots/${botId}/cards/${messageId}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(patch),
-      }).catch(() => {});
-    };
-
     const wrapped: React.Dispatch<Action> = (action) => {
       rawDispatch(action);
       switch (action.type) {
-        case "send":
-          api(`/api/bots/${action.botId}/messages`, {
-            method: "POST",
-            body: JSON.stringify({ text: action.text }),
-          }).catch(showError);
-          break;
-        case "answerCard": {
-          const bot = stateRef.current.bots.find((b) => b.id === action.botId);
-          const card = bot?.messages.find((m) => m.id === action.messageId)?.card;
-          if (card?.requestId) {
-            const behavior =
-              action.answer === "Allow" ? "allow" : action.answer === "Deny" ? "deny" : "answer";
-            api(`/api/bots/${action.botId}/respond`, {
-              method: "POST",
-              body: JSON.stringify({
-                requestId: card.requestId,
-                behavior,
-                message: behavior === "answer" ? action.answer : undefined,
-              }),
-            }).catch(showError);
-          } else {
-            persistCard(action.botId, action.messageId, { answered: action.answer });
-            api(`/api/bots/${action.botId}/messages`, {
-              method: "POST",
-              body: JSON.stringify({ text: action.answer }),
-            }).catch(showError);
-          }
-          break;
-        }
-        case "dismissCard": {
-          const bot = stateRef.current.bots.find((b) => b.id === action.botId);
-          const card = bot?.messages.find((m) => m.id === action.messageId)?.card;
-          if (card?.requestId) {
-            api(`/api/bots/${action.botId}/respond`, {
-              method: "POST",
-              body: JSON.stringify({ requestId: card.requestId, behavior: "deny", message: "Dismissed by user." }),
-            }).catch(() => {});
-          } else {
-            persistCard(action.botId, action.messageId, { dismissed: true });
-          }
-          break;
-        }
         case "newBot":
           api("/api/bots", { method: "POST" })
             .then(({ bot }) => rawDispatch({ type: "botAdded", bot }))
@@ -482,7 +764,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   description: source.description,
                   notifications: source.notifications,
                   modelSelection: source.modelSelection,
+                  avatar: source.avatar,
                   ...(source.computer ? { computer: source.computer } : {}),
+                  sectionId: source.sectionId ?? null,
+                  appsEnabled: source.appsEnabled ?? true,
+                  collaborationEnabled: source.collaborationEnabled ?? true,
+                  approvalPolicy: source.approvalPolicy ?? "ask",
                 }),
               }).then(({ bot: patched }) =>
                 rawDispatch({ type: "botAdded", bot: { ...bot, ...patched, messages: bot.messages } }),
@@ -491,9 +778,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             .catch(showError);
           break;
         }
-        case "deleteBot":
-          api(`/api/bots/${action.botId}`, { method: "DELETE" }).catch(showError);
-          break;
         case "markUnread":
           api(`/api/bots/${action.botId}`, { method: "PATCH", body: JSON.stringify({ unread: true }) }).catch(
             () => {},
@@ -534,7 +818,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     return wrapped;
-  }, []);
+  }, [showError]);
 
   // ── initial load + SSE fold ──────────────────────────────────────────
   useEffect(() => {
@@ -548,6 +832,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .catch(() => {});
       api("/api/config")
         .then((config) => alive && rawDispatch({ type: "configStatus", config }))
+        .catch(() => {});
+      api("/api/work")
+        .then(({ workspace }) => alive && rawDispatch({ type: "workspaceHydrated", workspace }))
         .catch(() => {});
     };
     loadAll();
@@ -601,8 +888,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "computer":
           rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });
           break;
+        case "workspace":
+          rawDispatch({ type: "workspaceHydrated", workspace: frame.workspace });
+          break;
         case "bot.deleted":
-          rawDispatch({ type: "deleteBot", botId: frame.botId });
+          if (
+            typeof frame.operationId !== "string"
+            || pendingBotDeletes.current.get(frame.botId) !== frame.operationId
+          ) {
+            rawDispatch({ type: "botDeleted", botId: frame.botId });
+          }
           break;
         // a key changed and the fleet hot-reloaded — refresh the picker so
         // newly available providers un-dim immediately
@@ -623,7 +918,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const value = useMemo(() => ({ state, dispatch }), [state, dispatch]);
+  const value = useMemo(
+    () => ({ state, dispatch, sendMessage, answerCard, dismissCard, deleteBot }),
+    [state, dispatch, sendMessage, answerCard, dismissCard, deleteBot],
+  );
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
 

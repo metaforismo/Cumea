@@ -1,10 +1,11 @@
 // App-level settings, in the right-side slot: who you are + credentials
 // shared by all bots. Per-bot settings (name, persona, model, computer)
 // live in SettingsPanel; contextual Box-token entry stays in ComputerPanel.
-import { X } from "lucide-react";
+import { ChevronRight, Puzzle, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useStore } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
+import { MobileAccess } from "./MobileAccess";
 
 /** Name + email, persisted to /api/config {profile} on blur. Prefilled from
  * the current config (the values are echoed back — they're not secrets). */
@@ -72,6 +73,24 @@ export function AppSettingsPanel() {
           </div>
         </div>
 
+        <button
+          type="button"
+          onClick={() => dispatch({ type: "togglePlugins", open: true })}
+          className="mt-4 flex w-full items-center gap-3 rounded-xl bg-card p-4 text-left hover:bg-raised/70"
+          aria-label="Open integrations"
+        >
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-raised text-ink-secondary">
+            <Puzzle size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-medium text-ink">Integrations</span>
+            <span className="mt-0.5 block text-[13px] leading-relaxed text-ink-secondary">
+              Connect and manage the apps your bots can use.
+            </span>
+          </span>
+          <ChevronRight size={17} className="shrink-0 text-ink-secondary" />
+        </button>
+
         <div className="mt-4 rounded-xl bg-card p-4">
           <div className="text-[15px] font-medium text-ink">Connections</div>
           <div className="mt-0.5 text-[13px] text-ink-secondary">
@@ -84,6 +103,8 @@ export function AppSettingsPanel() {
             <ApiKeyRow section="box" />
           </div>
         </div>
+
+        <MobileAccess />
       </div>
     </aside>
   );

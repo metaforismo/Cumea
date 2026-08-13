@@ -1,14 +1,20 @@
+<p align="center">
+  <img src="assets/brand/iconacumea.png" width="144" height="144" alt="Cumea app icon" />
+</p>
+
 # Cumea
 
 > A council of agents. One clear voice.
 
-Cumea is an open-source desktop workspace where each conversation is a real AI agent. Agents can
-use different local CLI runtimes, keep separate context, ask one another for help, request approval
-for sensitive actions, and optionally work with connected apps or computers.
+Cumea is an open-source, self-hosted workspace where each conversation is a real AI agent. The
+desktop or user-owned VM is the host: it runs providers, tools, routines, and durable task history.
+The Expo mobile companion is an authenticated control surface for that host and opens on the agent
+list—not inside a chat.
 
-> **Project status:** early development. Build from source; no signed or notarized Cumea release is
-> published yet. macOS is the primary desktop target while the harness is continuously tested on
-> macOS, Linux, and Windows.
+> **Project status:** early development. Build from source; no signed/notarized desktop release or
+> store-distributed mobile build is published yet. macOS is the primary desktop target. CI exercises
+> the portable harness on macOS, Linux, and Windows, but that is not physical-device validation of
+> native behavior on every platform.
 
 [![CI](https://github.com/metaforismo/Cumea/actions/workflows/ci.yml/badge.svg)](https://github.com/metaforismo/Cumea/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -21,19 +27,59 @@ visible team:
 - one thread and persona per agent;
 - Claude Code, Codex, Grok, and Gemini CLI adapters behind one driver contract;
 - agent-to-agent delegation with recursion limits;
-- explicit allow/deny cards for actions that need consent;
+- explicit per-action approval cards, with remembered Ask / Always / Never policies per bot;
 - optional local or cloud computer use;
 - optional connected-app tools through Composio;
-- local transcripts, configuration, and event logs.
+- sections, real sidebar search, file attachments, reusable routines, and a “Needs you” inbox;
+- persistent Mote-based bot avatars with shape, palette, upload, semantic activity states, and
+  reduced-motion behavior;
+- an agent-first Expo companion for pairing, search, chat, stop, approvals, and routine status;
+- durable tasks, runs, tool steps, handoffs, artifacts, transcripts, configuration, and event logs.
 
 The product name comes from the Sibyl of Cumae: one interface that gives a clear voice to a council
 of agents.
+
+## Desktop host and mobile companion
+
+| Surface | Current responsibility |
+|---|---|
+| Desktop or user-owned VM | Provider authentication, agent configuration, computer/app access, attachments, task/run history, routine creation and scheduling, pairing, and device revocation |
+| Mobile companion | Onboarding and secure pairing, agent-list home, search, per-agent chat, text/file send and stop, bot creation, “Needs you” responses, routine status, Mote avatar state, and optional read-only computer preview |
+
+Mobile does not run providers on the phone and Cumea does not supply a managed VM. For work to
+continue after a laptop is closed, the user must keep the same Cumea harness running on an
+authenticated machine they control. The mobile client consumes a narrowed authenticated SSE stream,
+reconciles a fresh bootstrap snapshot after each connection, pauses in the background, and reconnects
+unexpected closures with bounded backoff.
+
+Push/background notifications, paired-host routine editing,
+voice dictation, and signed physical-device acceptance are not complete. Demo mode is explicitly
+local sample data and is not evidence that a provider task ran.
 
 ## Privacy and security defaults
 
 - Cumea ships with **no analytics or telemetry SDK**.
 - App data is stored under `~/.cumea/`; there is no migration from or shared state with OpenMausBot.
-- The harness binds to `127.0.0.1` and rejects state-changing browser requests from foreign origins.
+- Attachments are owner-local files under `~/.cumea/attachments/`; no Cumea-operated upload service
+  exists. When a bot uses a third-party model or app, that provider may still receive the file path
+  or file contents as part of the requested work. Uploads are bounded to 25 MiB each and to a
+  persistent quota of 100 files / 250 MiB per bot.
+- Files already referenced by the task audit trail are retained and cannot yet be reclaimed from
+  the UI. Long-lived attachment-heavy agents may therefore reach that quota; the current recovery
+  path is deleting the agent after reviewing the impact; that operation removes the agent's files
+  and audit data together. Audit-aware storage management is tracked on the roadmap.
+- The desktop harness binds to `127.0.0.1` and rejects state-changing browser requests from foreign
+  origins. Remote access is a separate listener, disabled by default.
+- Optional mobile access uses a short-lived, single-use 256-bit pairing secret. Device bearer tokens
+  are returned once, stored in SecureStore on mobile, stored only as SHA-256 hashes on the host, and
+  can be revoked from the trusted local UI.
+- The remote transcript, workspace, and SSE surfaces use explicit allowlists: hidden bots, provider
+  errors, prompts, reasoning, raw screen frames, configuration, and credential-shaped fields stay
+  local.
+- A remotely reachable host requires HTTPS terminated by the user's reverse proxy, secure tunnel,
+  or private-network gateway. The raw Node HTTP listener must not be exposed to the public internet.
+- Remote computer preview is off by default. If explicitly enabled, it exposes only the latest
+  already-captured PNG/JPEG frame, never computer control, and still requires a paired device token.
 - Configuration secrets are never returned by the API and `config.json` is written with owner-only
   permissions where the platform supports them.
 - External links are limited to HTTPS, with HTTP allowed only for loopback development URLs.
@@ -69,6 +115,11 @@ Requirements:
 - at least one supported agent CLI installed and authenticated to run real turns
 - macOS for the current Electron computer-use and dictation integration
 
+The Node harness and UI are portable. `package:linux` and `package:win` produce unsigned preview
+artifacts, but they have not been exercised on physical Linux/Windows machines in this tranche.
+Local computer control and on-device dictation remain explicitly macOS-only; cloud computers,
+chat, tasks, routines, sections, attachments, and supported provider CLIs degrade independently.
+
 ```sh
 git clone https://github.com/metaforismo/Cumea.git
 cd Cumea
@@ -88,8 +139,52 @@ For the Electron shell:
 pnpm dev:desktop
 ```
 
+Unsigned packaging commands:
+
+```sh
+pnpm package:mac
+pnpm package:linux
+pnpm package:win
+```
+
+Run the Linux command on Linux and the Windows command on Windows for release validation. A package
+created elsewhere is not evidence that native behavior works on that OS.
+
 The browser UI runs on `http://127.0.0.1:5199`; the local harness uses
 `http://127.0.0.1:8799`.
+
+### Mobile companion
+
+The Expo app lives in `apps/mobile`. After installing workspace dependencies:
+
+```sh
+pnpm --filter @cumea/mobile start
+pnpm --filter @cumea/mobile typecheck
+pnpm --filter @cumea/mobile export
+```
+
+The app can be reviewed with demo data, but real enrollment needs the optional authenticated host
+listener described in [docs/self-hosted-mobile.md](docs/self-hosted-mobile.md). A development build
+is required for release-faithful camera, permission, SecureStore, and distribution testing; a JS
+export alone does not establish physical-device support. Pairing credentials are accepted only by
+the in-app QR scanner, explicit paste, or manual fields—not from operating-system launch URLs.
+
+## Current provider capability matrix
+
+The model picker is multi-provider, but tool mounting follows each CLI's verified protocol instead
+of pretending every provider can do everything. Settings show unsupported switches as unavailable.
+
+| Runtime | Chat | Bot handoff | Connected apps | Local computer | Cloud computer |
+|---|---:|---:|---:|---:|---:|
+| Claude Agent | yes | yes | yes | macOS | yes |
+| Grok / Gemini ACP | yes | yes | not yet | macOS | not yet |
+| Codex app-server | yes | not yet | not yet | not yet | not yet |
+| Box cloud agent | yes | not yet | not yet | no | yes |
+
+“Teach as routine” currently captures a completed bot task and its prompt; it does not yet record a
+human clicking through an arbitrary desktop workflow. Scheduled routines run while the Cumea
+harness is running. Laptop-off execution therefore works only when that harness and its configured
+provider runtime remain online on the user's own authenticated host.
 
 ## Verify a change
 
@@ -97,12 +192,18 @@ The browser UI runs on `http://127.0.0.1:5199`; the local harness uses
 pnpm typecheck
 pnpm test
 pnpm build
-pnpm identity:check
+pnpm build:server
+pnpm --filter @cumea/mobile typecheck
+pnpm --filter @cumea/mobile export
+pnpm release:sbom
 ```
 
-The CI matrix runs type checking and tests on macOS, Ubuntu, and Windows, plus a production UI build
-on Ubuntu. A green CI run is not evidence that native desktop behavior was exercised on every OS;
-platform validation is tracked separately in the roadmap.
+The CI matrix runs root type checking and tests on macOS, Ubuntu, and Windows; production UI and
+harness builds plus an SBOM on Ubuntu; Expo JavaScript and independently locked landing builds on
+Ubuntu; and an unsigned macOS arm64 package-layout smoke. A green CI run is not evidence of signing,
+notarization, native desktop behavior on every OS, or physical-device mobile support. See
+[the release checklist](docs/releasing.md) for the evidence required before publishing a Developer
+Preview.
 
 ## Architecture
 
@@ -110,18 +211,25 @@ platform validation is tracked separately in the roadmap.
 |---|---|
 | `src/` | React desktop UI and client-side state folding |
 | `server/index.ts` | loopback HTTP/SSE harness and turn orchestration |
+| `server/pairing.ts` | expiring one-time pairing sessions, hashed device tokens, and revocation |
+| `server/mobile.ts` | allowlisted mobile bot/message projections and sanitized remote SSE events |
+| `server/workspace.ts` | durable sections, attachments, tasks, runs, artifacts, and schedules |
 | `server/contracts.ts` | provider driver and canonical event contracts |
 | `server/drivers/` | Claude, Codex, Grok, Gemini, computer, and peer-agent adapters |
 | `server/harness/` | provider registry and event bus |
 | `electron/` | desktop shell, native permissions, dictation, and local computer use |
+| `apps/mobile/` | Expo Router companion, agent-list home, pairing, chat, approvals, and routines |
 
 The renderer owns no provider transport. Commands cross the local API, providers emit one canonical
 event stream, and the UI folds that stream into visible conversation state.
 
 ## Direction
 
-The immediate priorities are reliability and consent, then a shared portability layer for Linux
-and Windows. Provider experiments and large visual changes follow only after the core is dependable.
+The immediate priorities are push/background notification delivery, signed physical-device
+acceptance, voice input on mobile, demonstrated desktop-workflow
+recording, wider provider-tool parity, and hands-on Linux/Windows validation. The Grok-like
+three-pane desktop model and agent-list-first mobile model remain the product direction; this work
+extends their capabilities rather than replacing either interface.
 See [ROADMAP.md](ROADMAP.md) for the ordered backlog and
 [docs/UPSTREAM.md](docs/UPSTREAM.md) for the upstream issue/PR audit behind it.
 
@@ -141,6 +249,13 @@ Cumea began from the MIT-licensed
 [OpenMausBot](https://github.com/milind-soni/OpenMausBot) codebase at commit `dea4de8`. It is an
 independent project: it does not share application data, release artifacts, telemetry, or governance
 with OpenMausBot. The original Git history and copyright notice are retained.
+
+Bot avatar geometry and palette adapt the MIT-licensed
+[Mote Studio](https://github.com/metaforismo/mote-studio). The mobile conversation examples in
+[margelo/ai-chat-demo](https://github.com/margelo/ai-chat-demo) were studied only as interaction
+references: no source code or assets from that repository are included because it had no explicit
+software license when reviewed. Complete dependency notices are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, AlertTriangle, Loader2, Mic } from "lucide-react";
+import { Check, AlertTriangle, Loader2, Mic, Monitor } from "lucide-react";
 import { CumeaAvatar } from "./Avatar";
 import { setOnboardingDone } from "@/lib/onboarding";
 
@@ -14,7 +14,8 @@ type InstanceRow = {
   snapshot: { state: "available" | "unavailable"; reason?: string; version?: string | null; authenticated?: boolean };
 };
 
-const isElectron = navigator.userAgent.includes("Electron");
+const hasNativeDictationPermissions = window.cumea?.platform === "darwin";
+const hasCuaBridge = Boolean(window.cumea?.cuaStatus);
 
 function StatusRow({
   ok,
@@ -50,6 +51,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [email, setEmail] = useState("");
   const [instances, setInstances] = useState<InstanceRow[] | null>(null);
   const [perms, setPerms] = useState<{ mic: string } | null>(null);
+  const [cua, setCua] = useState<CuaPublicStatus | null>(null);
+  const [cuaPending, setCuaPending] = useState<"request" | "retry" | null>(null);
   const valid = !email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
 
   const saveProfile = () => {
@@ -70,7 +73,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         .then((d) => setInstances(d.instances ?? []))
         .catch(() => setInstances([]));
     }
-    if (step === 2 && isElectron) {
+    if (step === 2 && hasCuaBridge) {
+      void window.cumea?.cuaStatus().then(setCua).catch(() => {});
+    }
+    if (step === 2 && hasNativeDictationPermissions) {
       const poll = () => window.cumea?.permStatus?.().then(setPerms).catch(() => {});
       poll();
       // keep polling — the user may grant in System Settings and come back
@@ -82,6 +88,24 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const finish = () => {
     setOnboardingDone();
     onDone();
+  };
+
+  const refreshCua = async (kind: "request" | "retry") => {
+    if (!window.cumea) return;
+    setCuaPending(kind);
+    try {
+      setCua(kind === "request" ? await window.cumea.cuaRequestPermissions() : await window.cumea.cuaRetry());
+    } catch (cause) {
+      setCua({
+        state: "error",
+        mode: "error",
+        permissions: null,
+        reason: cause instanceof Error ? cause.message : "Could not refresh local computer access",
+        driverVersion: null,
+      });
+    } finally {
+      setCuaPending(null);
+    }
   };
 
   const byKind = (kind: string) => instances?.find((i) => i.driverKind === kind);
@@ -185,7 +209,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               )}
             </div>
             <button
-              onClick={() => (isElectron ? setStep(2) : finish())}
+              onClick={() => (hasNativeDictationPermissions || hasCuaBridge ? setStep(2) : finish())}
               className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
             >
               Continue
@@ -200,6 +224,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               Optional, and only ever used when you ask for the feature.
             </p>
             <div className="mt-4 flex flex-col gap-2.5">
+              {hasNativeDictationPermissions && (
               <div className="flex items-center justify-between gap-3 rounded-xl bg-card p-3.5">
                 <div className="flex items-start gap-3">
                   <Mic size={18} className="mt-0.5 shrink-0 text-ink-secondary" />
@@ -230,11 +255,64 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   </button>
                 )}
               </div>
-              {/* Screen Recording deliberately has no row here: macOS 15+
-                  makes a pre-grant unreliable (per-process status caching,
-                  helper misattribution, periodic re-prompts) — the OS flow
-                  triggers on the first real capture in the Computer panel,
-                  which is the moment the user has context for the dialog. */}
+              )}
+              {hasCuaBridge && (
+              <div className="flex items-start justify-between gap-3 rounded-xl bg-card p-3.5">
+                <div className="flex items-start gap-3">
+                  <Monitor size={18} className="mt-0.5 shrink-0 text-ink-secondary" />
+                  <div>
+                    <div className="text-[14px] font-medium text-ink">This Mac</div>
+                    <div className="mt-0.5 text-[12.5px] leading-relaxed text-ink-secondary">
+                      Accessibility and Screen Recording are required only for bots you run on this Mac.
+                      The local driver stays stopped until both are granted.
+                    </div>
+                    {cua?.state === "needs-permissions" && (
+                      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink-secondary">
+                        {!cua.permissions?.accessibility && (
+                          <button
+                            onClick={() => window.cumea?.cuaOpenSettings("accessibility")}
+                            className="underline hover:text-ink"
+                          >
+                            Accessibility settings
+                          </button>
+                        )}
+                        {!cua.permissions?.screenRecording && (
+                          <button
+                            onClick={() => window.cumea?.cuaOpenSettings("screenRecording")}
+                            className="underline hover:text-ink"
+                          >
+                            Screen Recording settings
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {cua?.reason && cua.state !== "needs-permissions" && cua.state !== "ready" && (
+                      <div className="mt-2 text-[11px] text-ink-secondary">{cua.reason}</div>
+                    )}
+                  </div>
+                </div>
+                {cua?.state === "ready" ? (
+                  <Check size={16} className="mt-0.5 shrink-0 text-[#38d591]" />
+                ) : (
+                  <div className="flex shrink-0 flex-col gap-1.5">
+                    <button
+                      onClick={() => void refreshCua("request")}
+                      disabled={cuaPending !== null || cua?.state === "starting"}
+                      className="rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
+                    >
+                      {cuaPending === "request" ? "Requesting…" : "Enable"}
+                    </button>
+                    <button
+                      onClick={() => void refreshCua("retry")}
+                      disabled={cuaPending !== null || cua?.state === "starting"}
+                      className="text-[11px] text-ink-secondary hover:text-ink disabled:opacity-50"
+                    >
+                      {cuaPending === "retry" ? "Checking…" : "Check again"}
+                    </button>
+                  </div>
+                )}
+              </div>
+              )}
             </div>
             <button onClick={finish} className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white">
               Start using Cumea
