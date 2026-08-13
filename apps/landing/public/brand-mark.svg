@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Cumea">
+  <rect width="64" height="64" rx="17" fill="#111210"/>
+  <path d="M32 8c2 0 4 5 6 9 3 5 7 10 9 16 2 5 2 11-1 15-3 5-8 7-14 7s-11-2-14-7c-3-4-3-10-1-15 2-6 6-11 9-16 2-4 4-9 6-9Z" fill="#edece7"/>
+  <rect x="25" y="28" width="4" height="10" rx="2" fill="#151612"/>
+  <rect x="35" y="28" width="4" height="10" rx="2" fill="#151612"/>
+  <circle cx="49" cy="15" r="5" fill="#f56a16"/>
+</svg>

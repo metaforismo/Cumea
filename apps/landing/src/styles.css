@@ -87,7 +87,7 @@ h1, h2, h3, p { text-wrap: pretty; }
   width: 1.65rem;
   height: 1.65rem;
   border-radius: 0.48rem;
-  object-fit: cover;
+  object-fit: contain;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
@@ -137,7 +137,7 @@ h1, h2, h3, p { text-wrap: pretty; }
 
 .button:active, .star-link:active, .command:active, .text-link:active { transform: scale(0.97); }
 
-.hero { padding-top: 3.45rem; text-align: center; }
+.hero { padding-top: 2.2rem; text-align: center; }
 .hero-copy { display: flex; flex-direction: column; align-items: center; }
 
 .eyebrow {
@@ -165,7 +165,7 @@ h1, h2, h3, p { text-wrap: pretty; }
 
 h1 {
   max-width: 54rem;
-  margin: 1.75rem 0 0;
+  margin: 1.35rem 0 0;
   font-size: clamp(2.9rem, 5vw, 4.2rem);
   font-weight: 730;
   letter-spacing: -0.056em;
@@ -174,13 +174,13 @@ h1 {
 
 .hero-lede {
   max-width: 42rem;
-  margin: 1.2rem 0 0;
+  margin: 0.9rem 0 0;
   color: var(--muted);
   font-size: clamp(0.96rem, 1.4vw, 1.08rem);
   line-height: 1.55;
 }
 
-.hero-actions { justify-content: center; gap: 0.65rem; margin-top: 1.55rem; }
+.hero-actions { justify-content: center; gap: 0.65rem; margin-top: 1.2rem; }
 
 .command {
   display: inline-grid;
@@ -189,7 +189,7 @@ h1 {
   grid-template-columns: auto minmax(0, auto) auto;
   align-items: center;
   gap: 0.6rem;
-  margin-top: 1rem;
+  margin-top: 0.8rem;
   padding: 0.46rem 0.55rem 0.46rem 0.7rem;
   border: 1px solid var(--line);
   border-radius: 0.52rem;
@@ -217,9 +217,9 @@ h1 {
   font-weight: 650;
 }
 
-.preview-note { margin: 0.55rem 0 0; color: var(--faint); font-size: 0.67rem; }
+.preview-note { margin: 0.4rem 0 0; color: var(--faint); font-size: 0.67rem; }
 
-.product-shell { margin-top: 3.25rem; }
+.product-shell { margin-top: 2rem; }
 .app-window {
   display: grid;
   height: 36rem;
@@ -269,22 +269,20 @@ h1 {
 .agent small, .agent time { color: rgba(255, 255, 255, 0.32); font-size: 0.52rem; }
 .agent time { align-self: start; padding-top: 0.12rem; }
 
-.avatar {
-  display: grid;
+.mote-avatar {
   width: 1.55rem;
   height: 1.55rem;
-  place-items: center;
-  border-radius: 50%;
-  color: rgba(15, 16, 15, 0.75);
-  font-size: 0.53rem;
-  font-weight: 800;
+  flex: 0 0 auto;
+  overflow: visible;
 }
-.avatar.small { width: 1.35rem; height: 1.35rem; font-size: 0.47rem; }
-.avatar.aqua { background: #77d9c8; }
-.avatar.orange { background: #f6a457; }
-.avatar.violet { background: #8e7af3; color: #fff; }
-.avatar.blue { background: #62a5ef; }
-.avatar.pink { background: #e36c99; }
+.mote-avatar.small { width: 1.35rem; height: 1.35rem; }
+.mote-avatar .mote-body { fill: var(--mote-color); }
+.mote-avatar .mote-eyes { fill: var(--mote-eye); }
+.mote-avatar.aqua { --mote-color: #16a79d; --mote-eye: #f4f2eb; }
+.mote-avatar.orange { --mote-color: #f56a16; --mote-eye: #151612; }
+.mote-avatar.violet { --mote-color: #7651d6; --mote-eye: #f4f2eb; }
+.mote-avatar.blue { --mote-color: #2f8de3; --mote-eye: #f4f2eb; }
+.mote-avatar.pink { --mote-color: #d72879; --mote-eye: #f4f2eb; }
 
 .conversation { min-width: 0; border-right: 1px solid rgba(255, 255, 255, 0.07); }
 .conversation-header {
