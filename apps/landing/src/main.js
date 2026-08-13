@@ -27,8 +27,9 @@ document.querySelectorAll("[data-repository-link]").forEach((link) => {
   link.href = `${repositoryUrl}${originalUrl.pathname.slice(originalRepository.pathname.length)}${originalUrl.search}${originalUrl.hash}`;
 });
 
-const releaseLink = document.querySelector("[data-release-link]");
-if (releaseLink) releaseLink.href = `${repositoryUrl}/releases/tag/v0.1.0`;
+document.querySelectorAll("[data-release-link]").forEach((link) => {
+  link.href = `${repositoryUrl}/releases/tag/v0.1.0`;
+});
 
 const commandButton = document.querySelector("[data-copy-command]");
 const commandCode = commandButton?.querySelector("code");
@@ -339,6 +340,9 @@ const hostTabs = document.querySelectorAll("[data-host-tab]");
 const hostSheet = document.querySelector("[data-host-sheet]");
 const conversationRoot = document.querySelector(".conversation");
 const modelTrigger = document.querySelector("[data-model-trigger]");
+const modelLabelNode = document.querySelector("[data-model-label]");
+const modelProviderMark = document.querySelector("[data-provider-mark]");
+const claudeProviderMark = modelProviderMark?.innerHTML;
 const modelMenu = document.querySelector("[data-model-menu]");
 const computerButton = document.querySelector("[data-computer-btn]");
 const computerDrawer = document.querySelector("[data-computer-drawer]");
@@ -1099,10 +1103,18 @@ modelMenu?.querySelectorAll("button").forEach((option) => {
     option.setAttribute("aria-pressed", "true");
     const provider = option.querySelector("span")?.textContent;
     const model = option.querySelector("strong")?.textContent;
-    const label = `${provider === "Claude" ? "Claude " : ""}${model} `;
-    const chevron = modelTrigger.querySelector("svg");
-    modelTrigger.textContent = label;
-    if (chevron) modelTrigger.append(chevron);
+    if (modelLabelNode) modelLabelNode.textContent = model;
+    modelTrigger.dataset.provider = provider || "";
+    if (modelProviderMark) {
+      modelProviderMark.className = `provider-mark provider-mark-${(provider || "provider").toLowerCase()}`;
+      if (provider === "Claude" && claudeProviderMark) {
+        modelProviderMark.innerHTML = claudeProviderMark;
+      } else if (provider === "OpenAI") {
+        modelProviderMark.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2a4.4 4.4 0 0 1 7.6 3.1 4.4 4.4 0 0 1 1.7 7.9 4.4 4.4 0 0 1-5.9 6.1 4.4 4.4 0 0 1-7.7-3 4.4 4.4 0 0 1-1.6-8A4.4 4.4 0 0 1 12 3.2Z"/><path d="m8.1 9.2 7.8 4.5M8 14.6l7.9-4.5M12 7.1v9.8"/></svg>';
+      } else {
+        modelProviderMark.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 2.5c.7 5.1 4.4 8.8 9.5 9.5-5.1.7-8.8 4.4-9.5 9.5-.7-5.1-4.4-8.8-9.5-9.5 5.1-.7 8.8-4.4 9.5-9.5Z"/></svg>';
+      }
+    }
     setModelMenu(false);
     announce(`${model} selected in this preview.`);
   });
