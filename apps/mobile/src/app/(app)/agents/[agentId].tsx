@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo } from "react";
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Text, View, type ListRenderItem } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Text, View, type ListRenderItem, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
+import { useIsFocused, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ChatComposer } from "@/components/chat-composer";
 import { MessageBubble, StreamingBubble } from "@/components/message-bubble";
@@ -25,6 +25,7 @@ function ComputerGlyph() {
 
 export default function AgentChatScreen() {
   const router = useRouter();
+  const screenFocused = useIsFocused();
   const params = useLocalSearchParams<{ agentId: string }>();
   const agentId = Array.isArray(params.agentId) ? params.agentId[0] : params.agentId;
   const { state, actions } = useCumea();
@@ -33,6 +34,10 @@ export default function AgentChatScreen() {
   const paging = state.messagePaging[agentId];
   const working = agent?.presence === "working";
   const stream = state.streaming[agentId] ?? "";
+  const listRef = useRef<FlatList<ChatMessage>>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const [newerCount, setNewerCount] = useState(0);
+  const previousLatestId = useRef<string | undefined>(messages.at(-1)?.id);
   const reversedMessages = useMemo(() => [...messages].reverse(), [messages]);
   const renderMessage = useCallback<ListRenderItem<ChatMessage>>(
     ({ item }) => <MessageBubble message={item} />,
@@ -51,6 +56,31 @@ export default function AgentChatScreen() {
   useEffect(() => {
     if (agent?.unread) actions.markRead(agentId);
   }, [actions, agent?.unread, agentId]);
+
+  useEffect(() => {
+    previousLatestId.current = messages.at(-1)?.id;
+    setAtBottom(true);
+    setNewerCount(0);
+  }, [agentId]);
+
+  useEffect(() => {
+    const latestId = messages.at(-1)?.id;
+    if (!latestId || latestId === previousLatestId.current) return;
+    previousLatestId.current = latestId;
+    if (atBottom) {
+      listRef.current?.scrollToOffset({ offset: 0, animated: false });
+      setNewerCount(0);
+    } else {
+      setNewerCount((count) => count + 1);
+    }
+  }, [atBottom, messages]);
+
+  const updateBottomState = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    // The list is inverted, so offset zero is the newest edge.
+    const nextAtBottom = event.nativeEvent.contentOffset.y <= 80;
+    setAtBottom(nextAtBottom);
+    if (nextAtBottom) setNewerCount(0);
+  }, []);
 
   if (!agent) {
     return (
@@ -73,9 +103,32 @@ export default function AgentChatScreen() {
         <View style={{ flex: 1, gap: 1 }}>
           <Text numberOfLines={1} accessibilityRole="header" style={{ color: theme.text, fontSize: 17, fontWeight: "700" }}>{agent.name}</Text>
           <Text numberOfLines={1} style={{ color: agent.needsYou ? theme.warning : theme.textSecondary, fontSize: 11 }}>
-            {agent.needsYou ? "Needs you" : working ? "Working on it…" : agent.role}
+            {agent.needsYou ? "Needs you" : working ? "Working on it…" : agent.lifecycle ? `Quick · ${agent.role}` : agent.role}
           </Text>
         </View>
+        {agent.lifecycle ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel={`Quick bot. Expires ${new Date(agent.lifecycle.expiresAt).toLocaleString()}`}
+            accessibilityHint="Offers to keep this bot permanently"
+            onPress={() => Alert.alert(
+              "Keep this bot?",
+              `It is currently scheduled to expire ${new Date(agent.lifecycle!.expiresAt).toLocaleString()}.`,
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Keep permanently",
+                  onPress: () => void actions.makeAgentPermanent(agent.id).catch((reason) => {
+                    Alert.alert("Could not update bot", reason instanceof Error ? reason.message : String(reason));
+                  }),
+                },
+              ],
+            )}
+            style={{ minHeight: 32, borderRadius: 16, backgroundColor: `${theme.accent}1c`, justifyContent: "center", paddingHorizontal: 9 }}
+          >
+            <Text style={{ color: theme.accent, fontSize: 10, fontWeight: "800" }}>Quick</Text>
+          </PressableScale>
+        ) : null}
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Open bot computer"
@@ -105,6 +158,7 @@ export default function AgentChatScreen() {
 
       <KeyboardAvoidingView behavior={process.env.EXPO_OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <FlatList
+          ref={listRef}
           inverted
           data={reversedMessages}
           keyExtractor={(message) => message.id}
@@ -126,6 +180,8 @@ export default function AgentChatScreen() {
           maintainVisibleContentPosition={MAINTAIN_VISIBLE_CONTENT_POSITION}
           onEndReached={loadOlder}
           onEndReachedThreshold={0.2}
+          onScroll={updateBottomState}
+          scrollEventThrottle={80}
           keyboardDismissMode={process.env.EXPO_OS === "ios" ? "interactive" : "on-drag"}
           keyboardShouldPersistTaps="handled"
           automaticallyAdjustKeyboardInsets={false}
@@ -149,9 +205,40 @@ export default function AgentChatScreen() {
             </View>
           )}
         />
+        {!atBottom && newerCount > 0 ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel={`${newerCount} new ${newerCount === 1 ? "message" : "messages"}. Jump to latest.`}
+            onPress={() => {
+              listRef.current?.scrollToOffset({ offset: 0, animated: true });
+              setAtBottom(true);
+              setNewerCount(0);
+            }}
+            style={{
+              position: "absolute",
+              alignSelf: "center",
+              bottom: 78,
+              minHeight: 42,
+              justifyContent: "center",
+              borderRadius: 21,
+              backgroundColor: theme.accent,
+              paddingHorizontal: 16,
+              shadowColor: "#000",
+              shadowOpacity: 0.25,
+              shadowRadius: 12,
+              shadowOffset: { width: 0, height: 5 },
+              elevation: 5,
+            }}
+          >
+            <Text style={{ color: "#fff", fontSize: 13, fontWeight: "800" }}>
+              {newerCount} new {newerCount === 1 ? "message" : "messages"} ↓
+            </Text>
+          </PressableScale>
+        ) : null}
         <ChatComposer
           agentName={agent.name}
           working={working}
+          screenFocused={screenFocused}
           attachmentsEnabled
           onSend={(text, attachments) => actions.sendMessage(agent.id, text, attachments)}
           onStop={() => actions.interrupt(agent.id)}

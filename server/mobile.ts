@@ -124,6 +124,9 @@ export function publicMobileBot(
     pinned: Boolean(bot.pinned),
     busy: Boolean(bot.busy),
     sectionId: bot.sectionId ?? null,
+    ...(Object.prototype.hasOwnProperty.call(bot, "lifecycle")
+      ? { lifecycle: bot.lifecycle ?? null }
+      : {}),
     createdAt: bot.createdAt,
   };
   if (messages) safe.messages = messageLimit > 0

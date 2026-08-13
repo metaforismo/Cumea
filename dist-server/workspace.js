@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.js";
 import { DATA_DIR } from "./config.js";
 import { newId } from "./contracts.js";
-import { stageFilesForDeletion } from "./delete-files.js";
+import { purgeCommittedFileDeletions, stageFilesForDeletion, } from "./delete-files.js";
 const WORKSPACE_FILE = join(DATA_DIR, "workspace.json");
 const MAX_HISTORY = 500;
 // Persistent per-bot quotas bound authenticated storage growth across restarts.
@@ -249,8 +249,6 @@ export class WorkspaceStore {
         let transaction = null;
         try {
             transaction = this.removeBotDataTransaction(botId);
-            files.purge();
-            return transaction.removed;
         }
         catch (error) {
             const rollbackErrors = [];
@@ -274,6 +272,11 @@ export class WorkspaceStore {
             }
             throw error;
         }
+        // Records have committed. A purge failure leaves only private quarantine
+        // garbage for later maintenance; rolling records back after even one file
+        // was removed would instead create dangling paths and data loss.
+        purgeCommittedFileDeletions([files], (error) => console.error("could not purge committed bot workspace quarantine", error));
+        return transaction.removed;
     }
     botDeletionFiles(botId) {
         return this.data.attachments

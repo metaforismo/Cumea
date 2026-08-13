@@ -23,6 +23,7 @@ export interface AgentSummary {
   needsYou: boolean;
   presence: AgentPresence;
   avatar: AvatarConfig;
+  lifecycle?: { kind: "temporary"; expiresAt: number };
 }
 
 export interface ChatAttachment {

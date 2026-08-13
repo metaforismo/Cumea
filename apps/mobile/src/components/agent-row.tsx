@@ -13,10 +13,13 @@ function relativeTime(timestamp: number): string {
 }
 
 export function AgentRow({ agent, onPress }: { agent: AgentSummary; onPress(): void }) {
+  const quickLabel = agent.lifecycle
+    ? `Quick bot, expires ${new Date(agent.lifecycle.expiresAt).toLocaleString()}. `
+    : "";
   return (
     <PressableScale
       accessibilityRole="button"
-      accessibilityLabel={`${agent.name}, ${agent.role}. ${agent.needsYou ? "Needs you. " : ""}${agent.preview}`}
+      accessibilityLabel={`${agent.name}, ${agent.role}. ${quickLabel}${agent.needsYou ? "Needs you. " : ""}${agent.preview}`}
       onPress={onPress}
       style={{ flexDirection: "row", alignItems: "center", gap: 13, paddingHorizontal: 20, paddingVertical: 11, minHeight: 72 }}
     >
@@ -26,6 +29,11 @@ export function AgentRow({ agent, onPress }: { agent: AgentSummary; onPress(): v
           <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.text, fontSize: 17, fontWeight: "700", letterSpacing: -0.2 }}>
             {agent.name}
           </Text>
+          {agent.lifecycle ? (
+            <View style={{ backgroundColor: `${theme.accent}1c`, borderRadius: 7, paddingHorizontal: 7, paddingVertical: 3 }}>
+              <Text style={{ color: theme.accent, fontSize: 10, fontWeight: "800" }}>Quick</Text>
+            </View>
+          ) : null}
           <View style={{ maxWidth: 128, backgroundColor: theme.cardRaised, borderRadius: 7, paddingHorizontal: 7, paddingVertical: 3 }}>
             <Text numberOfLines={1} style={{ color: theme.textSecondary, fontSize: 11, fontWeight: "600" }}>{agent.role}</Text>
           </View>

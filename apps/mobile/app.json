@@ -2,7 +2,7 @@
   "expo": {
     "name": "Cumea",
     "slug": "cumea-mobile",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "icon": "./assets/icon.png",
     "platforms": ["ios", "android"],
     "orientation": "default",
@@ -11,10 +11,12 @@
     "ios": {
       "supportsTablet": true,
       "icon": "./assets/icon.png",
-      "bundleIdentifier": "io.github.metaforismo.cumea.mobile"
+      "bundleIdentifier": "io.github.metaforismo.cumea.mobile",
+      "buildNumber": "2"
     },
     "android": {
       "package": "io.github.metaforismo.cumea.mobile",
+      "versionCode": 2,
       "icon": "./assets/icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -36,6 +38,13 @@
         {
           "configureAndroidBackup": true,
           "faceIDPermission": "Allow Cumea to protect your host credentials."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow Cumea to use the microphone only while you dictate a message.",
+          "speechRecognitionPermission": "Allow Cumea to turn your speech into text using your device's speech recognition service."
         }
       ]
     ],

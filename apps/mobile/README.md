@@ -21,7 +21,9 @@ The current source includes:
 - in-app QR scanning, explicit paste, and manual pairing paths;
 - SecureStore persistence for the returned device bearer token;
 - agent-list home, search, pull-to-refresh, and per-agent chat;
-- text/file send, stop, bot creation, mark-read, and approval/question responses;
+- text/file send, stop, permanent or 24-hour Quick bot creation, mark-read, and
+  approval/question responses;
+- native iOS and Android dictation with live partial transcripts and editable results;
 - “Needs you” and routine-status screens;
 - native Mote avatars and reduced-motion behavior;
 - an explicit local demo mode for interface review.
@@ -62,20 +64,28 @@ There are no push or background notifications yet.
 
 - Real host execution requires the host and its provider runtime to remain
   online. Pairing does not move execution onto the phone.
-- Attachment-only sends require a short instruction. The client uploads raw
-  bytes to the selected bot before sending the returned attachment IDs. If a
+- Attachment-only sends use the visible neutral instruction “Please review the
+  attached files.” The client uploads raw bytes to the selected bot before sending the returned attachment IDs. If a
   later upload or the send fails, already-uploaded files are deleted on a
   best-effort basis without hiding the original delivery error. The host also
   enforces 25 MiB per file and a persistent 100-file / 250-MiB quota per bot.
 - Paired-host routine editing is read-only on mobile.
 - Bootstrap is bounded; opening a chat requests 50-message cursor pages and
-  loads older pages progressively while preserving the visible scroll anchor.
+  loads older pages progressively while preserving the visible scroll anchor. New messages do not
+  pull someone away from older history; an accessible jump-to-latest control appears instead.
 - Provider credentials, connector administration, live computer control,
-  device administration, voice dictation, and model configuration remain
-  local-only. When a host explicitly enables the capability, mobile can show a
+  device administration, and model configuration remain local-only. When a
+  host explicitly enables the capability, mobile can show a
   read-only computer preview that refreshes every four seconds in the
-  foreground. Otherwise computer and microphone controls explain the limit
-  instead of implying that an action happened.
+  foreground. Otherwise computer controls explain the limit instead of
+  implying that an action happened.
+- Dictation uses the operating system's speech-recognition service and requests
+  microphone/speech access only after the user taps the mic. Its offline and
+  language support depend on the installed iOS or Android service, which may
+  process audio over the network. Cumea does not persist a recording, and
+  recognition is aborted when the app leaves the foreground or the chat screen
+  loses focus in the navigation stack. The native module is not part of Expo
+  Go, so dictation requires a Cumea development or distribution build.
 - No store-signed build, physical-device camera/paste acceptance run,
   VoiceOver/TalkBack pass, or background-delivery test is claimed here.
 
@@ -85,13 +95,16 @@ Install workspace dependencies from the repository root, then run:
 
 ```sh
 pnpm --filter @cumea/mobile start
+pnpm --filter @cumea/mobile run:ios
+pnpm --filter @cumea/mobile run:android
 pnpm --filter @cumea/mobile typecheck
 pnpm --filter @cumea/mobile export
 ```
 
-The app uses Expo SDK 57. A development build is the release-faithful path for
-camera, permission, and distribution testing. Type checking or a JS export
-alone is not evidence of a signed physical-device build.
+The app uses Expo SDK 57. `run:ios` and `run:android` create the native
+development builds needed by dictation; Expo Go cannot exercise that module.
+Type checking, a simulator build, or a JS export alone is not evidence of a
+signed physical-device build.
 
 Third-party licenses are listed in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

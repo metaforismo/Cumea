@@ -177,7 +177,7 @@ ipcMain.handle("perm:open-settings", (_event, pane) => {
 
 ipcMain.handle("speech:start", (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  if (win) startSpeech(win);
+  return win ? startSpeech(win) : { started: false };
 });
 ipcMain.handle("speech:stop", () => stopSpeech());
 

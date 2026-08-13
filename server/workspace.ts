@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { newId } from "./contracts.ts";
-import { stageFilesForDeletion, type DeletionFile } from "./delete-files.ts";
+import {
+  purgeCommittedFileDeletions,
+  stageFilesForDeletion,
+  type DeletionFile,
+} from "./delete-files.ts";
 
 export type TaskSource = "message" | "routine" | "handoff";
 export type TaskStatus = "queued" | "running" | "needs_attention" | "completed" | "failed" | "cancelled";
@@ -371,8 +375,6 @@ export class WorkspaceStore {
     let transaction: BotDataRemovalTransaction | null = null;
     try {
       transaction = this.removeBotDataTransaction(botId);
-      files.purge();
-      return transaction.removed;
     } catch (error) {
       const rollbackErrors: unknown[] = [];
       try {
@@ -393,6 +395,14 @@ export class WorkspaceStore {
       }
       throw error;
     }
+    // Records have committed. A purge failure leaves only private quarantine
+    // garbage for later maintenance; rolling records back after even one file
+    // was removed would instead create dangling paths and data loss.
+    purgeCommittedFileDeletions(
+      [files],
+      (error) => console.error("could not purge committed bot workspace quarantine", error),
+    );
+    return transaction!.removed;
   }
 
   botDeletionFiles(botId: string): DeletionFile[] {

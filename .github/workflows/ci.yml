@@ -54,10 +54,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: desktop UI and type-safe source build
         run: pnpm build
-      - name: distributable harness build
-        run: pnpm build:server
+      - name: distributable harness build is committed and in sync
+        run: pnpm verify:dist-server
       - name: deterministic CycloneDX inventory
-        run: pnpm release:sbom
+        run: pnpm release:verify-sbom
 
   mobile-export:
     name: mobile typecheck + JS export

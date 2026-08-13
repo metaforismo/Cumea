@@ -6,7 +6,11 @@ import { readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
-import { stageFilesForDeletion, type DeletionFile } from "./delete-files.ts";
+import {
+  purgeCommittedFileDeletions,
+  stageFilesForDeletion,
+  type DeletionFile,
+} from "./delete-files.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
 
@@ -105,6 +109,28 @@ export interface HandoffData {
   reply?: string;
 }
 
+/** Durable lifecycle contract for intentionally ephemeral teammates.
+ *
+ * Absence means permanent. Keeping this as a tagged object (instead of a
+ * loose boolean plus timestamp) makes future lifecycle variants additive and
+ * prevents a half-written `temporary: true` record with no expiry.
+ */
+export interface BotLifecycle {
+  kind: "temporary";
+  expiresAt: number;
+}
+
+/** Validate lifecycle JSON read from disk or received through a trusted
+ * internal boundary. Expired timestamps remain valid: the sweeper, not store
+ * migration, owns deletion and its activity/audit safety checks. */
+export function parseBotLifecycle(value: unknown): BotLifecycle | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind !== "temporary") return null;
+  if (!Number.isSafeInteger(candidate.expiresAt) || Number(candidate.expiresAt) <= 0) return null;
+  return { kind: "temporary", expiresAt: Number(candidate.expiresAt) };
+}
+
 export interface Message {
   id: string;
   role: "bot" | "user";
@@ -148,6 +174,9 @@ export interface BotRecord {
   pinned?: boolean;
   hidden?: boolean;
   busy?: boolean;
+  /** Absent for permanent bots. Temporary bots are removed only after this
+   * deadline and only when the server's cleanup safety gate is clear. */
+  lifecycle?: BotLifecycle;
   createdAt: number;
 }
 
@@ -252,6 +281,17 @@ export class Store {
         b.avatar = defaultBotAvatar(index, legacyColor);
         migrated = true;
       }
+      if (Object.prototype.hasOwnProperty.call(b, "lifecycle")) {
+        const lifecycle = parseBotLifecycle(b.lifecycle);
+        if (lifecycle) {
+          b.lifecycle = lifecycle;
+        } else {
+          // Malformed lifecycle metadata must fail safe as permanent. Store
+          // migration never guesses a deletion deadline.
+          delete b.lifecycle;
+          migrated = true;
+        }
+      }
     }
     if (migrated) this.saveBots();
   }
@@ -298,7 +338,7 @@ export class Store {
     return this.bots.find((b) => b.threadId === threadId) ?? null;
   }
 
-  createBot(): BotRecord {
+  createBot(options: { lifecycle?: BotLifecycle } = {}): BotRecord {
     const color = COLORS[this.bots.length % COLORS.length];
     const bot: BotRecord = {
       id: newId(),
@@ -315,6 +355,7 @@ export class Store {
       appsEnabled: true,
       collaborationEnabled: true,
       approvalPolicy: "ask",
+      ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
       createdAt: Date.now(),
     };
     this.bots.unshift(bot);
@@ -337,9 +378,7 @@ export class Store {
     try {
       transaction = this.deleteBotRecordTransaction(id);
       if (!transaction) throw Object.assign(new Error("bot disappeared during deletion"), { status: 500 });
-      files.purge();
       transaction.finalize();
-      return true;
     } catch (error) {
       const rollbackErrors: unknown[] = [];
       try {
@@ -360,6 +399,14 @@ export class Store {
       }
       throw error;
     }
+    // The durable bot record is gone. Purge is post-commit garbage
+    // collection: a filesystem failure may leave private quarantine bytes,
+    // but must never resurrect metadata whose transcript was partly purged.
+    purgeCommittedFileDeletions(
+      [files],
+      (error) => console.error("could not purge committed bot transcript quarantine", error),
+    );
+    return true;
   }
 
   botDeletionFiles(id: string): DeletionFile[] {
@@ -405,12 +452,43 @@ export class Store {
     };
   }
 
-  patchBot(id: string, patch: Partial<BotRecord>): BotRecord | null {
+  patchBot(id: string, patch: Partial<BotRecord>, options: { clearLifecycle?: boolean } = {}): BotRecord | null {
     const bot = this.bot(id);
     if (!bot) return null;
+    const touched = new Map<keyof BotRecord, { present: boolean; value: BotRecord[keyof BotRecord] }>();
+    for (const key of Object.keys(patch) as Array<keyof BotRecord>) {
+      touched.set(key, { present: Object.prototype.hasOwnProperty.call(bot, key), value: bot[key] });
+    }
+    if (options.clearLifecycle && !touched.has("lifecycle")) {
+      touched.set("lifecycle", {
+        present: Object.prototype.hasOwnProperty.call(bot, "lifecycle"),
+        value: bot.lifecycle,
+      });
+    }
     Object.assign(bot, patch);
-    this.saveBots();
+    if (options.clearLifecycle) delete bot.lifecycle;
+    try {
+      this.saveBots();
+    } catch (error) {
+      // Keep the live store aligned with the last durable snapshot. This is
+      // especially important for Keep permanently: a failed write must not
+      // make the sweeper forget an expiry that is still present on disk.
+      for (const [key, previous] of touched) {
+        if (previous.present) {
+          Object.assign(bot, { [key]: previous.value });
+        } else {
+          delete (bot as unknown as Record<string, unknown>)[key];
+        }
+      }
+      throw error;
+    }
     return bot;
+  }
+
+  /** Lifecycle mutations need deletion semantics: `undefined` must remove the
+   * durable property instead of lingering as an ambiguous in-memory field. */
+  setBotLifecycle(id: string, lifecycle: BotLifecycle | null): BotRecord | null {
+    return this.patchBot(id, lifecycle ? { lifecycle } : {}, { clearLifecycle: lifecycle === null });
   }
 
   setResumeCursor(botId: string, instanceId: string, cursor: unknown) {

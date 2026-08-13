@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Check, ChevronLeft, ImagePlus, Sparkles, X } from "lucide-react";
+import { Check, ChevronLeft, Clock3, ImagePlus, Loader2, Sparkles, X } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
 import { CumeaAvatar } from "./Avatar";
 import {
@@ -291,7 +291,8 @@ function AvatarEditor({
 }
 
 export function SettingsPanel({ bot }: { bot: Bot }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, makeBotPermanent } = useStore();
+  const [convertingLifecycle, setConvertingLifecycle] = useState(false);
   const patch = (
     p: Partial<
       Pick<
@@ -473,6 +474,37 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             </div>
             <div className="mt-2 text-[11px] leading-relaxed text-ink-secondary">Always and Never are remembered for future permission requests from this bot. Questions still wait for you.</div>
           </div>
+
+          {bot.lifecycle ? (
+            <div className="rounded-xl border border-accent-border/30 bg-card p-4">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
+                  <Clock3 size={16} aria-hidden="true" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[15px] font-medium text-ink">Quick bot</div>
+                  <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">
+                    Scheduled to expire {new Date(bot.lifecycle.expiresAt).toLocaleString()}. Cleanup waits while it is working,
+                    needs approval, or owns a routine.
+                  </div>
+                  <button
+                    type="button"
+                    disabled={convertingLifecycle}
+                    onClick={() => {
+                      setConvertingLifecycle(true);
+                      void makeBotPermanent(bot.id)
+                        .catch(() => {})
+                        .finally(() => setConvertingLifecycle(false));
+                    }}
+                    className="mt-3 inline-flex min-h-8 items-center gap-2 rounded-lg border border-hairline/50 px-3 text-[12px] font-medium text-ink hover:bg-raised disabled:cursor-wait disabled:opacity-50"
+                  >
+                    {convertingLifecycle ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : null}
+                    Keep permanently
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
             <div>

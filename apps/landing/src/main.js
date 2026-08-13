@@ -25,6 +25,10 @@ document.querySelectorAll("[data-repository-link]").forEach((link) => {
 const releaseLink = document.querySelector("[data-release-link]");
 if (releaseLink) releaseLink.href = `${repositoryUrl}/releases/tag/v0.1.0`;
 
+document.querySelector(".skip-link")?.addEventListener("click", () => {
+  window.setTimeout(() => document.querySelector("#main")?.focus({ preventScroll: true }), 0);
+});
+
 const commandButton = document.querySelector("[data-copy-command]");
 const commandCode = commandButton?.querySelector("code");
 const copyLabel = commandButton?.querySelector("[data-copy-label]");

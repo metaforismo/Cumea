@@ -154,7 +154,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const sendTurn = async (turn: SendTurnInput) => {
         const { threadId } = turn;
         if (active.has(threadId)) throw new Error("a turn is already running on this thread");
-        const turnId = newId();
+        const turnId = turn.turnId ?? newId();
         const cwd = turn.cwd ?? config.workspace ?? homedir();
         const env = childEnv();
         const mcpServers = acpMcpServers(turn);

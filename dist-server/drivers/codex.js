@@ -64,7 +64,7 @@ export const CodexDriver = {
             const { threadId } = turn;
             if (active.has(threadId))
                 throw new Error("a turn is already running on this thread");
-            const turnId = newId();
+            const turnId = turn.turnId ?? newId();
             const env = { ...process.env, PATH: augmentedPath(), NPM_CONFIG_LOGLEVEL: "error" };
             // the CLI owns its own ChatGPT login; a leaked API key silently flips
             // billing to pay-as-you-go (agentcal)

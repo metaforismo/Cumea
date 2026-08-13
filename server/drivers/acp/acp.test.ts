@@ -68,7 +68,13 @@ posixOnly("ACP turns (fake CLI)", () => {
 
   it("normalizes a full turn into the canonical event sequence", async () => {
     await create();
-    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-happy", text: "hi", model: "grok-4.5" });
+    const { turnId } = await instance.adapter.sendTurn({
+      threadId: "t-happy",
+      turnId: "harness-turn-acp",
+      text: "hi",
+      model: "grok-4.5",
+    });
+    expect(turnId).toBe("harness-turn-acp");
     await recorder.until((e) => e.type === "turn.completed");
 
     const types = recorder.events.map((e) => e.type);

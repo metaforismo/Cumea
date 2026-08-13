@@ -43,6 +43,10 @@ and consent come before provider count or visual expansion.
 - [x] Make sidebar search functional and add persistent sections with create, rename, delete, and
   bot assignment flows.
 - [x] Add bounded local attachments with task artifacts and audited HTTP upload/download/delete.
+- [x] Resolve agent-produced paths only inside per-agent workspaces and render bounded Markdown,
+  PDF, and semantic DOCX previews through short-lived same-origin capabilities.
+- [x] Add 24-hour Quick bots with conservative expiry blockers and explicit conversion to a
+  permanent agent on desktop or a paired phone.
 - [ ] Add audit-aware attachment retention and storage management so long-lived agents can reclaim
   quota without deleting the agent or silently breaking historical artifacts.
 - [x] Add unsigned Linux/Windows packaging targets and explicit feature degradation. These targets
@@ -70,9 +74,10 @@ and consent come before provider count or visual expansion.
 - [x] Add global keyboard focus visibility, semantic controls, a Command/Ctrl-K search shortcut,
   and browser checks for the new work/section/routine flows.
 - [ ] Add automated screen-reader and OS-native accessibility acceptance checks.
-- [ ] Complete signed-release, provenance, and update-channel implementation. The v0.1.0 Developer
-  Preview now has a release checklist, CycloneDX SBOM/checksum scripts, packaged-license smoke, and
-  explicit evidence boundaries; signing/notarization and provenance remain deliberately unclaimed.
+- [ ] Complete signed-release, provenance, and update-channel implementation. The published v0.1.0
+  Developer Preview established the source-only baseline; the v0.2.0 candidate extends its release
+  checklist, CycloneDX SBOM/checksum scripts, packaged-license smoke, and explicit evidence
+  boundaries. Signing/notarization and provenance remain deliberately unclaimed.
 - [ ] Replace or upgrade Expo/Metro's transitive `image-size` dependency when
   an upstream release resolves the current ICNS/JXL/HEIF parser DoS advisories;
   do not force an unverified package override into the SDK 57 toolchain.
@@ -84,8 +89,14 @@ and consent come before provider count or visual expansion.
 - [x] Wire bounded paired-host attachment upload with best-effort rollback, least-privilege mobile
   bot creation, mark-read updates, and a capability-gated read-only computer preview.
 - [x] Add older-message pagination with cursor-based loading and stable anchored rendering.
-- [ ] Add voice input backed by an Expo SDK 57-compatible native module,
-  and paired-host routine editing without widening provider or device-administration access.
+- [x] Keep the newest edge stable during live updates and show an accessible new-message affordance
+  when someone is reading older history instead of forcing a scroll jump.
+- [x] Add editable native dictation backed by an Expo SDK 57-compatible module, including bounded
+  lifecycle cleanup and honest Expo Go/platform error states. Physical-device permission and
+  accessibility acceptance remain part of the release gate above.
+- [ ] Add paired-host routine editing without widening provider or device-administration access.
+- [ ] Profile long streaming Markdown and global state fan-out in release builds on physical iOS
+  and Android devices before changing list engines or adding another virtualization dependency.
 
 ## Explicitly deferred
 

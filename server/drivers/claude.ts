@@ -227,7 +227,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const sendTurn = async (turn: SendTurnInput) => {
       const { threadId } = turn;
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
-      const turnId = newId();
+      const turnId = turn.turnId ?? newId();
       const sessionId = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
       const newSessionId = sessionId ? null : newId();
 

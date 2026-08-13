@@ -5,6 +5,7 @@
 // the shadow-instance behavior end to end while it's at it.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { request, type ClientRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,6 +32,48 @@ const api = async (method: string, path: string, body?: unknown): Promise<{ stat
   });
   return { status: res.status, body: await res.json() };
 };
+
+function beginPausedRequest(path: string, body: string, headers: Record<string, string>) {
+  let requestHandle!: ClientRequest;
+  let resolveAdmitted!: () => void;
+  let rejectAdmitted!: (error: Error) => void;
+  let admissionSettled = false;
+  const admitted = new Promise<void>((resolve, reject) => {
+    resolveAdmitted = () => {
+      admissionSettled = true;
+      resolve();
+    };
+    rejectAdmitted = reject;
+  });
+  const response = new Promise<{ status: number; body: any }>((resolve, reject) => {
+    requestHandle = request(`${BASE}${path}`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        expect: "100-continue",
+        "content-length": String(Buffer.byteLength(body)),
+      },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      res.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolve({ status: res.statusCode ?? 0, body: text ? JSON.parse(text) : null });
+      });
+    });
+    requestHandle.once("continue", resolveAdmitted);
+    requestHandle.once("error", (error) => {
+      if (!admissionSettled) rejectAdmitted(error);
+      reject(error);
+    });
+    requestHandle.flushHeaders();
+  });
+  return {
+    admitted,
+    finish: () => requestHandle.end(body),
+    response,
+  };
+}
 
 async function openEventStream(headers: Record<string, string>, base = REMOTE_BASE) {
   const controller = new AbortController();
@@ -196,11 +239,15 @@ describe("harness HTTP API", () => {
     const remoteCreate = await fetch(`${REMOTE_BASE}/api/bots`, {
       method: "POST",
       headers: { ...auth, "content-type": "application/json" },
-      body: JSON.stringify({ name: "Mobile helper", title: "Research" }),
+      body: JSON.stringify({ name: "Mobile helper", title: "Research", temporary: true, ttlMinutes: 60 }),
     });
     expect(remoteCreate.status).toBe(201);
     const remoteBot = ((await remoteCreate.json()) as any).bot;
-    expect(remoteBot).toMatchObject({ name: "Mobile helper", title: "Research" });
+    expect(remoteBot).toMatchObject({
+      name: "Mobile helper",
+      title: "Research",
+      lifecycle: { kind: "temporary", expiresAt: expect.any(Number) },
+    });
     for (const forbidden of ["modelSelection", "resumeCursors", "computer", "approvalPolicy"]) {
       expect(JSON.stringify(remoteBot)).not.toContain(forbidden);
     }
@@ -230,6 +277,20 @@ describe("harness HTTP API", () => {
     });
     expect(unreadPatch.status).toBe(200);
     expect(((await unreadPatch.json()) as any).bot).toMatchObject({ id: remoteBot.id, unread: true });
+    const conversionStream = await openEventStream(auth);
+    expect(await conversionStream.next()).toEqual({ kind: "hello" });
+    const permanentPatch = await fetch(`${REMOTE_BASE}/api/bots/${remoteBot.id}`, {
+      method: "PATCH",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ temporary: false }),
+    });
+    expect(permanentPatch.status).toBe(200);
+    expect(((await permanentPatch.json()) as any).bot.lifecycle).toBeUndefined();
+    expect(await conversionStream.next()).toMatchObject({
+      kind: "bot",
+      bot: { id: remoteBot.id, lifecycle: null },
+    });
+    conversionStream.close();
 
     const uploaded = await fetch(`${REMOTE_BASE}/api/bots/${remoteBot.id}/attachments`, {
       method: "POST",
@@ -378,13 +439,18 @@ describe("harness HTTP API", () => {
   });
 
   it("creates, patches, and deletes a bot", async () => {
-    const created = await api("POST", "/api/bots");
+    const created = await api("POST", "/api/bots", { temporary: true, ttlMinutes: 60 });
     expect(created.status).toBe(201);
     const bot = created.body.bot;
+    expect(bot.lifecycle).toMatchObject({ kind: "temporary", expiresAt: expect.any(Number) });
+    expect(bot.lifecycle.expiresAt).toBeGreaterThan(Date.now());
+    expect((await api("POST", "/api/bots", { temporary: true, ttlMinutes: 5 })).status).toBe(400);
+    expect((await api("POST", "/api/bots", { ttlMinutes: 60 })).status).toBe(400);
 
-    const patched = await api("PATCH", `/api/bots/${bot.id}`, { name: "Renamed", pinned: true });
+    const patched = await api("PATCH", `/api/bots/${bot.id}`, { name: "Renamed", pinned: true, temporary: false });
     expect(patched.status).toBe(200);
     expect(patched.body.bot).toMatchObject({ name: "Renamed", pinned: true });
+    expect(patched.body.bot.lifecycle).toBeUndefined();
 
     const avatar = { kind: "mote", shapeId: "drop", color: "#f56a16", motion: "playful" };
     const avatarPatch = await api("PATCH", `/api/bots/${bot.id}`, { avatar });
@@ -406,15 +472,24 @@ describe("harness HTTP API", () => {
     // which deletion must remove together with the schedule.
     expect((await api("POST", `/api/routines/${routine.body.routine.id}/run`)).status).toBe(409);
 
+    const outputWorkspace = join(home, ".cumea", "bot-workspaces", bot.id);
+    mkdirSync(outputWorkspace, { recursive: true });
+    writeFileSync(join(outputWorkspace, "delete-me.md"), "private capability");
+    const capability = await api("POST", `/api/bots/${bot.id}/files/resolve`, { path: "delete-me.md" });
+    expect(capability.status).toBe(201);
+
     const deleted = await api("DELETE", `/api/bots/${bot.id}`);
     expect(deleted.status).toBe(200);
     expect(deleted.body.removed).toMatchObject({ tasks: 1, runs: 1, routines: 1 });
+    expect(deleted.body.computerCleanup).toEqual({ outcome: "not-configured" });
     const after = await api("GET", "/api/bots");
     expect(after.body.bots.find((b: { id: string }) => b.id === bot.id)).toBeUndefined();
     const afterWork = (await api("GET", "/api/work")).body.workspace;
     expect(afterWork.routines.some((candidate: { botId: string }) => candidate.botId === bot.id)).toBe(false);
     expect(afterWork.tasks.some((candidate: { botId: string }) => candidate.botId === bot.id)).toBe(false);
     expect(afterWork.runs.some((candidate: { botId: string }) => candidate.botId === bot.id)).toBe(false);
+    expect(existsSync(outputWorkspace)).toBe(false);
+    expect((await fetch(`${BASE}${capability.body.file.previewUrl}`)).status).toBe(404);
   });
 
   it("keeps the bot and its routines when attachment cleanup blocks deletion", async () => {
@@ -447,6 +522,121 @@ describe("harness HTTP API", () => {
 
     rmSync(attachmentPath, { recursive: true, force: true });
     expect((await api("DELETE", `/api/bots/${bot.id}`)).status).toBe(200);
+  });
+
+  it("drains admitted uploads and file resolves before publishing bot.deleted", async () => {
+    const bot = (await api("POST", "/api/bots", { temporary: true, ttlMinutes: 60 })).body.bot;
+    const routine = await api("POST", "/api/routines", {
+      botId: bot.id,
+      name: "Deletion-race fixture",
+      prompt: "Create one auditable task before deletion",
+      schedule: { kind: "interval", everyMinutes: 30 },
+    });
+    expect(routine.status).toBe(201);
+    // The deliberately unavailable provider still leaves a canonical failed
+    // task, which is enough to exercise the task/teach owner lookup.
+    expect((await api("POST", `/api/routines/${routine.body.routine.id}/run`)).status).toBe(409);
+    const task = (await api("GET", "/api/work")).body.workspace.tasks.find(
+      (candidate: { routineId?: string }) => candidate.routineId === routine.body.routine.id,
+    );
+    expect(task).toBeDefined();
+    const deletableUpload = await fetch(`${BASE}/api/bots/${bot.id}/attachments`, {
+      method: "POST",
+      headers: { "content-type": "text/plain", "x-file-name": "delete-during-race.txt" },
+      body: "owned attachment",
+    });
+    expect(deletableUpload.status).toBe(201);
+    const deletableAttachment = (await deletableUpload.json()) as { attachment: { id: string } };
+    const botWorkspace = join(home, ".cumea", "bot-workspaces", bot.id);
+    mkdirSync(botWorkspace, { recursive: true });
+    writeFileSync(join(botWorkspace, "race.md"), "# Race-safe preview");
+
+    // The 100-continue acknowledgement is sent from Node immediately before
+    // it emits the request to our handler. By the time the client receives it,
+    // both handlers have synchronously entered the per-bot gate and are paused
+    // only on their deliberately withheld bodies.
+    const upload = beginPausedRequest(
+      `/api/bots/${bot.id}/attachments`,
+      "late upload bytes",
+      { "content-type": "text/plain", "x-file-name": "late.txt" },
+    );
+    const resolve = beginPausedRequest(
+      `/api/bots/${bot.id}/files/resolve`,
+      JSON.stringify({ path: "./race.md" }),
+      { "content-type": "application/json" },
+    );
+    await Promise.all([upload.admitted, resolve.admitted]);
+
+    const deletion = api("DELETE", `/api/bots/${bot.id}`);
+    let blocked: { status: number; body: any } | undefined;
+    const deadline = Date.now() + 2_000;
+    do {
+      blocked = await api("POST", `/api/bots/${bot.id}/files/resolve`, { path: "./race.md" });
+      if (blocked.status === 409) break;
+      await new Promise((done) => setTimeout(done, 5));
+    } while (Date.now() < deadline);
+    expect(blocked).toEqual({ status: 409, body: { error: "the bot is being deleted" } });
+
+    // Once deletion closes admission, lifecycle conversion and every Box
+    // action fail before reading or exposing provider data. The same gate also
+    // covers the adjacent message/respond/interrupt/delete mutation paths.
+    const blockedDuringDelete = await Promise.all([
+      api("PATCH", `/api/bots/${bot.id}`, { temporary: false }),
+      api("GET", `/api/bots/${bot.id}/computer`),
+      api("POST", `/api/bots/${bot.id}/computer/provision`),
+      api("POST", `/api/bots/${bot.id}/computer/join`),
+      api("POST", `/api/bots/${bot.id}/computer/sleep`),
+      api("POST", `/api/bots/${bot.id}/computer/exec`, { command: "pwd" }),
+      api("POST", `/api/bots/${bot.id}/computer/screenshot`),
+      api("POST", `/api/bots/${bot.id}/messages`, { text: "must not start" }),
+      api("POST", `/api/bots/${bot.id}/respond`, { requestId: "late-request", behavior: "deny" }),
+      api("POST", `/api/bots/${bot.id}/interrupt`),
+      api("POST", "/api/routines", {
+        botId: bot.id,
+        name: "Must not be acknowledged",
+        prompt: "Must not become an orphan",
+        schedule: { kind: "interval", everyMinutes: 30 },
+      }),
+      api("POST", `/api/tasks/${task.id}/teach`, {
+        name: "Must not be taught",
+        schedule: { kind: "interval", everyMinutes: 30 },
+      }),
+      api("POST", `/api/tasks/${task.id}/retry`),
+      api("PATCH", `/api/routines/${routine.body.routine.id}`, { enabled: false }),
+      api("DELETE", `/api/routines/${routine.body.routine.id}`),
+      api("POST", `/api/routines/${routine.body.routine.id}/run`),
+      api("DELETE", `/api/attachments/${deletableAttachment.attachment.id}`),
+      api("DELETE", `/api/bots/${bot.id}`),
+    ]);
+    for (const result of blockedDuringDelete) {
+      expect(result.status).toBe(409);
+      expect(result.body.error).toMatch(/delet/i);
+    }
+
+    upload.finish();
+    resolve.finish();
+    const [uploaded, resolved, deleted] = await Promise.all([upload.response, resolve.response, deletion]);
+    expect(uploaded.status).toBe(201);
+    expect(resolved.status).toBe(201);
+    expect(deleted.status).toBe(200);
+
+    const capabilityUrl = resolved.body.file.previewUrl as string;
+    expect((await fetch(`${BASE}${capabilityUrl}`)).status).toBe(404);
+    const attachmentDirectory = join(home, ".cumea", "attachments", bot.id);
+    expect(existsSync(attachmentDirectory) ? readdirSync(attachmentDirectory) : []).toEqual([]);
+    expect(existsSync(botWorkspace)).toBe(false);
+    const afterWork = (await api("GET", "/api/work")).body.workspace;
+    expect(afterWork.attachments.some((attachment: { botId: string }) => attachment.botId === bot.id)).toBe(false);
+    expect(afterWork.routines.some((candidate: { botId: string }) => candidate.botId === bot.id)).toBe(false);
+    expect(afterWork.tasks.some((candidate: { botId: string }) => candidate.botId === bot.id)).toBe(false);
+
+    const lateUpload = await fetch(`${BASE}/api/bots/${bot.id}/attachments`, {
+      method: "POST",
+      headers: { "content-type": "text/plain", "x-file-name": "after-delete.txt" },
+      body: "must not persist",
+    });
+    expect(lateUpload.status).toBe(404);
+    expect(existsSync(attachmentDirectory) ? readdirSync(attachmentDirectory) : []).toEqual([]);
   });
 
   for (const target of [
@@ -548,6 +738,59 @@ describe("harness HTTP API", () => {
 
     expect((await api("DELETE", `/api/attachments/${attachment.id}`)).status).toBe(200);
     expect((await api("GET", `/api/attachments/${attachment.id}`)).status).toBe(404);
+  });
+
+  it("opens bot and attachment documents through opaque, same-origin capabilities", async () => {
+    const bot = (await api("GET", "/api/bots")).body.bots[0];
+    const botWorkspace = join(home, ".cumea", "bot-workspaces", bot.id);
+    mkdirSync(botWorkspace, { recursive: true });
+    writeFileSync(join(botWorkspace, "brief.md"), "# Private brief\n\nSafe text");
+
+    const resolved = await api("POST", `/api/bots/${bot.id}/files/resolve`, { path: "./brief.md" });
+    expect(resolved.status).toBe(201);
+    expect(resolved.body.file).toMatchObject({ name: "brief.md", kind: "markdown", source: "local" });
+    expect(resolved.body.file.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(JSON.stringify(resolved.body)).not.toContain(home);
+
+    const preview = await fetch(`${BASE}${resolved.body.file.previewUrl}`);
+    expect(preview.status).toBe(200);
+    expect(preview.headers.get("cache-control")).toBe("no-store");
+    expect(await preview.json()).toEqual({ preview: { kind: "markdown", text: "# Private brief\n\nSafe text" } });
+
+    const download = await fetch(`${BASE}${resolved.body.file.downloadUrl}`);
+    expect(download.status).toBe(200);
+    expect(download.headers.get("content-disposition")).toContain("attachment;");
+    expect(await download.text()).toBe("# Private brief\n\nSafe text");
+
+    const outside = await api("POST", `/api/bots/${bot.id}/files/resolve`, { path: "../../config.json" });
+    expect(outside.status).toBe(403);
+    expect(JSON.stringify(outside.body)).not.toContain(home);
+
+    writeFileSync(join(botWorkspace, "paper.pdf"), "%PDF-1.7\n1 0 obj\n%%EOF");
+    const pdfResolved = await api("POST", `/api/bots/${bot.id}/files/resolve`, { path: "paper.pdf" });
+    expect(pdfResolved.status).toBe(201);
+    const pdfPreview = await fetch(`${BASE}${pdfResolved.body.file.previewUrl}`);
+    expect(pdfPreview.headers.get("x-frame-options")).toBe("DENY");
+    expect(pdfPreview.headers.get("content-security-policy")).toBeNull();
+    expect(pdfPreview.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(pdfPreview.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(pdfPreview.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+    expect(pdfPreview.headers.get("content-type")).toContain("application/pdf");
+    expect(pdfPreview.headers.get("content-disposition")).toContain("attachment;");
+    expect(await pdfPreview.text()).toBe("%PDF-1.7\n1 0 obj\n%%EOF");
+
+    const upload = await fetch(`${BASE}/api/bots/${bot.id}/attachments`, {
+      method: "POST",
+      headers: { "content-type": "text/markdown", "x-file-name": encodeURIComponent("uploaded.md") },
+      body: "## Uploaded",
+    });
+    const attachment = ((await upload.json()) as any).attachment;
+    const attachmentResolved = await api("POST", `/api/attachments/${attachment.id}/files/resolve`);
+    expect(attachmentResolved.status).toBe(201);
+    expect(attachmentResolved.body.file).toMatchObject({ name: "uploaded.md", kind: "markdown" });
+    const attachmentPreview = await fetch(`${BASE}${attachmentResolved.body.file.previewUrl}`);
+    expect(await attachmentPreview.json()).toEqual({ preview: { kind: "markdown", text: "## Uploaded" } });
+    await api("DELETE", `/api/attachments/${attachment.id}`);
   });
 
   it("creates, pauses, runs, and deletes a persistent routine", async () => {

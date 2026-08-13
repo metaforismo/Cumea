@@ -50,6 +50,7 @@ interface RawBot {
   unread?: boolean;
   busy?: boolean;
   createdAt?: number;
+  lifecycle?: { kind?: "temporary"; expiresAt?: number } | null;
   avatar?: Partial<AvatarConfig> & { kind?: "mote" | "upload"; imageDataUrl?: string };
   messages?: RawMessage[];
 }
@@ -275,6 +276,12 @@ function mapAgent(bot: RawBot): AgentSummary {
   const last = messages.at(-1);
   const attention = pendingAttention(bot);
   const needsYou = attention.length > 0;
+  const lifecycle = bot.lifecycle?.kind === "temporary"
+    && typeof bot.lifecycle.expiresAt === "number"
+    && Number.isSafeInteger(bot.lifecycle.expiresAt)
+    && bot.lifecycle.expiresAt > 0
+    ? { kind: "temporary" as const, expiresAt: bot.lifecycle.expiresAt }
+    : undefined;
   return {
     id: bot.id,
     threadId: bot.threadId,
@@ -286,6 +293,7 @@ function mapAgent(bot: RawBot): AgentSummary {
     needsYou,
     presence: needsYou ? "needs-you" : bot.busy ? "working" : "idle",
     avatar: avatarFor(bot),
+    ...(lifecycle ? { lifecycle } : {}),
   };
 }
 
@@ -588,14 +596,26 @@ export class HostClient {
     });
   }
 
-  async createAgent(name: string, title: string): Promise<AgentSummary> {
+  async createAgent(name: string, title: string, options: { temporary?: boolean } = {}): Promise<AgentSummary> {
     const body = await this.request("/api/bots", {
       method: "POST",
-      body: JSON.stringify({ name, title }),
+      body: JSON.stringify({ name, title, ...(options.temporary ? { temporary: true, ttlMinutes: 24 * 60 } : {}) }),
     });
     const incoming = rawBot(body.bot);
     if (!incoming) throw new Error("The host returned an incomplete bot response.");
     return mapAgent(this.rememberBot(incoming));
+  }
+
+  async makeAgentPermanent(agentId: string): Promise<AgentSummary> {
+    const body = await this.request(`/api/bots/${encodeURIComponent(agentId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ temporary: false }),
+    });
+    const incoming = rawBot(body.bot);
+    if (!incoming) throw new Error("The host returned an incomplete bot response.");
+    const existing = this.bots.get(agentId);
+    const permanent = { ...existing, ...incoming, lifecycle: undefined } as RawBot;
+    return mapAgent(this.rememberBot(permanent, true));
   }
 
   async markRead(agentId: string): Promise<void> {

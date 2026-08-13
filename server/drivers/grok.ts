@@ -129,7 +129,7 @@ export const GrokDriver: ProviderDriver<GrokConfig> = {
       const { threadId } = turn;
       if (!apiKey) throw new Error(`no xAI key — set ${config.apiKeyEnv} or config.json xai.key`);
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
-      const turnId = newId();
+      const turnId = turn.turnId ?? newId();
       const abort = new AbortController();
       active.set(threadId, { abort, turnId });
 

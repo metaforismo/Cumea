@@ -9,6 +9,7 @@ import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { stageFilesForDeletion } from "./delete-files.ts";
 import { parseBotAvatar, Store, type BotRecord } from "./store.ts";
+import { sweepTemporaryBots } from "./temporary-bots.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 
@@ -55,6 +56,68 @@ describe("Store", () => {
     expect(back.avatar).toEqual({ kind: "mote", shapeId: "ripple", color: "#7651d6", motion: "kinetic" });
     const messages = reloaded.messagesFor(bot.threadId);
     expect(messages.at(-1)).toMatchObject({ role: "user", text: "hi there" });
+  });
+
+  it("persists temporary lifecycle across restart and converts atomically to permanent", () => {
+    const expiresAt = Date.now() + 60_000;
+    const store = new Store(selection);
+    const bot = store.createBot({ lifecycle: { kind: "temporary", expiresAt } });
+
+    expect(new Store(selection).bot(bot.id)?.lifecycle).toEqual({ kind: "temporary", expiresAt });
+    expect(store.setBotLifecycle(bot.id, null)?.lifecycle).toBeUndefined();
+
+    const raw: BotRecord[] = JSON.parse(readFileSync(join(DATA_DIR, "bots.json"), "utf8"));
+    expect(raw.find((candidate) => candidate.id === bot.id)).not.toHaveProperty("lifecycle");
+    expect(new Store(selection).bot(bot.id)?.lifecycle).toBeUndefined();
+  });
+
+  it("keeps the temporary deadline in memory and on disk when conversion cannot persist", () => {
+    const lifecycle = { kind: "temporary" as const, expiresAt: Date.now() + 60_000 };
+    const store = new Store(selection);
+    const bot = store.createBot({ lifecycle });
+    const botsFile = join(DATA_DIR, "bots.json");
+    const backup = join(DATA_DIR, "bots-backup.json");
+    renameSync(botsFile, backup);
+    mkdirSync(botsFile);
+
+    expect(() => store.setBotLifecycle(bot.id, null)).toThrow();
+    expect(store.bot(bot.id)?.lifecycle).toEqual(lifecycle);
+
+    rmSync(botsFile, { recursive: true });
+    renameSync(backup, botsFile);
+    expect(new Store(selection).bot(bot.id)?.lifecycle).toEqual(lifecycle);
+  });
+
+  it("remains eligible for cleanup after a restart once its durable TTL is due", async () => {
+    const expiresAt = Date.now() + 1_000;
+    const store = new Store(selection);
+    const bot = store.createBot({ lifecycle: { kind: "temporary", expiresAt } });
+    const reloaded = new Store(selection);
+
+    const result = await sweepTemporaryBots({
+      bots: () => reloaded.bots,
+      workspace: () => ({ tasks: [], runs: [], routines: [] }),
+      messagesFor: (threadId) => reloaded.messagesFor(threadId),
+      hasActiveTurn: () => false,
+      isPendingRequest: () => false,
+      deleteBot: (botId) => { reloaded.deleteBot(botId); },
+      now: expiresAt,
+    });
+
+    expect(result).toMatchObject({ removed: [bot.id], skipped: [], failed: [] });
+    expect(new Store(selection).bot(bot.id)).toBeNull();
+  });
+
+  it("fails malformed lifecycle metadata safe as permanent during migration", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const file = join(DATA_DIR, "bots.json");
+    const raw: Array<Omit<BotRecord, "lifecycle"> & { lifecycle?: unknown }> = JSON.parse(readFileSync(file, "utf8"));
+    raw[0].lifecycle = { kind: "temporary", expiresAt: "soon" };
+    writeFileSync(file, JSON.stringify(raw));
+
+    expect(new Store(selection).bot(bot.id)?.lifecycle).toBeUndefined();
+    expect(JSON.parse(readFileSync(file, "utf8"))[0]).not.toHaveProperty("lifecycle");
   });
 
   it("patchMessage merges card patches and returns null for unknown ids", () => {

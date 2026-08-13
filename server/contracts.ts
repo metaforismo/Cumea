@@ -88,6 +88,9 @@ export type RuntimeEventListener = (event: RuntimeEvent) => void;
 // carrying the provider-native continuation (e.g. a claude session id).
 export interface SendTurnInput {
   threadId: ThreadId;
+  /** Harness-issued correlation id. Drivers must use it for every event from
+   * this dispatch; direct adapter callers may omit it for a generated id. */
+  turnId?: TurnId;
   text: string;
   model?: string;
   resumeCursor?: unknown;

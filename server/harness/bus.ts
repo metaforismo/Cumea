@@ -4,15 +4,22 @@
 // a per-thread canonical NDJSON log (the debugging trick both upstream and
 // agentcal lean on), and delivered to subscribers (the SSE endpoint and
 // the server-side message folder).
-import { appendFileSync } from "node:fs";
-import { join } from "node:path";
-
-import { EVENTS_DIR } from "../config.ts";
 import type { ProviderInstance, RuntimeEvent, RuntimeEventListener } from "../contracts.ts";
+import { EventLogWriter, type EventLogDeletionTransaction } from "./event-log.ts";
 
 export class EventBus {
   private listeners = new Set<RuntimeEventListener>();
   private unsubscribes: Array<() => void> = [];
+  private readonly eventLog: EventLogWriter;
+  private readonly shouldDeliver: (event: RuntimeEvent) => boolean;
+
+  constructor(
+    eventLog = new EventLogWriter(),
+    shouldDeliver: (event: RuntimeEvent) => boolean = () => true,
+  ) {
+    this.eventLog = eventLog;
+    this.shouldDeliver = shouldDeliver;
+  }
 
   attach(instances: ProviderInstance[]) {
     for (const instance of instances) {
@@ -30,8 +37,11 @@ export class EventBus {
   }
 
   publish(event: RuntimeEvent) {
+    // Correlation/liveness filtering belongs before both diagnostics and fanout:
+    // a rejected event must not reach peer-agent waiters or any future listener.
+    if (!this.shouldDeliver(event)) return;
     try {
-      appendFileSync(join(EVENTS_DIR, `${event.threadId}.ndjson`), JSON.stringify(event) + "\n");
+      this.eventLog.append(event.threadId, event);
     } catch {
       /* logging must never take down the stream */
     }
@@ -51,5 +61,15 @@ export class EventBus {
 
   detachAll() {
     for (const unsub of this.unsubscribes.splice(0)) unsub();
+    this.eventLog.close();
+  }
+
+  /** Persist any buffered diagnostics without detaching provider adapters. */
+  flushLog() {
+    this.eventLog.flush();
+  }
+
+  prepareThreadDeletion(threadId: string): EventLogDeletionTransaction {
+    return this.eventLog.prepareThreadDeletion(threadId);
   }
 }

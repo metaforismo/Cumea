@@ -231,7 +231,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   <div>
                     <div className="text-[14px] font-medium text-ink">Microphone & speech</div>
                     <div className="mt-0.5 text-[12.5px] text-ink-secondary">
-                      Voice dictation into the composer, transcribed on-device.
+                      Voice dictation through Apple Speech. Audio may be processed online when
+                      on-device recognition is unavailable.
                     </div>
                   </div>
                 </div>
