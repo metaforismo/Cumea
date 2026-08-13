@@ -1462,22 +1462,6 @@ document.querySelector("[data-mobile-composer]")?.addEventListener("submit", (ev
 
 renderMobileList();
 
-const SURFACE_NOTES = {
-  desktop: "Your models and credentials stay on the host you control.",
-  mobile: "Mobile is a paired control surface, not a second model runtime.",
-};
-
-document.querySelectorAll("[data-surface]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const surface = button.dataset.surface;
-    document.querySelectorAll("[data-surface]").forEach((item) => item.setAttribute("aria-selected", String(item === button)));
-    const stage = document.querySelector("[data-continuity-stage]");
-    if (stage) stage.dataset.activeSurface = surface;
-    const note = document.querySelector("[data-surface-note]");
-    if (note) note.textContent = SURFACE_NOTES[surface];
-  });
-});
-
 const JOBS = {
   chief: { status: "Working on your host", title: "Keep the week moving.", copy: "Coordinate the calendar, hold decisions that need your judgment, and keep every handoff visible.", proof: "Venue held · contract waiting for approval", shot: approvalShot },
   sales: { status: "Drafts held for approval", title: "Research before outreach.", copy: "Read the account list, draft in your voice, and leave every message unsent until you approve it.", proof: "40 accounts · 18 drafts · 0 sent", shot: heroShot },

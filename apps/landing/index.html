@@ -251,36 +251,28 @@
         </div>
       </section>
 
-      <section class="continuity section-dark" id="threads" aria-labelledby="continuity-title">
-        <div class="shell continuity-grid reveal">
-          <div class="continuity-copy">
-            <p class="kicker">Desktop to pocket</p>
-            <h2 id="continuity-title">One workspace.<br />Two places.</h2>
-            <p>The host keeps working on your machine. The mobile app pairs with it so you can message a bot, approve a decision, stop a run, or check status away from your desk.</p>
-            <div class="surface-switch" role="tablist" aria-label="Cumea surfaces">
-              <button type="button" role="tab" aria-selected="true" data-surface="desktop">Desktop</button>
-              <button type="button" role="tab" aria-selected="false" data-surface="mobile">Mobile</button>
-            </div>
-            <p class="surface-note" data-surface-note>Your models and credentials stay on the host you control.</p>
+      <section class="host-section section shell" id="threads" aria-labelledby="host-title">
+        <div class="host-heading reveal">
+          <div>
+            <p class="kicker">Self-hosted</p>
+            <h2 id="host-title">The host is yours.</h2>
           </div>
-          <div class="continuity-stage" data-continuity-stage data-active-surface="desktop">
-            <figure class="continuity-desktop"><img data-app-shot="hero" alt="Cumea desktop workspace" loading="lazy" /></figure>
-            <div class="continuity-phone" aria-hidden="true">
-              <div class="mini-phone-head"><span></span><strong>Your bots</strong><i></i></div>
-              <div class="mini-phone-alert">2 items need you <b>→</b></div>
-              <div class="mini-phone-row"><span class="mini-mote orange"></span><p><strong>Chief of Staff</strong><small>Waiting on you</small></p><time>Now</time></div>
-              <div class="mini-phone-row"><span class="mini-mote teal"></span><p><strong>Inbox Manager</strong><small>41 unread archived</small></p><time>12:11</time></div>
-              <div class="mini-phone-row"><span class="mini-mote pink"></span><p><strong>Research Analyst</strong><small>Brief ready</small></p><time>Yesterday</time></div>
-            </div>
-            <span class="handoff-line" aria-hidden="true"><i></i></span>
+          <p>Cumea uses the provider CLIs and machines you configure. Credentials stay on your host; the mobile app pairs with it as a control surface.</p>
+        </div>
+        <div class="host-detail reveal">
+          <figure><img data-app-shot="computer" alt="Cumea computer panel beside a conversation" loading="lazy" /></figure>
+          <div class="host-facts">
+            <article><span>01</span><h3>Any supported model</h3><p>Choose a configured provider per bot. Cumea does not resell model access.</p></article>
+            <article><span>02</span><h3>A computer when supported</h3><p>Run on your Mac or a VM you administer. No managed Cumea computer is implied.</p></article>
+            <article><span>03</span><h3>Mobile stays paired</h3><p>Message, approve, stop, and check status while providers continue on the host.</p></article>
           </div>
         </div>
       </section>
 
-      <section class="jobs-section section" id="council" aria-labelledby="jobs-title">
+      <section class="jobs-section section section-dark" id="council" aria-labelledby="jobs-title">
         <div class="shell reveal">
           <p class="kicker">Clear jobs, clear threads</p>
-          <div class="jobs-heading"><h2 id="jobs-title">Give each bot a job.</h2><p>No cast of fantasy names to decode. Each thread says what it owns, what it is doing, and when it needs you.</p></div>
+          <div class="jobs-heading"><h2 id="jobs-title">Give each bot a clear job.</h2><p>Each thread says what it owns, what it is doing, and when it needs you.</p></div>
           <div class="job-selector" role="tablist" aria-label="Example bot jobs">
             <button type="button" role="tab" aria-selected="true" data-job="chief">Chief of Staff</button>
             <button type="button" role="tab" aria-selected="false" data-job="sales">Sales Outbound</button>
@@ -294,16 +286,16 @@
         </div>
       </section>
 
-      <section class="control-section section-dark" id="self-hosted" aria-labelledby="control-title">
+      <section class="control-section" id="self-hosted" aria-labelledby="control-title">
         <div class="shell control-heading reveal">
-          <p class="kicker">Control is the product</p>
-          <h2 id="control-title">Your host stays<br />the boundary.</h2>
+          <p class="kicker">Control</p>
+          <h2 id="control-title">Your host stays the boundary.</h2>
           <p>Cumea connects to provider CLIs you configure. The machine, provider accounts, credentials, and deployment remain yours.</p>
         </div>
         <div class="shell control-rows reveal">
-          <article><span>01</span><div><h3>Your models and keys</h3><p>Use supported providers and accounts already configured on your host.</p></div><figure><img data-app-shot="model" alt="Cumea model picker" loading="lazy" /></figure></article>
-          <article><span>02</span><div><h3>Your computer and routines</h3><p>Run locally or on a VM you administer. Computer use appears only when the runtime supports it.</p></div><figure><img data-app-shot="computer" alt="Cumea computer panel" loading="lazy" /></figure></article>
-          <article><span>03</span><div><h3>Your approval</h3><p>Questions return to the thread before work continues. This page never sends, deletes, or purchases anything.</p></div><figure><img data-app-shot="approval" alt="Cumea approval card" loading="lazy" /></figure></article>
+          <article><span>01</span><div><h3>Your models and keys</h3><p>Use supported providers and accounts already configured on your host.</p></div></article>
+          <article><span>02</span><div><h3>Your computer and routines</h3><p>Run locally or on a VM you administer. Capabilities appear only when the runtime supports them.</p></div></article>
+          <article><span>03</span><div><h3>Your approval</h3><p>Questions return to the thread before work continues. This page never sends, deletes, or purchases anything.</p></div></article>
         </div>
       </section>
 
