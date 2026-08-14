@@ -1463,35 +1463,122 @@ document.querySelector("[data-mobile-composer]")?.addEventListener("submit", (ev
 renderMobileList();
 
 const JOBS = {
-  chief: { status: "Working on your host", title: "Keep the week moving.", copy: "Coordinate the calendar, hold decisions that need your judgment, and keep every handoff visible.", proof: "Venue held · contract waiting for approval", shot: approvalShot },
-  sales: { status: "Drafts held for approval", title: "Research before outreach.", copy: "Read the account list, draft in your voice, and leave every message unsent until you approve it.", proof: "40 accounts · 18 drafts · 0 sent", shot: heroShot },
-  inbox: { status: "Needs you", title: "Clear the noise, keep the judgment.", copy: "Archive routine mail, draft replies, and surface the one thread where your decision matters.", proof: "41 read · Dana held for your review", shot: approvalShot },
-  research: { status: "Brief ready", title: "Trace claims back to sources.", copy: "Compare material, organize the changes, and return a reviewable brief without publishing it.", proof: "4 changes · sources attached · 0 published", shot: marketplaceShot },
+  chief: { status: "Working on your host", title: "Keep the week moving.", copy: "Coordinate the calendar, hold decisions that need your judgment, and keep every handoff visible.", proof: "Venue held · contract waiting for approval", shot: approvalShot, alt: "Illustrative Cumea approval request for a Chief of Staff agent" },
+  sales: { status: "Drafts held for approval", title: "Research before outreach.", copy: "Read the account list, draft in your voice, and leave every message unsent until you approve it.", proof: "40 accounts · 18 drafts · 0 sent", shot: heroShot, alt: "Illustrative Cumea thread for a Sales Outbound agent" },
+  inbox: { status: "Needs you", title: "Clear the noise, keep the judgment.", copy: "Archive routine mail, draft replies, and surface the one thread where your decision matters.", proof: "41 read · Dana held for your review", shot: approvalShot, alt: "Illustrative Cumea approval request for an Inbox Manager agent" },
+  research: { status: "Brief ready", title: "Trace claims back to sources.", copy: "Compare material, organize the changes, and return a reviewable brief without publishing it.", proof: "4 changes · sources attached · 0 published", shot: marketplaceShot, alt: "Illustrative Cumea tool view for a Research Analyst agent" },
 };
 
-document.querySelectorAll("[data-job]").forEach((button) => {
-  button.addEventListener("click", () => {
+const EVIDENCE = {
+  thread: {
+    title: "Thread",
+    caption: "Conversation, actions, and audit trail stay readable in one place.",
+    alt: "Cumea thread with tool activity and an approval request",
+    shot: heroShot,
+  },
+  approval: {
+    title: "Approval",
+    caption: "A specific choice returns to the thread before the agent continues.",
+    alt: "Cumea approval request with specific response choices",
+    shot: approvalShot,
+  },
+  computer: {
+    title: "Computer",
+    caption: "The optional computer runtime stays visible beside the agent that uses it.",
+    alt: "Cumea computer panel beside an agent conversation",
+    shot: computerShot,
+  },
+};
+
+Object.values(EVIDENCE).forEach((item) => {
+  const preload = new Image();
+  preload.src = item.shot;
+});
+
+function markTabs(buttons, active) {
+  buttons.forEach((item) => {
+    const selected = item === active;
+    item.setAttribute("aria-selected", String(selected));
+    item.tabIndex = selected ? 0 : -1;
+  });
+}
+
+function bindArrowKeys(buttons) {
+  buttons.forEach((button, index) => {
+    button.addEventListener("keydown", (event) => {
+      if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      let next = index;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (index + 1) % buttons.length;
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (index - 1 + buttons.length) % buttons.length;
+      if (event.key === 'Home') next = 0;
+      if (event.key === 'End') next = buttons.length - 1;
+      buttons[next].focus();
+      buttons[next].click();
+    });
+  });
+}
+
+const evidenceButtons = [...document.querySelectorAll("[data-evidence]")];
+const evidenceFrame = document.querySelector(".evidence-frame");
+const evidenceImage = document.querySelector("[data-evidence-image]");
+const evidenceNext = document.querySelector("[data-evidence-next]");
+const evidenceTitle = document.querySelector("[data-evidence-title]");
+const evidenceCaption = document.querySelector("[data-evidence-caption]");
+let evidenceSwapTimer;
+
+evidenceButtons.forEach((button) => {
+  button.addEventListener("click", (event) => {
+    const item = EVIDENCE[button.dataset.evidence];
+    if (!item || !evidenceImage) return;
+    markTabs(evidenceButtons, button);
+    evidenceFrame?.setAttribute("aria-labelledby", button.id);
+    if (evidenceTitle) evidenceTitle.textContent = item.title;
+    if (evidenceCaption) evidenceCaption.textContent = item.caption;
+    window.clearTimeout(evidenceSwapTimer);
+    if (event.detail === 0 || prefersReducedMotion() || !evidenceNext) {
+      evidenceFrame?.classList.remove("is-switching");
+      evidenceImage.src = item.shot;
+      evidenceImage.alt = item.alt;
+      return;
+    }
+    evidenceNext.src = item.shot;
+    evidenceNext.alt = "";
+    window.requestAnimationFrame(() => evidenceFrame?.classList.add("is-switching"));
+    evidenceSwapTimer = window.setTimeout(() => {
+      evidenceImage.src = item.shot;
+      evidenceImage.alt = item.alt;
+      evidenceFrame?.classList.remove("is-switching");
+    }, 180);
+  });
+});
+markTabs(evidenceButtons, evidenceButtons[0]);
+bindArrowKeys(evidenceButtons);
+
+document.querySelectorAll("[data-role-mote]").forEach((slot) => {
+  slot.replaceChildren(renderMote(avatars[slot.dataset.roleMote] ?? DEFAULT_AVATAR, 32));
+});
+
+const jobButtons = [...document.querySelectorAll("[data-job]")];
+jobButtons.forEach((button) => {
+  button.addEventListener("click", (event) => {
     const job = JOBS[button.dataset.job];
-    document.querySelectorAll("[data-job]").forEach((item) => item.setAttribute("aria-selected", String(item === button)));
+    if (!job) return;
+    markTabs(jobButtons, button);
+    const stage = document.querySelector("[data-job-scene]");
+    stage?.setAttribute("aria-labelledby", button.id);
+    if (event.detail !== 0 && !prefersReducedMotion()) stage?.classList.add("is-switching");
     document.querySelector("[data-job-status]").textContent = job.status;
     document.querySelector("[data-job-title]").textContent = job.title;
     document.querySelector("[data-job-copy]").textContent = job.copy;
     document.querySelector("[data-job-proof]").textContent = job.proof;
     const image = document.querySelector("[data-job-scene] img");
-    if (image) image.src = job.shot;
+    if (image) {
+      image.src = job.shot;
+      image.alt = job.alt;
+    }
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => stage?.classList.remove("is-switching")));
   });
 });
-
-const revealNodes = document.querySelectorAll(".reveal");
-if (prefersReducedMotion() || !("IntersectionObserver" in window)) {
-  revealNodes.forEach((node) => node.classList.add("is-visible"));
-} else {
-  const revealObserver = new IntersectionObserver((entries, observer) => {
-    entries.forEach((entry) => {
-      if (!entry.isIntersecting) return;
-      entry.target.classList.add("is-visible");
-      observer.unobserve(entry.target);
-    });
-  }, { threshold: 0.14 });
-  revealNodes.forEach((node) => revealObserver.observe(node));
-}
+markTabs(jobButtons, jobButtons[0]);
+bindArrowKeys(jobButtons);

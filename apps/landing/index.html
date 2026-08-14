@@ -22,6 +22,14 @@
     <title>Cumea — AI teammates you actually own</title>
   </head>
   <body id="top">
+    <!--
+      THESIS: Cumea earns trust by showing the chain from a persistent thread to a held decision and a user-owned host; it refuses the generic feature-card parade.
+      OWN-WORLD: warm paper, near-black product surfaces, Cumea orange as a state signal, hairline rules, system typography, and Mote identities.
+      STORY: inspect a real workflow, understand role-based agents, verify the host boundary, then inspect the source or developer-preview release.
+      FIRST VIEWPORT: the approved Opencrew-like hero remains unchanged; the interactive desktop or mobile product preview is the dominant proof and the GitHub actions stay centered above it.
+      FORM: proof dossier, ranked 7 of 7, seed e207a4b4; signature interaction is an immediate, user-controlled evidence switch with a restrained crossfade.
+      FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+    -->
     <a class="skip-link" href="#main">Skip to content</a>
 
     <header class="site-header">
@@ -251,60 +259,71 @@
         </div>
       </section>
 
-      <section class="host-section section shell" id="threads" aria-labelledby="host-title">
-        <div class="host-heading reveal">
-          <div>
-            <p class="kicker">Self-hosted</p>
-            <h2 id="host-title">The host is yours.</h2>
-          </div>
-          <p>Cumea uses the provider CLIs and machines you configure. Credentials stay on your host; the mobile app pairs with it as a control surface.</p>
+      <section class="proof-strip" id="threads" aria-label="Cumea product facts">
+        <div class="proof-strip-inner dossier-shell">
+          <p><strong>MIT licensed</strong><span>Source available now</span></p>
+          <p><strong>Runs on your host</strong><span>Desktop or user-owned VM</span></p>
+          <p><strong>Paired mobile</strong><span>Control surface, not runtime</span></p>
         </div>
-        <div class="host-detail reveal">
-          <figure><img data-app-shot="computer" alt="Cumea computer panel beside a conversation" loading="lazy" /></figure>
-          <div class="host-facts">
-            <article><span>01</span><h3>Any supported model</h3><p>Choose a configured provider per bot. Cumea does not resell model access.</p></article>
-            <article><span>02</span><h3>A computer when supported</h3><p>Run on your Mac or a VM you administer. No managed Cumea computer is implied.</p></article>
-            <article><span>03</span><h3>Mobile stays paired</h3><p>Message, approve, stop, and check status while providers continue on the host.</p></article>
+      </section>
+
+      <section class="evidence-section" aria-labelledby="evidence-title">
+        <div class="dossier-shell evidence-heading">
+          <h2 id="evidence-title">One thread carries the whole job.</h2>
+          <p>Work, tool steps, and decisions stay together. Switch the evidence below; these are product screenshots, not invented dashboard tiles.</p>
+        </div>
+        <div class="dossier-shell evidence-layout">
+          <div class="evidence-index" role="tablist" aria-label="Workflow evidence">
+            <button id="evidence-tab-thread" type="button" role="tab" aria-selected="true" aria-controls="evidence-frame" data-evidence="thread"><span>Thread</span><small>Persistent context and tool steps</small></button>
+            <button id="evidence-tab-approval" type="button" role="tab" aria-selected="false" aria-controls="evidence-frame" data-evidence="approval"><span>Approval</span><small>Judgment returns before work continues</small></button>
+            <button id="evidence-tab-computer" type="button" role="tab" aria-selected="false" aria-controls="evidence-frame" data-evidence="computer"><span>Computer</span><small>Optional runtime, visible in the same workspace</small></button>
+          </div>
+          <figure class="evidence-frame" id="evidence-frame" role="tabpanel" aria-labelledby="evidence-tab-thread" tabindex="0">
+            <div class="evidence-media"><img src="/icon-cumea.png" data-evidence-image data-app-shot="hero" alt="Cumea thread with tool activity and an approval request" loading="lazy" /><img src="/icon-cumea.png" data-evidence-next alt="" aria-hidden="true" /></div>
+            <figcaption><strong data-evidence-title>Thread</strong><span data-evidence-caption>Conversation, actions, and audit trail stay readable in one place.</span></figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="roles-section" id="council" aria-labelledby="roles-title">
+        <div class="dossier-shell roles-heading">
+          <h2 id="roles-title">Name the job. Keep the thread.</h2>
+          <p>No cast of fantasy names to decode. Each bot says what it owns, what it is doing, and when it needs you.</p>
+        </div>
+        <div class="dossier-shell roles-layout">
+          <div class="role-index" role="tablist" aria-label="Example agent roles">
+            <button id="role-tab-chief" type="button" role="tab" aria-selected="true" aria-controls="role-stage" data-job="chief"><span class="role-mote" data-role-mote="chief" aria-hidden="true"></span><span><strong>Chief of Staff</strong><small>Calendar and handoffs</small></span><span>Working</span></button>
+            <button id="role-tab-sales" type="button" role="tab" aria-selected="false" aria-controls="role-stage" data-job="sales"><span class="role-mote" data-role-mote="sales" aria-hidden="true"></span><span><strong>Sales Outbound</strong><small>Research and held drafts</small></span><span>Needs you</span></button>
+            <button id="role-tab-inbox" type="button" role="tab" aria-selected="false" aria-controls="role-stage" data-job="inbox"><span class="role-mote" data-role-mote="inbox" aria-hidden="true"></span><span><strong>Inbox Manager</strong><small>Triage and replies</small></span><span>Needs you</span></button>
+            <button id="role-tab-research" type="button" role="tab" aria-selected="false" aria-controls="role-stage" data-job="research"><span class="role-mote" data-role-mote="research" aria-hidden="true"></span><span><strong>Research Analyst</strong><small>Sources and review</small></span><span>Done</span></button>
+          </div>
+          <div class="role-stage" id="role-stage" role="tabpanel" aria-labelledby="role-tab-chief" data-job-scene>
+            <div class="role-copy"><p data-job-status>Working on your host</p><h3 data-job-title>Keep the week moving.</h3><p data-job-copy>Coordinate the calendar, hold decisions that need your judgment, and keep every handoff visible.</p><span><i></i><span data-job-proof>Venue held · contract waiting for approval</span></span><small>Illustrative workflow · no provider task ran.</small></div>
+            <figure><img src="/icon-cumea.png" data-app-shot="approval" alt="Cumea approval request inside a persistent thread" loading="lazy" /></figure>
           </div>
         </div>
       </section>
 
-      <section class="jobs-section section section-dark" id="council" aria-labelledby="jobs-title">
-        <div class="shell reveal">
-          <p class="kicker">Clear jobs, clear threads</p>
-          <div class="jobs-heading"><h2 id="jobs-title">Give each bot a clear job.</h2><p>Each thread says what it owns, what it is doing, and when it needs you.</p></div>
-          <div class="job-selector" role="tablist" aria-label="Example bot jobs">
-            <button type="button" role="tab" aria-selected="true" data-job="chief">Chief of Staff</button>
-            <button type="button" role="tab" aria-selected="false" data-job="sales">Sales Outbound</button>
-            <button type="button" role="tab" aria-selected="false" data-job="inbox">Inbox Manager</button>
-            <button type="button" role="tab" aria-selected="false" data-job="research">Research Analyst</button>
-          </div>
-          <div class="job-scene" data-job-scene>
-            <div class="job-scene-copy"><span data-job-status>Working on your host</span><h3 data-job-title>Keep the week moving.</h3><p data-job-copy>Coordinate the calendar, hold decisions that need your judgment, and keep every handoff visible.</p><div class="job-proof"><i></i><span data-job-proof>Venue held · contract waiting for approval</span></div></div>
-            <figure class="job-scene-shot"><img data-app-shot="approval" alt="Cumea approval request inside a persistent thread" loading="lazy" /></figure>
-          </div>
+      <section class="boundary-section" id="self-hosted" aria-labelledby="boundary-title">
+        <div class="dossier-shell boundary-heading">
+          <h2 id="boundary-title">Your host is the boundary.</h2>
+          <p>Cumea coordinates what you configure. It does not sell model access, provide a managed VM, or turn the phone into a provider runtime.</p>
+        </div>
+        <div class="dossier-shell boundary-map" aria-label="Cumea host architecture">
+          <article><span class="boundary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M10 5h4M11 19h2"/></svg></span><div><strong>Mobile</strong><p>Message, approve, stop, and check status through a paired, least-privilege surface.</p></div></article>
+          <span class="boundary-link" aria-hidden="true"></span>
+          <article class="boundary-host"><span class="boundary-icon" aria-hidden="true"><img src="/icon-cumea.png" alt="" width="42" height="42" /></span><div><strong>Cumea host</strong><p>Runs the harness, durable history, tools, routines, and provider adapters on your machine.</p></div></article>
+          <span class="boundary-link" aria-hidden="true"></span>
+          <article><span class="boundary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="7" cy="7" r="1"/><circle cx="17" cy="12" r="1"/><circle cx="10" cy="17" r="1"/></svg></span><div><strong>Providers and tools</strong><p>Credentials remain with the host or provider. Capabilities appear only where supported.</p></div></article>
         </div>
       </section>
 
-      <section class="control-section" id="self-hosted" aria-labelledby="control-title">
-        <div class="shell control-heading reveal">
-          <p class="kicker">Control</p>
-          <h2 id="control-title">Your host stays the boundary.</h2>
-          <p>Cumea connects to provider CLIs you configure. The machine, provider accounts, credentials, and deployment remain yours.</p>
+      <section class="runtime-section section dossier-shell" id="stack" aria-labelledby="stack-title">
+        <div class="runtime-heading">
+          <h2 id="stack-title">Capability, without theater.</h2>
+          <p>The picker is multi-provider. Tool mounting is not. “Not yet” means not yet.</p>
         </div>
-        <div class="shell control-rows reveal">
-          <article><span>01</span><div><h3>Your models and keys</h3><p>Use supported providers and accounts already configured on your host.</p></div></article>
-          <article><span>02</span><div><h3>Your computer and routines</h3><p>Run locally or on a VM you administer. Capabilities appear only when the runtime supports them.</p></div></article>
-          <article><span>03</span><div><h3>Your approval</h3><p>Questions return to the thread before work continues. This page never sends, deletes, or purchases anything.</p></div></article>
-        </div>
-      </section>
-
-      <section class="runtime-section section shell" id="stack" aria-labelledby="stack-title">
-        <div class="runtime-heading reveal">
-          <div><p class="kicker">Runtime</p><h2 id="stack-title">Bring your models, keys, and machine.</h2></div>
-          <p>Capabilities are mounted only when a provider runtime actually supports them. “Not yet” means not yet.</p>
-        </div>
-        <div class="matrix-wrap reveal">
+        <div class="matrix-wrap">
           <table class="matrix">
             <caption>Documented provider capability. Support varies by runtime.</caption>
             <thead><tr><th scope="col">Runtime</th><th scope="col">Chat</th><th scope="col">Handoff</th><th scope="col">Connected apps</th><th scope="col">Local computer</th><th scope="col">Cloud computer</th></tr></thead>
@@ -317,10 +336,9 @@
           </table>
         </div>
       </section>
-      <section class="faq section shell" id="faq" aria-labelledby="faq-title">
+      <section class="faq section dossier-shell" id="faq" aria-labelledby="faq-title">
         <div class="section-intro">
-          <p class="kicker">FAQ</p>
-          <h2 id="faq-title">Straight answers.</h2>
+          <h2 id="faq-title">Before you clone it.</h2>
         </div>
         <div class="faq-list">
           <details open>
@@ -346,9 +364,8 @@
         </div>
       </section>
 
-      <section class="source section shell" id="source" aria-labelledby="source-title">
+      <section class="source section dossier-shell" id="source" aria-labelledby="source-title">
         <div>
-          <p class="kicker">v0.1.0 developer preview</p>
           <h2 id="source-title">Source first, for now.</h2>
           <p>There is no signed and notarized macOS download yet. The current release is for developers building from source.</p>
         </div>
