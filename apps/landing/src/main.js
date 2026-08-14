@@ -1,9 +1,9 @@
 import "./styles.css";
-import heroShot from "../../../docs/screenshots/hero.png";
-import computerShot from "../../../docs/screenshots/computer-panel.png";
-import approvalShot from "../../../docs/screenshots/approval-card.png";
-import modelShot from "../../../docs/screenshots/model-picker.png";
-import marketplaceShot from "../../../docs/screenshots/marketplace.png";
+const heroShot = "/product-shots/hero.png";
+const computerShot = "/product-shots/computer-panel.png";
+const approvalShot = "/product-shots/approval-card.png";
+const modelShot = "/product-shots/model-picker.png";
+const marketplaceShot = "/product-shots/marketplace.png";
 
 const DEFAULT_REPOSITORY = "https://github.com/metaforismo/Cumea";
 
