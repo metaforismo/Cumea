@@ -1,1 +1,3 @@
 .vercel
+.playwright-cli
+output

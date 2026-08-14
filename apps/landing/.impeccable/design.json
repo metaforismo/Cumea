@@ -1,0 +1,347 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-14T01:16:03Z",
+  "title": "Design System: Cumea Landing",
+  "extensions": {
+    "colorMeta": {
+      "page": {
+        "role": "neutral",
+        "displayName": "Quiet Page",
+        "canonical": "#fbfbfb",
+        "tonalRamp": ["oklch(15% 0 0)", "oklch(27% 0 0)", "oklch(39% 0 0)", "oklch(51% 0 0)", "oklch(63% 0 0)", "oklch(75% 0 0)", "oklch(87% 0 0)", "oklch(95% 0 0)"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "White Surface",
+        "canonical": "#ffffff",
+        "tonalRamp": ["oklch(15% 0 0)", "oklch(27% 0 0)", "oklch(39% 0 0)", "oklch(51% 0 0)", "oklch(63% 0 0)", "oklch(75% 0 0)", "oklch(87% 0 0)", "oklch(95% 0 0)"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Near-Black Ink",
+        "canonical": "#111111",
+        "tonalRamp": ["oklch(15% 0 0)", "oklch(27% 0 0)", "oklch(39% 0 0)", "oklch(51% 0 0)", "oklch(63% 0 0)", "oklch(75% 0 0)", "oklch(87% 0 0)", "oklch(95% 0 0)"]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Operational Gray",
+        "canonical": "#737373",
+        "tonalRamp": ["oklch(15% 0 0)", "oklch(27% 0 0)", "oklch(39% 0 0)", "oklch(51% 0 0)", "oklch(63% 0 0)", "oklch(75% 0 0)", "oklch(87% 0 0)", "oklch(95% 0 0)"]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "rgba(17, 17, 17, 0.08)",
+        "tonalRamp": ["oklch(15% 0 0)", "oklch(27% 0 0)", "oklch(39% 0 0)", "oklch(51% 0 0)", "oklch(63% 0 0)", "oklch(75% 0 0)", "oklch(87% 0 0)", "oklch(95% 0 0)"]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Strong Hairline",
+        "canonical": "rgba(17, 17, 17, 0.14)",
+        "tonalRamp": ["oklch(15% 0 0)", "oklch(27% 0 0)", "oklch(39% 0 0)", "oklch(51% 0 0)", "oklch(63% 0 0)", "oklch(75% 0 0)", "oklch(87% 0 0)", "oklch(95% 0 0)"]
+      },
+      "cumea-orange": {
+        "role": "primary",
+        "displayName": "Cumea Signal Orange",
+        "canonical": "#f06418",
+        "tonalRamp": ["oklch(15% 0.19 45)", "oklch(27% 0.19 45)", "oklch(39% 0.19 45)", "oklch(51% 0.19 45)", "oklch(63% 0.19 45)", "oklch(75% 0.19 45)", "oklch(87% 0.19 45)", "oklch(95% 0.19 45)"]
+      },
+      "cumea-orange-hover": {
+        "role": "primary",
+        "displayName": "Pressed Orange",
+        "canonical": "#dd5410",
+        "tonalRamp": ["oklch(15% 0.18 43)", "oklch(27% 0.18 43)", "oklch(39% 0.18 43)", "oklch(51% 0.18 43)", "oklch(63% 0.18 43)", "oklch(75% 0.18 43)", "oklch(87% 0.18 43)", "oklch(95% 0.18 43)"]
+      },
+      "cumea-orange-soft": {
+        "role": "primary",
+        "displayName": "Orange Wash",
+        "canonical": "#fff0e6",
+        "tonalRamp": ["oklch(15% 0.04 58)", "oklch(27% 0.04 58)", "oklch(39% 0.04 58)", "oklch(51% 0.04 58)", "oklch(63% 0.04 58)", "oklch(75% 0.04 58)", "oklch(87% 0.04 58)", "oklch(95% 0.04 58)"]
+      },
+      "evidence-paper": {
+        "role": "neutral",
+        "displayName": "Evidence Paper",
+        "canonical": "#f4f1eb",
+        "tonalRamp": ["oklch(15% 0.02 85)", "oklch(27% 0.02 85)", "oklch(39% 0.02 85)", "oklch(51% 0.02 85)", "oklch(63% 0.02 85)", "oklch(75% 0.02 85)", "oklch(87% 0.02 85)", "oklch(95% 0.02 85)"]
+      },
+      "dossier-dark": {
+        "role": "neutral",
+        "displayName": "Dossier Black",
+        "canonical": "#090a0b",
+        "tonalRamp": ["oklch(15% 0.005 250)", "oklch(27% 0.005 250)", "oklch(39% 0.005 250)", "oklch(51% 0.005 250)", "oklch(63% 0.005 250)", "oklch(75% 0.005 250)", "oklch(87% 0.005 250)", "oklch(95% 0.005 250)"]
+      },
+      "dossier-panel": {
+        "role": "neutral",
+        "displayName": "Dossier Panel",
+        "canonical": "#111315",
+        "tonalRamp": ["oklch(15% 0.008 250)", "oklch(27% 0.008 250)", "oklch(39% 0.008 250)", "oklch(51% 0.008 250)", "oklch(63% 0.008 250)", "oklch(75% 0.008 250)", "oklch(87% 0.008 250)", "oklch(95% 0.008 250)"]
+      },
+      "dossier-text": {
+        "role": "neutral",
+        "displayName": "Soft Dossier White",
+        "canonical": "#f7f7f4",
+        "tonalRamp": ["oklch(15% 0.01 95)", "oklch(27% 0.01 95)", "oklch(39% 0.01 95)", "oklch(51% 0.01 95)", "oklch(63% 0.01 95)", "oklch(75% 0.01 95)", "oklch(87% 0.01 95)", "oklch(95% 0.01 95)"]
+      },
+      "warm-muted": {
+        "role": "neutral",
+        "displayName": "Warm Operational Gray",
+        "canonical": "#696761",
+        "tonalRamp": ["oklch(15% 0.015 85)", "oklch(27% 0.015 85)", "oklch(39% 0.015 85)", "oklch(51% 0.015 85)", "oklch(63% 0.015 85)", "oklch(75% 0.015 85)", "oklch(87% 0.015 85)", "oklch(95% 0.015 85)"]
+      },
+      "status-green": {
+        "role": "tertiary",
+        "displayName": "Host Activity Green",
+        "canonical": "#38b779",
+        "tonalRamp": ["oklch(15% 0.13 155)", "oklch(27% 0.13 155)", "oklch(39% 0.13 155)", "oklch(51% 0.13 155)", "oklch(63% 0.13 155)", "oklch(75% 0.13 155)", "oklch(87% 0.13 155)", "oklch(95% 0.13 155)"]
+      },
+      "status-warm": {
+        "role": "tertiary",
+        "displayName": "Held Decision Warmth",
+        "canonical": "#d79a6f",
+        "tonalRamp": ["oklch(15% 0.1 55)", "oklch(27% 0.1 55)", "oklch(39% 0.1 55)", "oklch(51% 0.1 55)", "oklch(63% 0.1 55)", "oklch(75% 0.1 55)", "oklch(87% 0.1 55)", "oklch(95% 0.1 55)"]
+      },
+      "mote-lagoon": {
+        "role": "secondary",
+        "displayName": "Lagoon Mote",
+        "canonical": "#16a79d",
+        "tonalRamp": ["oklch(15% 0.11 185)", "oklch(27% 0.11 185)", "oklch(39% 0.11 185)", "oklch(51% 0.11 185)", "oklch(63% 0.11 185)", "oklch(75% 0.11 185)", "oklch(87% 0.11 185)", "oklch(95% 0.11 185)"]
+      },
+      "mote-tangerine": {
+        "role": "secondary",
+        "displayName": "Tangerine Mote",
+        "canonical": "#f56a16",
+        "tonalRamp": ["oklch(15% 0.2 52)", "oklch(27% 0.2 52)", "oklch(39% 0.2 52)", "oklch(51% 0.2 52)", "oklch(63% 0.2 52)", "oklch(75% 0.2 52)", "oklch(87% 0.2 52)", "oklch(95% 0.2 52)"]
+      },
+      "mote-sky": {
+        "role": "secondary",
+        "displayName": "Sky Mote",
+        "canonical": "#2f8de3",
+        "tonalRamp": ["oklch(15% 0.16 245)", "oklch(27% 0.16 245)", "oklch(39% 0.16 245)", "oklch(51% 0.16 245)", "oklch(63% 0.16 245)", "oklch(75% 0.16 245)", "oklch(87% 0.16 245)", "oklch(95% 0.16 245)"]
+      },
+      "mote-berry": {
+        "role": "secondary",
+        "displayName": "Berry Mote",
+        "canonical": "#d72879",
+        "tonalRamp": ["oklch(15% 0.19 345)", "oklch(27% 0.19 345)", "oklch(39% 0.19 345)", "oklch(51% 0.19 345)", "oklch(63% 0.19 345)", "oklch(75% 0.19 345)", "oklch(87% 0.19 345)", "oklch(95% 0.19 345)"]
+      }
+    },
+    "typographyMeta": {
+      "hero-display": {
+        "displayName": "Hero Display",
+        "purpose": "The preserved first-viewport statement."
+      },
+      "dossier-display": {
+        "displayName": "Dossier Display",
+        "purpose": "Large proof-chapter headlines below the hero."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Global copy and inherited product-preview controls."
+      },
+      "dossier-body": {
+        "displayName": "Dossier Body",
+        "purpose": "Restrained explanatory copy beside proof headlines."
+      },
+      "control": {
+        "displayName": "Compact Control",
+        "purpose": "Hero and navigation buttons in the established first viewport."
+      },
+      "label": {
+        "displayName": "Operational Label",
+        "purpose": "Tabs, status, proof metadata, and compact controls."
+      },
+      "mono": {
+        "displayName": "Clone Command",
+        "purpose": "Repository command only."
+      }
+    },
+    "shadows": [
+      {
+        "name": "product-preview",
+        "value": "0 28px 70px rgba(17, 17, 17, 0.14)",
+        "purpose": "Ambient lift for the established interactive desktop preview."
+      },
+      {
+        "name": "evidence-frame",
+        "value": "0 28px 70px rgba(35, 30, 22, 0.16)",
+        "purpose": "Warm ambient lift for the real-screenshot evidence stage."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.23, 1, 0.32, 1)",
+        "purpose": "Shared easing for compact state transitions."
+      },
+      {
+        "name": "active-press",
+        "value": "120ms cubic-bezier(0.23, 1, 0.32, 1)",
+        "purpose": "Subtle scale response on buttons and dossier tabs."
+      },
+      {
+        "name": "evidence-crossfade",
+        "value": "180ms cubic-bezier(0.23, 1, 0.32, 1)",
+        "purpose": "Pointer-triggered crossfade between preloaded product screenshots."
+      },
+      {
+        "name": "role-evidence-dim",
+        "value": "150ms cubic-bezier(0.23, 1, 0.32, 1)",
+        "purpose": "Brief pointer-triggered dim while role evidence changes."
+      },
+      {
+        "name": "mote-blink",
+        "value": "6.6s ease-in-out infinite",
+        "purpose": "Sparse blink on the active or working Mote identity; disabled for reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "stack",
+        "value": "54rem"
+      },
+      {
+        "name": "mobile",
+        "value": "35rem"
+      },
+      {
+        "name": "minimum-canvas",
+        "value": "21rem"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The compact orange action used for the release and principal source path.",
+      "html": "<button class=\"ds-btn-primary\">Download v0.1.0</button>",
+      "css": ".ds-btn-primary { display: inline-flex; height: 36px; min-height: 36px; align-items: center; justify-content: center; padding: 0 1.05rem; border: 1px solid transparent; border-radius: 999px; background: var(--blue, #f06418); color: #fff; font: 600 .8125rem/1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; letter-spacing: -.011em; cursor: pointer; transition: background-color 150ms ease, transform 120ms var(--ease-out, cubic-bezier(.23,1,.32,1)); } @media (hover: hover) and (pointer: fine) { .ds-btn-primary:hover { background: var(--blue-hover, #dd5410); } } .ds-btn-primary:focus-visible { outline: 3px solid rgba(240,100,24,.46); outline-offset: 3px; } .ds-btn-primary:active { transform: scale(.97); } @media (prefers-reduced-motion: reduce) { .ds-btn-primary { transform: none !important; transition: background-color 120ms ease !important; } }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "The quiet GitHub or secondary action beside the release path.",
+      "html": "<button class=\"ds-btn-secondary\">View on GitHub</button>",
+      "css": ".ds-btn-secondary { display: inline-flex; height: 36px; min-height: 36px; align-items: center; justify-content: center; padding: 0 1.05rem; border: 1px solid var(--line, rgba(17,17,17,.08)); border-radius: 999px; background: #fff; color: var(--ink, #111); font: 600 .8125rem/1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; letter-spacing: -.011em; cursor: pointer; transition: border-color 150ms ease, transform 120ms var(--ease-out, cubic-bezier(.23,1,.32,1)); } @media (hover: hover) and (pointer: fine) { .ds-btn-secondary:hover { border-color: var(--line-strong, rgba(17,17,17,.14)); } } .ds-btn-secondary:focus-visible { outline: 3px solid rgba(240,100,24,.46); outline-offset: 3px; } .ds-btn-secondary:active { transform: scale(.97); } @media (prefers-reduced-motion: reduce) { .ds-btn-secondary { transform: none !important; transition: border-color 120ms ease !important; } }"
+    },
+    {
+      "name": "Hero Eyebrow",
+      "kind": "chip",
+      "refersTo": "hero-eyebrow",
+      "description": "The incumbent provenance chip above the hero statement.",
+      "html": "<p class=\"ds-eyebrow\"><span>MIT</span>Open source · self-hosted — run it on your own machine</p>",
+      "css": ".ds-eyebrow { display: inline-flex; min-height: 24px; align-items: center; gap: .38rem; margin: 0; padding: .14rem .58rem .14rem .18rem; border-radius: 999px; background: var(--blue-soft, #fff0e6); color: #a94413; font: 500 .6875rem/1 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; } .ds-eyebrow span { padding: .18rem .36rem; border-radius: 999px; background: #fff; color: #d7510f; font-size: .5625rem; font-weight: 700; letter-spacing: .02em; } @media (prefers-contrast: more) { .ds-eyebrow { outline: 1px solid rgba(240,100,24,.4); } }"
+    },
+    {
+      "name": "Product Search Field",
+      "kind": "input",
+      "refersTo": "product-search",
+      "description": "The compact translucent bot search field inside the established product preview.",
+      "html": "<div class=\"ds-search-stage\"><label class=\"ds-search\"><svg viewBox=\"0 0 24 24\" width=\"13\" height=\"13\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/></svg><input type=\"search\" placeholder=\"Search\" aria-label=\"Search bots\" /></label></div>",
+      "css": ".ds-search-stage { max-width: 14rem; padding: .65rem; background: #0c0c0c; } .ds-search { display: flex; align-items: center; gap: .35rem; padding: .36rem .5rem; border-radius: .45rem; background: rgba(255,255,255,.045); color: rgba(255,255,255,.3); font: 400 .62rem/1.5 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; } .ds-search svg { flex: 0 0 auto; } .ds-search input { width: 100%; min-width: 0; padding: 0; border: 0; outline: none; background: transparent; color: rgba(255,255,255,.72); font: inherit; } .ds-search input::placeholder { color: rgba(255,255,255,.3); } .ds-search input:focus-visible { outline: 3px solid rgba(240,100,24,.46); outline-offset: 3px; }"
+    },
+    {
+      "name": "Primary Navigation",
+      "kind": "nav",
+      "description": "The incumbent compact header with the Cumea mark, quiet page links, and one orange release action.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Primary navigation\"><a class=\"ds-brand\" href=\"#\"><svg viewBox=\"0 0 64 64\" width=\"22\" height=\"22\" aria-hidden=\"true\"><rect width=\"64\" height=\"64\" rx=\"17\" fill=\"#111210\"/><path d=\"M32 8c2 0 4 5 6 9 3 5 7 10 9 16 2 5 2 11-1 15-3 5-8 7-14 7s-11-2-14-7c-3-4-3-10-1-15 2-6 6-11 9-16 2-4 4-9 6-9Z\" fill=\"#edece7\"/><rect x=\"25\" y=\"28\" width=\"4\" height=\"10\" rx=\"2\" fill=\"#151612\"/><rect x=\"35\" y=\"28\" width=\"4\" height=\"10\" rx=\"2\" fill=\"#151612\"/><circle cx=\"49\" cy=\"15\" r=\"5\" fill=\"#f56a16\"/></svg><span>Cumea</span></a><span class=\"ds-nav-links\"><a href=\"#\">Product</a><a href=\"#\">Self-host</a><a href=\"#\">Source</a></span><a class=\"ds-nav-action\" href=\"#\">Download v0.1.0</a></nav>",
+      "css": ".ds-nav { display: grid; min-height: 30px; grid-template-columns: 1fr auto 1fr; gap: 1rem; align-items: center; color: #111; font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; } .ds-brand { display: inline-flex; width: fit-content; align-items: center; gap: .45rem; color: inherit; font-size: .92rem; font-weight: 650; letter-spacing: -.03em; text-decoration: none; } .ds-nav-links { display: flex; gap: 1.35rem; color: #6b6b6b; font-size: .8125rem; } .ds-nav a { color: inherit; text-decoration: none; } .ds-nav-action { justify-self: end; display: inline-flex; min-height: 28px; align-items: center; padding: 0 .78rem; border-radius: 999px; background: var(--blue, #f06418); color: #fff !important; font-size: .75rem; font-weight: 600; } .ds-nav a:focus-visible { outline: 3px solid rgba(240,100,24,.46); outline-offset: 3px; } @media (hover: hover) and (pointer: fine) { .ds-nav-links a:hover { color: #111; } .ds-nav-action:hover { background: var(--blue-hover, #dd5410); } } @media (max-width: 54rem) { .ds-nav { grid-template-columns: auto 1fr; } .ds-nav-links { display: none; } }"
+    },
+    {
+      "name": "Evidence Tab",
+      "kind": "custom",
+      "refersTo": "evidence-tab",
+      "description": "A ruled proof index item whose selected state is marked by one orange dot.",
+      "html": "<button class=\"ds-evidence-tab\" type=\"button\" aria-selected=\"true\"><span>Thread</span><small>Persistent context and tool steps</small></button>",
+      "css": ".ds-evidence-tab { display: grid; width: 100%; min-height: 5.25rem; gap: .28rem; align-content: center; padding: .9rem .15rem; border: 0; border-top: 1px solid #c9c5bc; border-bottom: 1px solid #d6d1c8; background: transparent; color: #67635d; cursor: pointer; text-align: left; transition: color 160ms var(--ease-out, cubic-bezier(.23,1,.32,1)), transform 120ms var(--ease-out, cubic-bezier(.23,1,.32,1)); } .ds-evidence-tab span { font: 700 1rem/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; letter-spacing: -.02em; } .ds-evidence-tab small { font: 400 .7rem/1.45 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; } .ds-evidence-tab[aria-selected='true'] { color: #111; } .ds-evidence-tab[aria-selected='true'] span::before { display: inline-block; width: .48rem; height: .48rem; margin-right: .55rem; border-radius: 50%; background: var(--blue, #f06418); content: ''; } .ds-evidence-tab:focus-visible { outline: 3px solid rgba(240,100,24,.46); outline-offset: 3px; } .ds-evidence-tab:active { transform: scale(.985); } @media (hover: hover) and (pointer: fine) { .ds-evidence-tab:hover:not([aria-selected='true']) { color: #4c4944; } } @media (prefers-reduced-motion: reduce) { .ds-evidence-tab { transform: none !important; } }"
+    },
+    {
+      "name": "Evidence Frame",
+      "kind": "card",
+      "refersTo": "evidence-frame",
+      "description": "The lifted near-black frame for a real product screenshot and concise audit caption.",
+      "html": "<figure class=\"ds-evidence-frame\"><div class=\"ds-evidence-media\">REAL PRODUCT SCREENSHOT</div><figcaption><strong>Approval</strong><span>A specific choice returns to the thread before the agent continues.</span></figcaption></figure>",
+      "css": ".ds-evidence-frame { width: min(100%, 42rem); margin: 0; overflow: hidden; border-radius: 1rem; background: #090a0b; color: #fff; box-shadow: 0 28px 70px rgba(35,30,22,.16); font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; } .ds-evidence-media { display: grid; aspect-ratio: 16 / 9.6; place-items: center; background: #111315; color: rgba(255,255,255,.42); font-size: .7rem; font-weight: 700; letter-spacing: .08em; } .ds-evidence-frame figcaption { display: grid; grid-template-columns: 8rem 1fr; gap: 1rem; padding: 1.05rem 1.25rem 1.15rem; border-top: 1px solid rgba(255,255,255,.1); } .ds-evidence-frame strong { font-size: .8rem; } .ds-evidence-frame span { color: rgba(255,255,255,.58); font-size: .72rem; line-height: 1.55; } @media (max-width: 35rem) { .ds-evidence-frame { border-radius: .8rem; } .ds-evidence-media { aspect-ratio: 4 / 3; } .ds-evidence-frame figcaption { grid-template-columns: 1fr; gap: .3rem; } }"
+    },
+    {
+      "name": "Role Tab",
+      "kind": "custom",
+      "description": "A dark role index item combining a Mote identity, literal job ownership, and semantic state.",
+      "html": "<div class=\"ds-role-rail\"><button class=\"ds-role-tab\" type=\"button\" aria-selected=\"true\"><svg viewBox=\"0 0 32 32\" width=\"32\" height=\"32\" aria-hidden=\"true\"><path d=\"M16 4c1 0 2 3 3 5 2 3 4 6 5 9 1 3 1 6-1 8-2 2-4 3-7 3s-5-1-7-3c-2-2-2-5-1-8 1-3 3-6 5-9 1-2 2-5 3-5Z\" fill=\"#16a79d\"/><rect x=\"12\" y=\"14\" width=\"2\" height=\"6\" rx=\"1\" fill=\"#f4f2eb\"/><rect x=\"18\" y=\"14\" width=\"2\" height=\"6\" rx=\"1\" fill=\"#f4f2eb\"/></svg><span><strong>Chief of Staff</strong><small>Calendar and handoffs</small></span><em>Working</em></button></div>",
+      "css": ".ds-role-rail { max-width: 24rem; padding: .65rem; background: #090a0b; } .ds-role-tab { display: grid; width: 100%; min-height: 5.15rem; grid-template-columns: 2.4rem minmax(0,1fr) auto; gap: .75rem; align-items: center; padding: .65rem .15rem; border: 0; border-top: 1px solid rgba(255,255,255,.16); border-bottom: 1px solid rgba(255,255,255,.12); background: transparent; color: rgba(255,255,255,.54); cursor: pointer; text-align: left; transition: color 160ms var(--ease-out, cubic-bezier(.23,1,.32,1)), background-color 160ms var(--ease-out, cubic-bezier(.23,1,.32,1)), transform 120ms var(--ease-out, cubic-bezier(.23,1,.32,1)); } .ds-role-tab[aria-selected='true'] { color: #fff; background: rgba(255,255,255,.045); } .ds-role-tab strong, .ds-role-tab small { display: block; } .ds-role-tab strong { font: 700 .86rem/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; } .ds-role-tab small { margin-top: .17rem; color: rgba(255,255,255,.56); font: 400 .66rem/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; } .ds-role-tab em { color: #d79a6f; font: normal 700 .61rem/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; } .ds-role-tab:focus-visible { outline: 3px solid rgba(240,100,24,.46); outline-offset: 3px; } .ds-role-tab:active { transform: scale(.985); } @media (hover: hover) and (pointer: fine) { .ds-role-tab:hover:not([aria-selected='true']) { color: rgba(255,255,255,.82); background: rgba(255,255,255,.025); } } @media (prefers-reduced-motion: reduce) { .ds-role-tab { transform: none !important; } }"
+    },
+    {
+      "name": "Host Boundary Node",
+      "kind": "card",
+      "description": "A flat icon-and-copy node used to explain the user-owned host architecture.",
+      "html": "<article class=\"ds-boundary-node\"><span class=\"ds-boundary-icon\"><svg viewBox=\"0 0 24 24\" width=\"22\" height=\"22\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"7\" y=\"2\" width=\"10\" height=\"20\" rx=\"2\"/><path d=\"M10 5h4M11 19h2\"/></svg></span><div><strong>Mobile</strong><p>Message, approve, stop, and check status through a paired, least-privilege surface.</p></div></article>",
+      "css": ".ds-boundary-node { display: grid; grid-template-columns: 3.3rem minmax(0,1fr); gap: .9rem; align-items: start; padding: 1rem; border-top: 1px solid var(--line-strong, rgba(17,17,17,.14)); border-bottom: 1px solid var(--line-strong, rgba(17,17,17,.14)); color: #111; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; } .ds-boundary-icon { display: grid; width: 3rem; height: 3rem; place-items: center; border-radius: .8rem; background: #f0ede7; color: #2b2b2b; } .ds-boundary-node strong { font-size: .88rem; } .ds-boundary-node p { margin: .35rem 0 0; color: #74716c; font-size: .7rem; line-height: 1.55; }"
+    },
+    {
+      "name": "Source CTA Panel",
+      "kind": "card",
+      "description": "The honest closing panel that routes visitors to source and build instructions.",
+      "html": "<section class=\"ds-source-panel\"><div><h2>Source first, for now.</h2><p>There is no signed and notarized macOS download yet.</p></div><a href=\"#\">View source</a></section>",
+      "css": ".ds-source-panel { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 2rem; align-items: end; padding: clamp(2rem,5vw,3.5rem); border-radius: 1rem; background: #111214; color: #fff; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; } .ds-source-panel h2 { max-width: 12ch; margin: 0; font-size: clamp(2.4rem,5vw,4.2rem); font-weight: 720; line-height: .94; letter-spacing: -.04em; } .ds-source-panel p { max-width: 42rem; margin: 1.1rem 0 0; color: rgba(255,255,255,.6); font-size: .94rem; } .ds-source-panel a { display: inline-flex; min-height: 2.9rem; align-items: center; justify-content: center; padding: 0 1.05rem; border-radius: 999px; background: #fff; color: #1e253e; font-size: .8125rem; font-weight: 600; text-decoration: none; } .ds-source-panel a:focus-visible { outline: 3px solid rgba(240,100,24,.46); outline-offset: 3px; } .ds-source-panel a:active { transform: scale(.97); } @media (max-width: 35rem) { .ds-source-panel { grid-template-columns: 1fr; align-items: start; } } @media (prefers-reduced-motion: reduce) { .ds-source-panel a { transform: none !important; } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Proof Dossier",
+    "overview": "Cumea earns trust as an inspectable chain of evidence: a persistent thread, a held decision, the user-owned host boundary, and finally the source. The preserved hero is the incumbent authority for the first viewport: compact, centered, pale, and dominated by the interactive desktop or mobile product preview. Below it, the proof dossier expands into a wider editorial rhythm of warm paper, near-black product surfaces, hairline rules, real screenshots, and direct product language.\n\nThe visual system is restrained and technically honest. Cumea orange marks action, selection, or state rather than decorating whole sections. Role-based Mote identities supply the only vivid multicolor vocabulary. Depth is reserved for product evidence; most explanatory structure is flat, ruled, and spacious. The system explicitly rejects a generic feature-card parade and conversion theater.",
+    "keyCharacteristics": [
+      "A preserved compact hero followed by a wider, evidence-led dossier.",
+      "Warm paper and near-black surfaces alternate to separate proof chapters.",
+      "Real product screenshots, capability tables, and boundary diagrams replace abstract feature tiles.",
+      "Cumea orange is a scarce state signal; Motes carry role identity.",
+      "Keyboard-complete tabs, visible focus, reduced-motion fallbacks, and overflow-safe mobile layouts are part of the visual contract."
+    ],
+    "rules": [
+      {
+        "name": "The Signal, Not Paint Rule",
+        "body": "Cumea orange identifies an action, active evidence, or meaningful state; it does not become a full-section background.",
+        "section": "colors"
+      },
+      {
+        "name": "The Mote Identity Rule",
+        "body": "Multicolor belongs to Mote identities and their semantic activity states. Explanatory surfaces stay neutral.",
+        "section": "colors"
+      },
+      {
+        "name": "The System-Type Rule",
+        "body": "Scale, weight, spacing, and contrast create hierarchy; do not introduce a decorative display face into this shipped world.",
+        "section": "typography"
+      },
+      {
+        "name": "The Two-Shell Rule",
+        "body": "Keep the approved hero inside its 50rem authority; use the 70rem dossier shell only below it.",
+        "section": "layout"
+      },
+      {
+        "name": "The Evidence-First Rule",
+        "body": "A section earns width for screenshots, a capability table, or an architecture boundary—not for a field of generic cards.",
+        "section": "layout"
+      },
+      {
+        "name": "The Proof-Lifts Rule",
+        "body": "Elevation belongs to inspectable product proof. Explanatory facts and controls stay ruled or tonal.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do preserve the compact 50rem hero and its interactive product preview as the first-viewport authority.",
+      "Do use the 70rem proof-dossier shell, alternating paper and near-black chapters, and hairline structure below the hero.",
+      "Do reserve Cumea orange for actions, selection, and meaningful state.",
+      "Do use real product screenshots, Mote identities, accurate capability tables, and explicit host boundaries as proof.",
+      "Do preserve roving-tab keyboard behavior, visible orange focus, reduced-motion fallbacks, and 320px overflow safety."
+    ],
+    "donts": [
+      "Don't replace the established hero while extending the dossier below it.",
+      "Don't turn the dossier into a generic grid of feature cards, decorative gradients, glass surfaces, or conversion theater.",
+      "Don't fabricate screenshots, benchmarks, customer proof, managed-cloud behavior, or signed-download affordances.",
+      "Don't use orange as broad background paint or introduce unrelated accent colors outside Mote identity and semantic state.",
+      "Don't animate evidence changes for keyboard activation or when reduced motion is requested."
+    ]
+  }
+}
