@@ -99,12 +99,14 @@ function likePattern(query: string): string {
   return `%${query.toLocaleLowerCase().replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
 }
 
+export const MESSAGE_SEARCH_DB_PATH = join(DATA_DIR, "message-search.sqlite");
+
 export class MessageSearchIndex {
   readonly path: string;
   private db: DatabaseSync;
   private fts5 = false;
 
-  constructor(path = join(DATA_DIR, "message-search.sqlite")) {
+  constructor(path = MESSAGE_SEARCH_DB_PATH) {
     this.path = path;
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path);

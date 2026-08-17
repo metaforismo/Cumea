@@ -1206,6 +1206,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       return;
     }
 
+    // ── local transcript search ──────────────────────────────────────
+    if (method === "GET" && path === "/api/search/messages") {
+      if (surface !== "local") return json(res, 403, { error: "transcript search is local-only" });
+      const query = url.searchParams.get("q") ?? "";
+      const rawLimit = url.searchParams.get("limit");
+      const limit = rawLimit === null ? undefined : Number(rawLimit);
+      return json(res, 200, store.searchMessages(query, limit));
+    }
+
     // ── atomic desktop startup snapshot ───────────────────────────────
     if (method === "GET" && path === "/api/bootstrap") {
       if (surface !== "local") return json(res, 403, { error: "desktop bootstrap is local-only" });
