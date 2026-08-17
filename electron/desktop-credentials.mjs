@@ -9,6 +9,13 @@ import {
   serverCredentialEnvironment,
 } from "./credential-vault.mjs";
 
+const EMPTY_SERVER_CREDENTIAL_ENVIRONMENT = Object.freeze({
+  CUMEA_DESKTOP_XAI_KEY: "",
+  CUMEA_DESKTOP_COMPOSIO_KEY: "",
+  CUMEA_DESKTOP_COMPOSIO_API_KEY: "",
+  CUMEA_DESKTOP_BOX_TOKEN: "",
+});
+
 export function createDesktopCredentialController({
   app,
   safeStorage,
@@ -115,7 +122,15 @@ export function createDesktopCredentialController({
   };
 
   const serverEnvironment = () =>
-    state.managed ? serverCredentialEnvironment(state.credentials) : {};
+    state.managed
+      ? {
+          // Explicit empty values overwrite any ambient CUMEA_DESKTOP_* fields
+          // before the child starts. Only the controller's current vault state
+          // may populate the bootstrap.
+          ...EMPTY_SERVER_CREDENTIAL_ENVIRONMENT,
+          ...serverCredentialEnvironment(state.credentials),
+        }
+      : {};
 
   const update = (section, value, restartHarness) => {
     const next = operation.then(async () => {
