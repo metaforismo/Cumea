@@ -18,12 +18,16 @@ All notable changes to Cumea are documented here. This project follows
   operating-system credential service. Legacy plaintext is removed only after successful encrypted
   migration; unavailable/corrupt storage preserves the recovery source while the packaged harness
   starts without credentials instead of silently reusing or rewriting plaintext.
-- Packaged credential values remain write-only to the renderer, are supplied only to a fresh harness
-  bootstrap, and are removed from the harness environment before provider child processes load.
-  Credential changes restart the harness and roll the encrypted/live state back when restart fails.
+- Packaged credential values remain write-only to the renderer. Credential-shaped writes to the
+  ordinary managed config API are rejected, ambient and advanced-instance credential aliases cannot
+  override the vault, bootstrap fields are removed before providers load, and only the owning xAI or
+  Box driver receives its credential; Composio values remain in the harness.
+- Credential changes restart the harness and require the exact configured flag to confirm the new
+  bootstrap. Failed or mismatched startup restores the encrypted and live state; an unverifiable
+  rollback blocks further writes and requires restart instead of reporting ambiguous recovery.
 - Source/browser hosting retains the explicit owner-only `config.json` fallback. The unsigned package
   smoke verifies layout only and does not yet prove Keychain, DPAPI, Linux secret-service, signing,
-  notarization, or physical-machine behavior.
+  notarization, migration on a real prior profile, or physical-machine behavior.
 
 ## [0.1.0] - 2026-08-13 — Developer Preview
 
