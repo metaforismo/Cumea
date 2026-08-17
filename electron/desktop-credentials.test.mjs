@@ -8,6 +8,18 @@ import test from "node:test";
 import { createCredentialVault } from "./credential-vault.mjs";
 import { createDesktopCredentialController } from "./desktop-credentials.mjs";
 
+const EMPTY_BOOTSTRAP = Object.freeze({
+  CUMEA_DESKTOP_XAI_KEY: "",
+  CUMEA_DESKTOP_COMPOSIO_KEY: "",
+  CUMEA_DESKTOP_COMPOSIO_API_KEY: "",
+  CUMEA_DESKTOP_BOX_TOKEN: "",
+  CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
+});
+
+function bootstrap(values = {}) {
+  return { ...EMPTY_BOOTSTRAP, ...values };
+}
+
 function fakeSafeStorage({ available = true, backend = "gnome_libsecret" } = {}) {
   return {
     async isAsyncEncryptionAvailable() {
@@ -105,12 +117,14 @@ test("packaged initialization migrates plaintext and exposes flags only", async 
       box: {},
       profile: { name: "Francesco" },
     });
-    assert.deepEqual(current.controller.serverEnvironment(), {
-      CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
-      CUMEA_DESKTOP_COMPOSIO_KEY: "connect-secret",
-      CUMEA_DESKTOP_COMPOSIO_API_KEY: "project-secret",
-      CUMEA_DESKTOP_BOX_TOKEN: "box-secret",
-    });
+    assert.deepEqual(
+      current.controller.serverEnvironment(),
+      bootstrap({
+        CUMEA_DESKTOP_COMPOSIO_KEY: "connect-secret",
+        CUMEA_DESKTOP_COMPOSIO_API_KEY: "project-secret",
+        CUMEA_DESKTOP_BOX_TOKEN: "box-secret",
+      }),
+    );
   } finally {
     rmSync(current.root, { recursive: true, force: true });
   }
@@ -135,9 +149,7 @@ test("unavailable OS storage preserves recovery data but boots the harness empty
       box: false,
     });
     assert.equal(readFileSync(configFile, "utf8"), original);
-    assert.deepEqual(current.controller.serverEnvironment(), {
-      CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
-    });
+    assert.deepEqual(current.controller.serverEnvironment(), bootstrap());
     await assert.rejects(
       current.controller.update("box", "new", async () => ({})),
       /credential store is unavailable/,
@@ -156,10 +168,10 @@ test("successful updates persist first and restart with the new bootstrap", asyn
       observed = current.controller.serverEnvironment();
       return { composio: { configured: false }, box: { configured: true } };
     });
-    assert.deepEqual(observed, {
-      CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
-      CUMEA_DESKTOP_BOX_TOKEN: "new-box",
-    });
+    assert.deepEqual(
+      observed,
+      bootstrap({ CUMEA_DESKTOP_BOX_TOKEN: "new-box" }),
+    );
     assert.deepEqual(result, {
       composio: { configured: false },
       box: { configured: true },
@@ -208,9 +220,7 @@ test("performance fixture never reads or persists credentials", async () => {
     const status = await current.controller.initialize();
     assert.equal(status.mode, "performance-fixture");
     assert.equal(status.managed, true);
-    assert.deepEqual(current.controller.serverEnvironment(), {
-      CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
-    });
+    assert.deepEqual(current.controller.serverEnvironment(), bootstrap());
     await assert.rejects(
       current.controller.update("box", "secret", async () => ({})),
       /persistence is disabled/,
