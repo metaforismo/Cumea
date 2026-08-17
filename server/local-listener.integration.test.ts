@@ -1,15 +1,18 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { request as httpRequest } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const children = new Set<ChildProcessWithoutNullStreams>();
+type HarnessChild = ChildProcessByStdio<null, Readable, Readable>;
+
+const children = new Set<HarnessChild>();
 const tempDirs = new Set<string>();
 
-async function stop(child: ChildProcessWithoutNullStreams) {
+async function stop(child: HarnessChild) {
   children.delete(child);
   if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolve) => {
@@ -84,7 +87,7 @@ function rawRequest(
   });
 }
 
-async function startHarness(): Promise<{ child: ChildProcessWithoutNullStreams; port: number }> {
+async function startHarness(): Promise<{ child: HarnessChild; port: number }> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "cumea-local-listener-"));
   tempDirs.add(dataDir);
   const child = spawn(process.execPath, ["server/index.ts"], {
