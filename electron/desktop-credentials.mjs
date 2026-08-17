@@ -152,6 +152,24 @@ export function createDesktopCredentialController({
         }
       : {};
 
+  const recoverPreviousHarness = async (section, previous, restartHarness, message) => {
+    state = { ...state, credentials: previous };
+    let recovered = false;
+    try {
+      const recoveryConfig = await restartHarness();
+      recovered =
+        confirmedCredentialState(recoveryConfig, section) === Boolean(previous[section]);
+    } catch {
+      recovered = false;
+    }
+    if (!recovered) {
+      throw new Error(
+        `${message}; the previous vault is still authoritative, but the agent host could not recover automatically — restart Cumea`,
+      );
+    }
+    throw new Error(message);
+  };
+
   const update = (section, value, restartHarness) => {
     const next = operation.then(async () => {
       if (!isDesktopCredentialSection(section)) throw new Error("unknown credential section");
@@ -160,54 +178,45 @@ export function createDesktopCredentialController({
           state.reason || "secure operating-system credential storage is unavailable",
         );
       }
+
       const previous = normalizeCredentials(state.credentials);
       const candidate = applyCredentialPatch(previous, section, value);
       const expectedCandidateState = Boolean(candidate[section]);
-      await vault.replace(candidate);
+
+      // Validate the exact bootstrap in a fresh harness before committing the
+      // candidate at rest. If Cumea is killed during this stage, the child dies
+      // with the app and the previous vault remains authoritative on restart.
       state = { ...state, credentials: candidate, migrated: false, legacyPresent: false };
+      let config;
       try {
-        const config = await restartHarness();
+        config = await restartHarness();
         if (confirmedCredentialState(config, section) !== expectedCandidateState) {
           throw new Error("the restarted agent host did not confirm the credential state");
         }
-        return config;
       } catch {
-        // A failure after persistence must not leave the UI claiming an old
-        // value while the vault contains the candidate. Durable rollback is
-        // therefore mandatory and its failure blocks further writes.
-        try {
-          await vault.replace(previous);
-        } catch {
-          state = {
-            ...state,
-            mode: "blocked",
-            available: false,
-            secure: false,
-            reason:
-              "credential update failed and encrypted rollback could not be verified; restart Cumea before retrying",
-            credentials: {},
-          };
-          throw new Error(
-            "the credential update failed and could not be rolled back safely; restart Cumea before retrying",
-          );
-        }
-
-        state = { ...state, credentials: previous };
-        let recovered = false;
-        try {
-          const recoveryConfig = await restartHarness();
-          recovered =
-            confirmedCredentialState(recoveryConfig, section) === Boolean(previous[section]);
-        } catch {
-          recovered = false;
-        }
-        if (!recovered) {
-          throw new Error(
-            "the credential was restored, but the agent host could not recover automatically; restart Cumea",
-          );
-        }
-        throw new Error("the credential was not changed because the agent host could not restart");
+        return recoverPreviousHarness(
+          section,
+          previous,
+          restartHarness,
+          "the credential was not changed because the agent host rejected the new bootstrap",
+        );
       }
+
+      // Atomic vault replacement is the commit point. A failed encryption or
+      // write leaves the previous file untouched, then the harness is restored
+      // to match that still-authoritative durable state.
+      try {
+        await vault.replace(candidate);
+      } catch {
+        return recoverPreviousHarness(
+          section,
+          previous,
+          restartHarness,
+          "the credential was not saved because secure storage could not commit it",
+        );
+      }
+
+      return config;
     });
     operation = next.catch(() => undefined);
     return next;
