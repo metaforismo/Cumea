@@ -38,6 +38,21 @@ describe("desktop credential boundary", () => {
     expect(environment).toEqual({ PATH: "/bin" });
   });
 
+  it("prefers Electron's canonical bootstrap over differently-cased aliases", () => {
+    const environment: NodeJS.ProcessEnv = {
+      CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
+      CUMEA_DESKTOP_XAI_KEY: "vault-xai",
+      cumea_desktop_xai_key: "ambient-xai",
+      CUMEA_DESKTOP_BOX_TOKEN: "vault-box",
+      Cumea_Desktop_Box_Token: "ambient-box",
+    };
+    expect(consumeDesktopCredentialEnvironment(environment)).toEqual({
+      managed: true,
+      credentials: { xai: "vault-xai", box: "vault-box" },
+    });
+    expect(environment).toEqual({});
+  });
+
   it("rejects malformed and oversized credential values", () => {
     expect(() => applyDesktopCredential({}, "box", "line\nbreak")).toThrow(
       /invalid characters/,
