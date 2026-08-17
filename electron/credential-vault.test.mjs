@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -61,6 +61,14 @@ test("legacy extraction and stripping preserve non-secret metadata", () => {
     profile: { name: "Francesco" },
   });
   assert.equal(config.xai.key, "xai");
+});
+
+test("credential values are bounded for portable child environments", () => {
+  assert.equal(applyCredentialPatch({}, "box", "x".repeat(2_048)).box?.length, 2_048);
+  assert.throws(
+    () => applyCredentialPatch({}, "box", "x".repeat(2_049)),
+    /credential value is too long/,
+  );
 });
 
 test("migration encrypts before atomically removing plaintext", async () => {
@@ -148,7 +156,49 @@ test("vault updates are serialized and clearing the final value removes the file
     await vault.update("composioApi", null);
     await vault.update("box", null);
     assert.deepEqual(await vault.read(), {});
-    assert.throws(() => readFileSync(vaultFile), /ENOENT/);
+    assert.equal(existsSync(vaultFile), false);
+    assert.equal(existsSync(`${vaultFile}.previous`), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an interrupted replacement restores the previous complete vault", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "cumea-vault-"));
+  const vaultFile = path.join(directory, "credentials.bin");
+  const previous = `${vaultFile}.previous`;
+  const vault = createCredentialVault({
+    file: vaultFile,
+    safeStorage: fakeSafeStorage(),
+    platform: "win32",
+  });
+  try {
+    await vault.replace({ box: "old-box" });
+    renameSync(vaultFile, previous);
+    assert.equal(existsSync(vaultFile), false);
+    assert.equal(existsSync(previous), true);
+    assert.deepEqual(await vault.read(), { box: "old-box" });
+    assert.equal(existsSync(vaultFile), true);
+    assert.equal(existsSync(previous), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a completed replacement discards a stale previous-file marker", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "cumea-vault-"));
+  const vaultFile = path.join(directory, "credentials.bin");
+  const previous = `${vaultFile}.previous`;
+  const vault = createCredentialVault({
+    file: vaultFile,
+    safeStorage: fakeSafeStorage(),
+    platform: "win32",
+  });
+  try {
+    await vault.replace({ box: "current-box" });
+    writeFileSync(previous, readFileSync(vaultFile), { mode: 0o600 });
+    assert.deepEqual(await vault.read(), { box: "current-box" });
+    assert.equal(existsSync(previous), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
