@@ -272,14 +272,10 @@ export async function migrateLegacyCredentials({ configFile, vault }) {
   };
 }
 
-export function serverCredentialEnvironment(credentials, token) {
-  if (!/^[a-f0-9]{48,128}$/i.test(String(token ?? ""))) {
-    throw new Error("a valid per-boot desktop credential token is required");
-  }
+export function serverCredentialEnvironment(credentials) {
   const normalized = normalizeCredentials(credentials);
   const environment = {
     CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
-    CUMEA_DESKTOP_CREDENTIAL_TOKEN: token,
   };
   for (const section of DESKTOP_CREDENTIAL_SECTIONS) {
     const value = normalized[section];
