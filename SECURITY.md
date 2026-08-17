@@ -49,9 +49,10 @@ The harness receives an allowlisted one-process bootstrap, overrides ambient
 dedicated fields, and deletes them from `process.env` before provider instances
 or provider child processes are created. Plaintext credential aliases in
 advanced instance environments are ignored. xAI and Box credentials are
-mounted only into their owning API/Box drivers; connector credentials remain in
-the harness and unrelated Claude, Codex, Gemini, and Grok Build CLI processes
-do not inherit them.
+mounted only into their owning API/Box drivers. Composio credentials remain in
+the harness until an apps-enabled turn explicitly mounts them into a driver
+that advertises Composio MCP support; unrelated or ineligible turns do not
+receive them.
 
 Credential replacement restarts the local harness and requires the returned
 configuration flags to confirm the exact candidate state. Candidate failure or
@@ -79,7 +80,8 @@ so reports, reproduction details, and fixes remain confidential until coordinate
   is a vulnerability.
 - In packaged managed mode, bypassing the Electron vault through `/api/config`, an ambient bootstrap
   variable, or an advanced instance environment is a vulnerability. A credential supplied to one
-  provider must not be inherited by an unrelated provider process.
+  provider or explicitly mounted integration must not be inherited by an unrelated provider process
+  or turn.
 - A packaged app must not consume preserved legacy plaintext while secure storage is blocked, nor
   silently downgrade to Electron's Linux `basic_text` backend. Migration must not erase the legacy
   source before a decryptable encrypted replacement exists.
@@ -94,8 +96,8 @@ so reports, reproduction details, and fixes remain confidential until coordinate
 
 The OS-backed vault is not a sandbox against malicious code already running as the same user. A
 compromised Electron main process or harness process, memory inspection with equivalent privileges,
-or a provider process legitimately receiving its own credential remain outside this protection
-boundary.
+or a provider process or integration legitimately receiving its own credential remain outside this
+protection boundary.
 
 ## Supported versions
 
