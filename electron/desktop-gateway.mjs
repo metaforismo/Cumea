@@ -15,6 +15,11 @@ const HOP_BY_HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+const PUBLIC_UNAVAILABLE_REASONS = new Set([
+  "agent host is starting",
+  "agent host is restarting",
+  "agent host could not start",
+]);
 
 const SECURITY_HEADERS = Object.freeze({
   "x-content-type-options": "nosniff",
@@ -205,6 +210,7 @@ export function createDesktopGateway({
   }
 
   let targetPort = null;
+  let unavailableReason = "agent host is starting";
   let started = null;
   let closing = null;
   const server = createServer((req, res) => {
@@ -217,7 +223,7 @@ export function createDesktopGateway({
     }
     if (pathname === "/api" || pathname.startsWith("/api/")) {
       if (!targetPort) {
-        publicError(res, 503, "agent host is starting");
+        publicError(res, 503, unavailableReason);
         return;
       }
       proxyApi(req, res, targetPort);
@@ -253,9 +259,14 @@ export function createDesktopGateway({
       }
       if (started?.port === nextPort) throw new Error("desktop gateway cannot proxy to itself");
       targetPort = nextPort;
+      unavailableReason = "agent host is starting";
     },
-    clearHarnessTarget() {
+    clearHarnessTarget(reason = "agent host is starting") {
+      if (!PUBLIC_UNAVAILABLE_REASONS.has(reason)) {
+        throw new Error("invalid public harness unavailable reason");
+      }
       targetPort = null;
+      unavailableReason = reason;
     },
     harnessTarget() {
       return targetPort;
