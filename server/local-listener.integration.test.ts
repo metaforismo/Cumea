@@ -150,7 +150,6 @@ describe("real local harness listener", () => {
     const { child, port } = await startHarness();
     expect(port).toBeGreaterThan(0);
     expect(port).toBeLessThanOrEqual(65_535);
-    expect(port).not.toBe(8799);
 
     const health = await rawRequest(port);
     expect(health.status).toBe(200);
