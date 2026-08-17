@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -71,7 +78,7 @@ test("credential values are bounded for portable child environments", () => {
   );
 });
 
-test("migration encrypts before atomically removing plaintext", async () => {
+test("migration encrypts before atomically removing plaintext and its backup", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "cumea-vault-"));
   const configFile = path.join(directory, "config.json");
   const vaultFile = path.join(directory, "credentials.bin");
@@ -101,8 +108,37 @@ test("migration encrypts before atomically removing plaintext", async () => {
       box: {},
       profile: { name: "Francesco" },
     });
+    assert.equal(existsSync(`${configFile}.previous`), false);
     assert.deepEqual(await vault.read(), result.credentials);
     assert.doesNotMatch(readFileSync(vaultFile).toString("utf8"), /legacy-box/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy config recovery fails closed when a stale backup cannot be removed", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "cumea-vault-"));
+  const configFile = path.join(directory, "config.json");
+  const previous = `${configFile}.previous`;
+  const vault = createCredentialVault({
+    file: path.join(directory, "credentials.bin"),
+    safeStorage: fakeSafeStorage(),
+    platform: "win32",
+  });
+  const original = JSON.stringify({ box: { token: "legacy-box" } });
+  try {
+    writeFileSync(configFile, original, { mode: 0o600 });
+    // A non-empty directory cannot be removed by rmSync(..., {force:true})
+    // without recursive:true. It deterministically exercises the strict
+    // cleanup failure without monkey-patching filesystem primitives.
+    mkdirSync(previous, { mode: 0o700 });
+    writeFileSync(path.join(previous, "legacy-copy"), original, { mode: 0o600 });
+    await assert.rejects(
+      migrateLegacyCredentials({ configFile, vault }),
+      /credential storage recovery failed; stale plaintext backup could not be removed/,
+    );
+    assert.equal(readFileSync(configFile, "utf8"), original);
+    assert.equal(existsSync(previous), true);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
