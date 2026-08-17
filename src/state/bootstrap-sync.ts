@@ -81,6 +81,18 @@ export function materializeDesktopBootstrap(snapshot: DesktopBootstrap): {
   return { bots, selectedId, workspace, workspaceComplete };
 }
 
+/**
+ * A lazy page may race with newer SSE message/message.patch frames. Existing
+ * renderer entries therefore win on duplicate IDs; the fetched page only
+ * fills history that was not already observed locally.
+ */
+export function mergeThreadMessages(existing: readonly Message[], fetched: readonly Message[]): Message[] {
+  const merged = new Map<string, Message>();
+  for (const message of fetched) merged.set(message.id, message);
+  for (const message of existing) merged.set(message.id, message);
+  return [...merged.values()].sort((left, right) => left.at - right.at || left.id.localeCompare(right.id));
+}
+
 export function framesAfterCursor(frames: readonly CursorFrame[], cursor: number): CursorFrame[] {
   if (!validEventCursor(cursor)) throw new Error("invalid bootstrap cursor");
   const accepted: CursorFrame[] = [];
