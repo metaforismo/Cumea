@@ -19,7 +19,7 @@ import {
   stopCua,
   registerCuaIpc,
 } from "./cua.mjs";
-import { createDesktopCredentialController } from "./desktop-credentials.mjs";
+import { createDesktopCredentialController } from "./credential-controller.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 import { createPerformanceRecorder } from "./performance.mjs";
 
@@ -145,6 +145,17 @@ function isSafeExternalUrl(raw) {
   }
 }
 
+function trustedRenderer(event) {
+  const expected = app.isPackaged
+    ? `http://127.0.0.1:${SERVER_PORT}`
+    : new URL(DEV_URL).origin;
+  try {
+    return new URL(event.senderFrame.url).origin === expected;
+  } catch {
+    return false;
+  }
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -155,7 +166,11 @@ let serverReady = true;
 
 function serverEnvironment() {
   const environment = { ...process.env };
-  if (desktopCredentials?.publicStatus().managed) {
+  // A packaged desktop host never lets the harness inherit ambient provider
+  // secrets. OS-vault values are injected through dedicated one-boot fields;
+  // blocked mode injects only the managed marker, quarantining recoverable
+  // legacy plaintext instead of silently falling back to it.
+  if (app.isPackaged) {
     for (const name of MANAGED_SECRET_ENV) delete environment[name];
   }
   return {
@@ -373,9 +388,12 @@ ipcMain.handle("speech:start", (event) => {
 });
 ipcMain.handle("speech:stop", () => stopSpeech());
 
-ipcMain.handle("credentials:status", () => desktopCredentials?.publicStatus());
+ipcMain.handle("credentials:status", (event) => {
+  if (!trustedRenderer(event)) throw new Error("credential status is unavailable to this page");
+  return desktopCredentials?.publicStatus();
+});
 ipcMain.handle("credentials:set", async (event, payload) => {
-  if (!BrowserWindow.fromWebContents(event.sender)) throw new Error("desktop window is unavailable");
+  if (!trustedRenderer(event)) throw new Error("credential updates are unavailable to this page");
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("credential update is invalid");
   }
