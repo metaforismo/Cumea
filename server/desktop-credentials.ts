@@ -16,6 +16,14 @@ const ENV_FIELDS: Record<DesktopCredentialSection, string> = {
 };
 
 const MANAGED_ENV = "CUMEA_DESKTOP_CREDENTIALS_MANAGED";
+const MANAGED_INSTANCE_ENV_FIELDS = new Set([
+  MANAGED_ENV,
+  ...Object.values(ENV_FIELDS),
+  "XAI_API_KEY",
+  "BOX_TOKEN",
+  "COMPOSIO_KEY",
+  "COMPOSIO_API_KEY",
+]);
 const MAX_CREDENTIAL_LENGTH = 8_192;
 
 export interface DesktopCredentialBootstrap {
@@ -96,6 +104,19 @@ export function hasCredentialFields(value: unknown): boolean {
     Object.hasOwn(composio, "apiKey") ||
     Object.hasOwn(box, "token")
   );
+}
+
+/** Advanced instance environments remain available for non-secret settings,
+ * but packaged managed mode ignores credential aliases from plaintext disk.
+ * The OS vault is the only source allowed to populate those names. */
+export function sanitizeManagedInstanceEnvironment(
+  environment: Record<string, string> | undefined,
+): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(environment ?? {})) {
+    if (!MANAGED_INSTANCE_ENV_FIELDS.has(name)) sanitized[name] = value;
+  }
+  return sanitized;
 }
 
 /** Provider processes receive only the credential owned by their driver.
