@@ -21,9 +21,12 @@ Cumea rejects Electron's Linux `basic_text` backend instead of silently claiming
 plaintext encryption is secure. If a secure backend is unavailable, the packaged app enters
 `blocked` mode and refuses new credential writes.
 
-The vault document is versioned, validated against an exact credential allowlist, bounded to 8,192
-characters per value, written atomically, and kept owner-only where the platform supports POSIX
-modes. The file is removed when the final stored credential is cleared.
+The vault document is versioned, validated against an exact credential allowlist, bounded to 2,048
+characters per value, written through a flushed temporary file, and kept owner-only where the
+platform supports POSIX modes. On filesystems where replacing an existing file by rename is not
+available, Cumea keeps a recoverable `.previous` marker until the flushed candidate is installed.
+The next read restores the previous complete vault if an interrupted replacement left no target.
+The vault file and recovery marker are removed when the final stored credential is cleared.
 
 ## Migration from `~/.cumea/config.json`
 
@@ -72,9 +75,10 @@ environment fields to the new child process. Explicit empty values overwrite any
 `CUMEA_DESKTOP_*` fields, so the controller's current vault state is authoritative.
 
 The harness validates and copies the bootstrap into memory, then deletes those dedicated fields from
-`process.env` before provider instances or provider child processes are created. In packaged managed
-mode it also ignores credential aliases embedded in plaintext advanced instance environments.
-Non-secret instance environment values remain supported.
+`process.env` before provider instances or provider child processes are created. Environment names
+are compared case-insensitively at this boundary so differently-cased Windows aliases cannot bypass
+the scrub. In packaged managed mode Cumea also ignores credential aliases embedded in plaintext
+advanced instance environments. Non-secret instance environment values remain supported.
 
 Credentials are scoped by use:
 
