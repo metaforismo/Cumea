@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   framesAfterCursor,
   materializeDesktopBootstrap,
+  mergeThreadMessages,
   parseCursorFrame,
   type DesktopBootstrap,
 } from "./bootstrap-sync";
@@ -89,6 +90,20 @@ describe("desktop bootstrap sync", () => {
       { kind: "workspace", eventCursor: 12 },
     ];
     expect(framesAfterCursor(frames, 10).map((frame) => frame.eventCursor)).toEqual([11, 12]);
+  });
+
+  it("keeps newer renderer copies when a lazy transcript page races SSE", () => {
+    const fetched = [
+      { id: "m1", role: "bot" as const, kind: "text" as const, text: "old", at: 1 },
+      { id: "m2", role: "bot" as const, kind: "text" as const, text: "two", at: 2 },
+    ];
+    const existing = [
+      { id: "m1", role: "bot" as const, kind: "text" as const, text: "patched", at: 1 },
+      { id: "m3", role: "bot" as const, kind: "text" as const, text: "new SSE", at: 3 },
+    ];
+    const merged = mergeThreadMessages(existing, fetched);
+    expect(merged.map((message) => message.id)).toEqual(["m1", "m2", "m3"]);
+    expect(merged.find((message) => message.id === "m1")?.text).toBe("patched");
   });
 
   it("rejects frames without a trustworthy monotonic cursor", () => {
