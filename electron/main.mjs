@@ -48,6 +48,7 @@ let desktopCredentials = null;
 let serverProc = null;
 let serverReady = !app.isPackaged;
 let serverTransition = Promise.resolve();
+let isQuitting = false;
 
 const performanceOutputFile = process.env.CUMEA_PERFORMANCE_FILE?.trim() ?? "";
 const performanceEnabled = Boolean(performanceOutputFile);
@@ -199,6 +200,7 @@ function serverEnvironment() {
 // off the renderer's critical path. P0.03b replaces this control plane with
 // the already-tested parent/child readiness message and CUMEA_PORT=0.
 async function startServerOn(port) {
+  if (isQuitting) return null;
   const entry = path.join(process.resourcesPath, "server", "index.js");
   SERVER_PORT = port;
   const proc = utilityProcess.fork(entry, [], {
@@ -212,12 +214,17 @@ async function startServerOn(port) {
     if (serverProc === proc) {
       serverProc = null;
       serverReady = false;
-      desktopGateway?.clearHarnessTarget("agent host could not start");
+      if (!isQuitting) desktopGateway?.clearHarnessTarget("agent host could not start");
     }
   });
 
   for (let i = 0; i < 40; i++) {
-    if (exited) return null;
+    if (exited || isQuitting) {
+      try {
+        proc.kill();
+      } catch {}
+      return null;
+    }
     try {
       const res = await fetch(`http://127.0.0.1:${port}/api/health`);
       if (res.ok) {
@@ -240,8 +247,9 @@ async function startServerOn(port) {
 async function startServerPackaged() {
   // The renderer owns stable 127.0.0.1:8799. Until P0.03b gives the harness
   // an OS-assigned port, keep it on a separate bounded fallback set.
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 2 && !isQuitting; attempt++) {
     for (const port of PACKAGED_HARNESS_PORTS) {
+      if (isQuitting) return false;
       const proc = await startServerOn(port);
       if (proc) {
         serverProc = proc;
@@ -251,15 +259,16 @@ async function startServerPackaged() {
         return true;
       }
     }
-    await delay(2500);
+    if (!isQuitting) await delay(2500);
   }
   serverReady = false;
-  desktopGateway?.clearHarnessTarget("agent host could not start");
+  if (!isQuitting) desktopGateway?.clearHarnessTarget("agent host could not start");
   return false;
 }
 
 async function stopServerProcess(reason = "agent host is restarting") {
-  desktopGateway?.clearHarnessTarget(reason);
+  if (!isQuitting) desktopGateway?.clearHarnessTarget(reason);
+  else desktopGateway?.clearHarnessTarget("agent host could not start");
   serverReady = false;
   const current = serverProc;
   serverProc = null;
@@ -281,13 +290,15 @@ async function restartServerForCredentials() {
   if (!app.isPackaged) {
     throw new Error("secure credential updates require the packaged desktop host");
   }
+  if (isQuitting) throw new Error("Cumea is shutting down");
   return queueServerTransition(async () => {
+    if (isQuitting) throw new Error("Cumea is shutting down");
     const port = SERVER_PORT;
     await stopServerProcess("agent host is restarting");
     await delay(100);
     const proc = await startServerOn(port);
     if (!proc) {
-      desktopGateway?.clearHarnessTarget("agent host could not start");
+      if (!isQuitting) desktopGateway?.clearHarnessTarget("agent host could not start");
       throw new Error("the agent host could not restart on its existing port");
     }
     serverProc = proc;
@@ -297,6 +308,7 @@ async function restartServerForCredentials() {
       throw new Error("the restarted agent host did not return configuration status");
     }
     const config = await response.json();
+    if (isQuitting) throw new Error("Cumea is shutting down");
     serverReady = true;
     desktopGateway?.setHarnessTarget(port);
     return config;
@@ -500,7 +512,7 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 
-  if (app.isPackaged && desktopOrigin) {
+  if (app.isPackaged && desktopOrigin && !isQuitting) {
     performanceRecorder.markMain("cumea:main:server-start");
     void queueServerTransition(startServerPackaged).then(
       (ready) => {
@@ -509,7 +521,7 @@ app.whenReady().then(async () => {
         );
       },
       (error) => {
-        desktopGateway?.clearHarnessTarget("agent host could not start");
+        if (!isQuitting) desktopGateway?.clearHarnessTarget("agent host could not start");
         performanceRecorder.markMain("cumea:main:server-failed");
         console.error("[server] asynchronous start failed:", error);
       },
@@ -525,6 +537,7 @@ app.on("window-all-closed", () => {
 let quitCleanupStarted = false;
 let quitCleanupDone = false;
 app.on("before-quit", (event) => {
+  isQuitting = true;
   performanceRecorder.markMain("cumea:main:before-quit");
   performanceRecorder.flush();
   if (quitCleanupDone) return;
