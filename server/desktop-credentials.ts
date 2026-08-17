@@ -16,14 +16,19 @@ const ENV_FIELDS: Record<DesktopCredentialSection, string> = {
 };
 
 const MANAGED_ENV = "CUMEA_DESKTOP_CREDENTIALS_MANAGED";
-const MANAGED_INSTANCE_ENV_FIELDS = new Set([
-  MANAGED_ENV,
-  ...Object.values(ENV_FIELDS),
+const GENERIC_CREDENTIAL_ENV_FIELDS = [
   "XAI_API_KEY",
   "BOX_TOKEN",
   "COMPOSIO_KEY",
   "COMPOSIO_API_KEY",
-]);
+] as const;
+const MANAGED_INSTANCE_ENV_FIELDS = new Set(
+  [
+    MANAGED_ENV,
+    ...Object.values(ENV_FIELDS),
+    ...GENERIC_CREDENTIAL_ENV_FIELDS,
+  ].map((name) => name.toUpperCase()),
+);
 // Keep the complete managed bootstrap comfortably below Windows' aggregate
 // process-environment limit even when the parent already has a large PATH.
 const MAX_CREDENTIAL_LENGTH = 2_048;
@@ -43,6 +48,23 @@ function ownRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+/** Windows environment names are case-insensitive, but an env object passed
+ * through JavaScript can contain differently-cased aliases. Consume and
+ * delete every alias before another child process can inherit it. */
+function takeEnvironmentValue(
+  environment: NodeJS.ProcessEnv,
+  expectedName: string,
+): string | undefined {
+  const expected = expectedName.toUpperCase();
+  let selected: string | undefined;
+  for (const name of Object.keys(environment)) {
+    if (name.toUpperCase() !== expected) continue;
+    if (selected === undefined) selected = environment[name];
+    delete environment[name];
+  }
+  return selected;
 }
 
 export function isDesktopCredentialSection(value: unknown): value is DesktopCredentialSection {
@@ -75,20 +97,24 @@ export function applyDesktopCredential(
 export function consumeDesktopCredentialEnvironment(
   environment: NodeJS.ProcessEnv,
 ): DesktopCredentialBootstrap {
-  const managed = environment[MANAGED_ENV] === "1";
+  const managed = takeEnvironmentValue(environment, MANAGED_ENV) === "1";
   const credentials: DesktopCredentials = {};
 
-  if (managed) {
-    for (const section of DESKTOP_CREDENTIAL_SECTIONS) {
-      const normalized = normalizeDesktopCredentialValue(environment[ENV_FIELDS[section]]);
-      if (normalized !== null) credentials[section] = normalized;
-    }
+  for (const section of DESKTOP_CREDENTIAL_SECTIONS) {
+    const raw = takeEnvironmentValue(environment, ENV_FIELDS[section]);
+    if (!managed) continue;
+    const normalized = normalizeDesktopCredentialValue(raw);
+    if (normalized !== null) credentials[section] = normalized;
   }
 
-  // These values must never reach provider child processes through inherited
-  // environment. The server keeps only the validated in-memory copy above.
-  delete environment[MANAGED_ENV];
-  for (const field of Object.values(ENV_FIELDS)) delete environment[field];
+  if (managed) {
+    // Electron removes the expected uppercase names before spawning the
+    // harness. This second boundary also removes differently-cased aliases
+    // and prevents generic ambient credentials from reaching provider children.
+    for (const field of GENERIC_CREDENTIAL_ENV_FIELDS) {
+      takeEnvironmentValue(environment, field);
+    }
+  }
 
   return { managed, credentials };
 }
@@ -116,7 +142,7 @@ export function sanitizeManagedInstanceEnvironment(
 ): Record<string, string> {
   const sanitized: Record<string, string> = {};
   for (const [name, value] of Object.entries(environment ?? {})) {
-    if (!MANAGED_INSTANCE_ENV_FIELDS.has(name)) sanitized[name] = value;
+    if (!MANAGED_INSTANCE_ENV_FIELDS.has(name.toUpperCase())) sanitized[name] = value;
   }
   return sanitized;
 }
