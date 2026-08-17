@@ -243,6 +243,20 @@ export function publicCuaStatus() {
   return toPublicCuaStatus(connection);
 }
 
+/** Reset any stale prior descriptor without importing the CUA SDK, reading
+ * TCC state, probing sockets, or starting a daemon. The first explicit status /
+ * permission action performs the real reconciliation. */
+export function prepareCuaForLazyStart() {
+  return queueTransition(async () => {
+    await stopEmbedded().catch(() => undefined);
+    return setConnection({
+      mode: "unavailable",
+      state: "unavailable",
+      reason: "local computer control starts when requested",
+    });
+  });
+}
+
 export function disableCuaForPerformance() {
   performanceDisabled = true;
   return setConnection({
