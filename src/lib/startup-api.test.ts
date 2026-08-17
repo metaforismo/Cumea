@@ -91,6 +91,30 @@ describe("startupApi", () => {
     expect(calls).toBe(1);
   });
 
+  it("never retries a signed non-idempotent POST", async () => {
+    let calls = 0;
+    await expect(
+      startupApi(
+        "/api/create",
+        { method: "POST" },
+        {
+          fetchImpl: async () => {
+            calls += 1;
+            return jsonResponse(
+              503,
+              { error: "agent host is starting" },
+              { "x-cumea-desktop-state": "starting" },
+            );
+          },
+          sleepImpl: async () => {
+            throw new Error("must not sleep");
+          },
+        },
+      ),
+    ).rejects.toThrow("agent host is starting");
+    expect(calls).toBe(1);
+  });
+
   it("does not retry the terminal harness failure state", async () => {
     let calls = 0;
     await expect(

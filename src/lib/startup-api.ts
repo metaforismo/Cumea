@@ -2,6 +2,7 @@ const RETRYABLE_GATEWAY_STATES = new Map([
   ["starting", "agent host is starting"],
   ["restarting", "agent host is restarting"],
 ]);
+const RETRYABLE_METHODS = new Set(["GET", "HEAD", "PUT"]);
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRY_MS = 250;
@@ -76,6 +77,7 @@ export async function startupApi<T>(
     throw new Error("invalid startup API retry interval");
   }
 
+  const method = String(init.method ?? "GET").toUpperCase();
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.now ?? (() => performance.now());
   const sleepImpl = options.sleepImpl ?? sleep;
@@ -91,6 +93,7 @@ export async function startupApi<T>(
     const message = errorMessage(payload, response.status);
     const gatewayState = response.headers.get("x-cumea-desktop-state");
     const retryable =
+      RETRYABLE_METHODS.has(method) &&
       response.status === 503 &&
       gatewayState !== null &&
       RETRYABLE_GATEWAY_STATES.get(gatewayState) === message;

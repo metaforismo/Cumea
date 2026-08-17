@@ -20,6 +20,7 @@ import {
   registerCuaIpc,
 } from "./cua.mjs";
 import { createDesktopCredentialController } from "./desktop-credentials.mjs";
+import { waitForHarnessReady } from "./harness-process.mjs";
 import {
   createDesktopGateway,
   DEFAULT_DESKTOP_GATEWAY_PORT,
@@ -33,7 +34,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
-const PACKAGED_HARNESS_PORTS = [18799, 28799, 38799];
 const MANAGED_SECRET_ENV = [
   "BOX_TOKEN",
   "COMPOSIO_API_KEY",
@@ -41,7 +41,7 @@ const MANAGED_SECRET_ENV = [
   "XAI_API_KEY",
 ];
 
-let SERVER_PORT = PACKAGED_HARNESS_PORTS[0];
+let SERVER_PORT = 0;
 let desktopOrigin = null;
 let desktopGateway = null;
 let desktopCredentials = null;
@@ -186,31 +186,28 @@ function serverEnvironment() {
   // legacy plaintext instead of silently falling back to it.
   if (app.isPackaged) {
     for (const name of MANAGED_SECRET_ENV) delete environment[name];
+    delete environment.CUMEA_STATIC_DIR;
   }
   return {
     ...environment,
     ...desktopCredentials?.serverEnvironment(),
-    CUMEA_STATIC_DIR: path.join(process.resourcesPath, "ui"),
-    CUMEA_PORT: String(SERVER_PORT),
+    CUMEA_PORT: "0",
     CUMEA_CUA_CONNECTION: path.join(app.getPath("userData"), "cua-connection.json"),
   };
 }
 
-// P0.03a deliberately keeps the current bounded health probe while moving it
-// off the renderer's critical path. P0.03b replaces this control plane with
-// the already-tested parent/child readiness message and CUMEA_PORT=0.
-async function startServerOn(port) {
+// Packaged startup owns the child process and learns its private port only
+// through UtilityProcess messaging. No TCP/HTTP discovery probe participates
+// in readiness.
+async function startServerProcess() {
   if (isQuitting) return null;
   const entry = path.join(process.resourcesPath, "server", "index.js");
-  SERVER_PORT = port;
   const proc = utilityProcess.fork(entry, [], {
     env: serverEnvironment(),
     stdio: "inherit",
   });
   serverProc = proc;
-  let exited = false;
   proc.once("exit", () => {
-    exited = true;
     if (serverProc === proc) {
       serverProc = null;
       serverReady = false;
@@ -218,52 +215,37 @@ async function startServerOn(port) {
     }
   });
 
-  for (let i = 0; i < 40; i++) {
-    if (exited || isQuitting) {
+  try {
+    const ready = await waitForHarnessReady(proc, { timeoutMs: 30_000 });
+    if (isQuitting || serverProc !== proc) {
       try {
         proc.kill();
       } catch {}
       return null;
     }
+    SERVER_PORT = ready.port;
+    return { proc, port: ready.port };
+  } catch (error) {
+    if (serverProc === proc) serverProc = null;
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/api/health`);
-      if (res.ok) {
-        const body = await res.json().catch(() => null);
-        if (body?.app === "cumea" && body.pid === proc.pid && body.static) return proc;
-        break;
-      }
-    } catch {
-      /* not up yet */
-    }
-    await delay(500);
+      proc.kill();
+    } catch {}
+    if (!isQuitting) desktopGateway?.clearHarnessTarget("agent host could not start");
+    console.error("[server] readiness failed:", error);
+    return null;
   }
-  if (serverProc === proc) serverProc = null;
-  try {
-    proc.kill();
-  } catch {}
-  return null;
 }
 
 async function startServerPackaged() {
-  // The renderer owns stable 127.0.0.1:8799. Until P0.03b gives the harness
-  // an OS-assigned port, keep it on a separate bounded fallback set.
-  for (let attempt = 0; attempt < 2 && !isQuitting; attempt++) {
-    for (const port of PACKAGED_HARNESS_PORTS) {
-      if (isQuitting) return false;
-      const proc = await startServerOn(port);
-      if (proc) {
-        serverProc = proc;
-        SERVER_PORT = port;
-        serverReady = true;
-        desktopGateway?.setHarnessTarget(port);
-        return true;
-      }
-    }
-    if (!isQuitting) await delay(2500);
+  const started = await startServerProcess();
+  if (!started || isQuitting || serverProc !== started.proc) {
+    serverReady = false;
+    if (!isQuitting) desktopGateway?.clearHarnessTarget("agent host could not start");
+    return false;
   }
-  serverReady = false;
-  if (!isQuitting) desktopGateway?.clearHarnessTarget("agent host could not start");
-  return false;
+  serverReady = true;
+  desktopGateway?.setHarnessTarget(started.port);
+  return true;
 }
 
 async function stopServerProcess(reason = "agent host is restarting") {
@@ -293,24 +275,26 @@ async function restartServerForCredentials() {
   if (isQuitting) throw new Error("Cumea is shutting down");
   return queueServerTransition(async () => {
     if (isQuitting) throw new Error("Cumea is shutting down");
-    const port = SERVER_PORT;
     await stopServerProcess("agent host is restarting");
     await delay(100);
-    const proc = await startServerOn(port);
-    if (!proc) {
+    const started = await startServerProcess();
+    if (!started || isQuitting || serverProc !== started.proc) {
       if (!isQuitting) desktopGateway?.clearHarnessTarget("agent host could not start");
-      throw new Error("the agent host could not restart on its existing port");
+      throw new Error("the agent host could not restart");
     }
-    serverProc = proc;
-    const response = await fetch(`http://127.0.0.1:${port}/api/config`);
+    const response = await fetch(`http://127.0.0.1:${started.port}/api/config`);
     if (!response.ok) {
       await stopServerProcess("agent host could not start");
       throw new Error("the restarted agent host did not return configuration status");
     }
     const config = await response.json();
-    if (isQuitting) throw new Error("Cumea is shutting down");
+    if (isQuitting || serverProc !== started.proc) {
+      await stopServerProcess("agent host could not start");
+      throw new Error("the restarted agent host exited before activation");
+    }
+    SERVER_PORT = started.port;
     serverReady = true;
-    desktopGateway?.setHarnessTarget(port);
+    desktopGateway?.setHarnessTarget(started.port);
     return config;
   });
 }

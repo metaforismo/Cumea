@@ -36,26 +36,29 @@ The gateway:
 
 An unrelated process already occupying the stable desktop port is never trusted as Cumea. The packaged window falls back to an internal error document instead of navigating to the occupant.
 
-## P0.03a startup sequence
+## Current packaged startup sequence
 
-The current sequence is:
+The packaged sequence after P0.03b is:
 
 ```text
 Electron ready
 → initialize packaged credential-storage boundary
 → register display/CUA IPC
 → write a harmless lazy-CUA descriptor
-→ bind the desktop gateway
+→ bind stable desktop gateway :8799
 → create + navigate BrowserWindow
-→ start harness asynchronously
-→ verify the exact child PID through the existing bounded health probe
-→ attach the gateway to that harness port
+→ fork local harness with CUMEA_PORT=0
+→ bind optional remote listener on its independent configured/default port
+→ bind local harness on an OS-assigned loopback port
+→ child posts {kind, version, pid, port} through UtilityProcess parentPort
+→ parent validates exact child PID + bounded port
+→ gateway attaches to that private port
 → EventSource reconnects and canonical state hydrates
 ```
 
-The renderer therefore no longer waits for provider discovery or harness readiness before it can paint.
+The renderer therefore does not wait for provider discovery or harness readiness before it can paint.
 
-While the harness is unavailable the gateway exposes only one of three fixed public states:
+While no validated harness is attached the gateway exposes only one of three fixed public states:
 
 ```text
 agent host is starting
@@ -65,30 +68,24 @@ agent host could not start
 
 Internal child diagnostics, filesystem paths, and provider errors are not projected through this pre-readiness surface.
 
-### Temporary control-plane limitation
+### OS-assigned private listener and readiness IPC
 
-P0.03a intentionally keeps the pre-existing bounded HTTP health probe and a separate harness fallback-port set:
+Packaged Electron no longer discovers readiness by polling `/api/health` or cycling predictable private fallback ports. The child asks the operating system for port zero, reads the actual bound TCP port, and publishes one versioned message only after the local listener is listening.
 
-```text
-18799
-28799
-38799
-```
+The parent ignores unrelated messages and requires:
 
-Those ports are now outside the renderer's critical path, but they are not the final architecture. The private harness listener is still directly reachable on loopback during this tranche; the gateway's exact-Host protection therefore hardens the stable renderer surface but is not presented as a complete replacement for hardening the backend listener itself.
+- readiness kind `cumea:harness-ready`;
+- protocol version `1`;
+- `message.pid === utilityProcess.pid`;
+- an integer port in `1..65535`;
+- no child exit before readiness;
+- completion within the bounded readiness timeout.
 
-P0.03b must replace the fixed backend ports and finish the private-listener boundary with:
+The private local listener itself accepts only an exact numeric-loopback/localhost Host for its actual bound port. Mutating browser Origins are restricted to that actual private origin or the explicit Vite development origin. Vite uses `changeOrigin: true` so strict backend Host validation remains compatible with source development.
 
-```text
-CUMEA_PORT=0
-→ operating system chooses the harness port
-→ child validates its local listener Host/origin contract
-→ child sends a versioned {kind, pid, port} readiness message through Electron UtilityProcess messaging
-→ parent validates exact child PID + bounded port
-→ gateway attaches to the announced port
-```
+The optional remote/mobile listener keeps its own explicit port (default `8800`) and binds independently before the ephemeral local listener. It is no longer derived from the private local port.
 
-The readiness protocol and its tests belong to P0.03b together with the server listener that consumes it. P0.03a deliberately carries no unused handshake implementation.
+The health endpoint remains useful for diagnostics and package identity, but it is no longer the desktop startup readiness control plane.
 
 ## Harness restart contract
 
@@ -127,7 +124,7 @@ P0.04 will replace the collection of initial reloads with one bounded atomic boo
 
 ## Performance interpretation
 
-P0.03a changes what can paint before the harness is ready. That makes phase naming important:
+P0.03 changes what can paint before the harness is ready. That makes phase naming important:
 
 - `shell-painted` means the packaged UI rendered; it does **not** prove the harness is ready;
 - `shell-usable` still requires the existing connected/config/agent condition and therefore remains a later state;
@@ -138,12 +135,9 @@ Do not compare a pre-P0.03 first-run paint sample and a post-P0.03 first-run pai
 
 ## Failure boundaries
 
-P0.03a intentionally does not claim:
+The completed P0.03a/P0.03b startup work intentionally does not claim:
 
-- an OS-assigned harness port;
-- parent/child readiness messaging in production;
-- complete direct-harness DNS-rebinding hardening before the P0.03b listener rewrite;
-- atomic renderer bootstrap;
+- atomic renderer/application bootstrap;
 - fixed-machine startup improvement numbers;
 - signed/notarized packaged-launch acceptance;
 - local-computer readiness before the user requests it.
