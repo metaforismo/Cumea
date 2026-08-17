@@ -20,7 +20,10 @@ export function createDesktopCredentialController({
   let vault = null;
   let state = {
     mode: packaged ? "blocked" : "file",
-    managed: false,
+    // A packaged desktop always owns the credential boundary. Even when the
+    // OS store is unavailable it boots the harness in managed mode with an
+    // empty credential set, so preserved legacy plaintext is never consumed.
+    managed: packaged,
     available: !packaged,
     secure: false,
     backend: null,
@@ -52,7 +55,13 @@ export function createDesktopCredentialController({
 
   const initialize = async () => {
     if (!packaged) {
-      state = { ...state, mode: "file", available: true, reason: null };
+      state = {
+        ...state,
+        mode: "file",
+        managed: false,
+        available: true,
+        reason: null,
+      };
       return publicStatus();
     }
     if (performanceFixture) {
@@ -77,20 +86,22 @@ export function createDesktopCredentialController({
       state = {
         ...state,
         mode: migration.managed ? "os" : "blocked",
-        managed: migration.managed,
+        managed: true,
         available: migration.storage.available,
         secure: migration.storage.secure,
         backend: migration.storage.backend,
         reason: migration.storage.reason,
         migrated: migration.migrated,
         legacyPresent: migration.legacyPresent,
-        credentials: normalizeCredentials(migration.credentials),
+        credentials: migration.managed
+          ? normalizeCredentials(migration.credentials)
+          : {},
       };
     } catch (error) {
       state = {
         ...state,
         mode: "blocked",
-        managed: false,
+        managed: true,
         available: false,
         secure: false,
         reason:
@@ -109,7 +120,7 @@ export function createDesktopCredentialController({
   const update = (section, value, restartHarness) => {
     const next = operation.then(async () => {
       if (!isDesktopCredentialSection(section)) throw new Error("unknown credential section");
-      if (!state.managed || !vault) {
+      if (state.mode !== "os" || !vault) {
         throw new Error(
           state.reason || "secure operating-system credential storage is unavailable",
         );
