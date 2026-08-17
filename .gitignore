@@ -14,3 +14,4 @@ apps/mobile/.expo
 apps/mobile/dist
 apps/mobile/ios
 apps/mobile/android
+.context/performance/
