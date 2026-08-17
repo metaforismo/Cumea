@@ -24,7 +24,9 @@ const MANAGED_INSTANCE_ENV_FIELDS = new Set([
   "COMPOSIO_KEY",
   "COMPOSIO_API_KEY",
 ]);
-const MAX_CREDENTIAL_LENGTH = 8_192;
+// Keep the complete managed bootstrap comfortably below Windows' aggregate
+// process-environment limit even when the parent already has a large PATH.
+const MAX_CREDENTIAL_LENGTH = 2_048;
 
 export interface DesktopCredentialBootstrap {
   managed: boolean;
@@ -119,9 +121,9 @@ export function sanitizeManagedInstanceEnvironment(
   return sanitized;
 }
 
-/** Provider processes receive only the credential owned by their driver.
- * Connector credentials stay in the harness and are never mounted into an
- * unrelated Claude/Codex/Gemini/Grok CLI environment. */
+/** Process environments receive only credentials owned by their driver.
+ * Composio credentials use a separate, explicitly capability-gated MCP
+ * integration rather than this generic provider environment path. */
 export function providerCredentialEnvironment(
   driverKind: string,
   credentials: Pick<DesktopCredentials, "xai" | "box">,
