@@ -1,0 +1,44 @@
+name: P0.03b real refactor
+
+on:
+  push:
+    branches:
+      - perf/harness-ready-handshake
+    paths:
+      - scripts/apply-p003b-real.mjs
+      - .github/workflows/p003b-real.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: perf/harness-ready-handshake
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Apply asserted source refactor
+        run: node scripts/apply-p003b-real.mjs
+      - name: Verify transformed source before commit
+        shell: bash
+        run: |
+          grep -F 'waitForHarnessReady(proc' electron/main.mjs
+          grep -F 'CUMEA_PORT: "0"' electron/main.mjs
+          grep -F 'postHarnessReady(LOCAL_PORT)' server/index.ts
+          grep -F 'localHostAllowed(req.headers.host, LOCAL_PORT)' server/index.ts
+          if grep -q 'PACKAGED_HARNESS_PORTS' electron/main.mjs; then exit 1; fi
+          git diff --check
+      - name: Commit implementation
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add electron/main.mjs server/index.ts package.json
+          git commit -m "perf: activate OS-assigned harness readiness handshake"
+          git push origin HEAD:perf/harness-ready-handshake
