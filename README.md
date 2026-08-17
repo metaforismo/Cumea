@@ -52,6 +52,12 @@ authenticated machine they control. The mobile client consumes a narrowed authen
 reconciles a fresh bootstrap snapshot after each connection, pauses in the background, and reconnects
 unexpected closures with bounded backoff.
 
+The desktop uses a separate local-only bootstrap contract: one bounded snapshot carries the agent
+index, selected transcript page, engine/configuration status, workspace projection, Needs You count,
+and a monotonic event cursor. SSE is opened first and buffered during the snapshot cut, so reconnects
+can discard already-represented events instead of re-running four independent startup fetches. See
+[desktop bootstrap consistency](docs/desktop-bootstrap.md).
+
 Push/background notifications, paired-host routine editing,
 voice dictation, and signed physical-device acceptance are not complete. Demo mode is explicitly
 local sample data and is not evidence that a provider task ran.

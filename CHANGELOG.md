@@ -18,6 +18,10 @@ All notable changes to Cumea are documented here. This project follows
 - Local computer initialization is now lazy: normal startup writes a harmless unavailable descriptor
   without loading the CUA SDK, reading TCC state, probing the local socket, or starting the native
   daemon. Actual reconciliation happens when the capability is inspected or requested.
+- Desktop state now has a versioned, bounded local bootstrap snapshot with a monotonic SSE cursor.
+  Startup and reconnect buffer concurrent deltas, hydrate bots/configuration/engines/work state once,
+  discard events already represented by the snapshot, and re-snapshot rather than guessing after a
+  bounded-buffer overflow.
 
 ### Changed
 

@@ -15,6 +15,14 @@ import {
 import type { CumeaColor, CumeaExpression, CumeaMotion } from "@/lib/mascot";
 import type { BotAvatarConfig } from "@/lib/mote";
 import { cardResponseDecision } from "./response-decision";
+import {
+  framesAfterCursor,
+  materializeDesktopBootstrap,
+  mergeThreadMessages,
+  parseCursorFrame,
+  type CursorFrame,
+  type DesktopBootstrap,
+} from "./bootstrap-sync";
 
 export type { CumeaColor } from "@/lib/mascot";
 
@@ -241,6 +249,14 @@ interface AppState {
 }
 
 type Action =
+  | {
+      type: "bootstrap";
+      bots: Bot[];
+      selectedId: string;
+      instances: InstanceInfo[];
+      config: ConfigStatus;
+      workspace: WorkspaceSnapshot;
+    }
   | { type: "hydrate"; bots: Bot[] }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
@@ -255,6 +271,7 @@ type Action =
   | { type: "markUnread"; botId: string }
   | { type: "botPatched"; bot: Partial<Bot> & { id: string } }
   | { type: "messageAdded"; threadId: string; message: Message }
+  | { type: "messagesHydrated"; threadId: string; messages: Message[] }
   | { type: "messagePatched"; threadId: string; message: Message }
   | { type: "streamDelta"; threadId: string; delta: string }
   | { type: "streamClear"; threadId: string }
@@ -324,6 +341,15 @@ function patchCard(state: AppState, botId: string, messageId: string, patch: Par
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
+    case "bootstrap":
+      return {
+        ...state,
+        bots: action.bots,
+        selectedId: action.selectedId,
+        instances: action.instances,
+        config: action.config,
+        workspace: action.workspace,
+      };
     case "hydrate": {
       const selectedId =
         action.bots.some((b) => b.id === state.selectedId) && state.selectedId
@@ -399,6 +425,14 @@ function reducer(state: AppState, action: Action): AppState {
               : null;
       const next = kind ? withMascotMotion(state, action.bot.id, kind) : state;
       return updateBot(next, action.bot.id, (b) => ({ ...b, ...action.bot, messages: b.messages }));
+    }
+    case "messagesHydrated": {
+      const bot = state.bots.find((candidate) => candidate.threadId === action.threadId);
+      if (!bot) return state;
+      return updateBot(state, bot.id, (candidate) => ({
+        ...candidate,
+        messages: mergeThreadMessages(candidate.messages, action.messages),
+      }));
     }
     case "messageAdded": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
@@ -617,11 +651,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // A local DELETE receives an SSE tombstone before its HTTP response. Hold
   // that event so a failed request never removes the bot from the desktop.
   const pendingBotDeletes = useRef(new Map<string, string>());
+  const workspaceCompleteRef = useRef(false);
+  const bootstrapReadyRef = useRef(false);
+  const workspaceReloadInFlightRef = useRef(false);
+  const loadedThreadsRef = useRef(new Set<string>());
+  const loadingThreadsRef = useRef(new Set<string>());
 
   const showError = useCallback((error: unknown) => {
     rawDispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
     setTimeout(() => rawDispatch({ type: "error", message: null }), 6000);
   }, []);
+
+  const loadFullWorkspace = useCallback(() => {
+    if (workspaceReloadInFlightRef.current) return;
+    workspaceReloadInFlightRef.current = true;
+    void api("/api/work")
+      .then(({ workspace }) => {
+        workspaceCompleteRef.current = true;
+        rawDispatch({ type: "workspaceHydrated", workspace });
+      })
+      .catch(showError)
+      .finally(() => {
+        workspaceReloadInFlightRef.current = false;
+      });
+  }, [showError]);
 
   const sendMessage = useCallback(async (input: {
     botId: string;
@@ -788,6 +841,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (bot?.unread) {
             api(`/api/bots/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
           }
+          if (
+            bot &&
+            !loadedThreadsRef.current.has(bot.threadId) &&
+            !loadingThreadsRef.current.has(bot.threadId)
+          ) {
+            loadingThreadsRef.current.add(bot.threadId);
+            api(`/api/bots/${bot.id}/messages?limit=80`)
+              .then(({ messages }) => {
+                loadedThreadsRef.current.add(bot.threadId);
+                rawDispatch({ type: "messagesHydrated", threadId: bot.threadId, messages });
+              })
+              .catch(showError)
+              .finally(() => loadingThreadsRef.current.delete(bot.threadId));
+          }
           break;
         }
         case "setModel":
@@ -799,6 +866,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "interrupt":
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST" }).catch(showError);
           break;
+        case "toggleWork": {
+          const opening = action.open ?? !stateRef.current.workOpen;
+          if (opening && bootstrapReadyRef.current && !workspaceCompleteRef.current) {
+            loadFullWorkspace();
+          }
+          break;
+        }
         case "updateBot": {
           const timers = patchTimers.current;
           const pending = timers.get(action.botId);
@@ -818,40 +892,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     return wrapped;
-  }, [showError]);
+  }, [showError, loadFullWorkspace]);
 
-  // ── initial load + SSE fold ──────────────────────────────────────────
+  // ── atomic bootstrap + cursor-aware SSE fold ───────────────────────
   useEffect(() => {
     let alive = true;
-    const loadAll = () => {
-      api("/api/bots")
-        .then(({ bots }) => alive && rawDispatch({ type: "hydrate", bots }))
-        .catch(() => {});
-      api("/api/instances")
-        .then(({ instances }) => alive && rawDispatch({ type: "instances", instances }))
-        .catch(() => {});
-      api("/api/config")
-        .then((config) => alive && rawDispatch({ type: "configStatus", config }))
-        .catch(() => {});
-      api("/api/work")
-        .then(({ workspace }) => alive && rawDispatch({ type: "workspaceHydrated", workspace }))
-        .catch(() => {});
-    };
-    loadAll();
+    let syncing = true;
+    let syncGeneration = 0;
+    let lastCursor = 0;
+    let buffered: CursorFrame[] = [];
+    let bufferOverflow = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const MAX_BUFFERED_FRAMES = 2_048;
 
-    const es = new EventSource("/api/events");
-    es.onopen = () => {
-      rawDispatch({ type: "connected", value: true });
-      loadAll(); // resync anything missed while disconnected
-    };
-    es.onerror = () => rawDispatch({ type: "connected", value: false });
-    es.onmessage = (raw) => {
-      let frame: any;
-      try {
-        frame = JSON.parse(raw.data);
-      } catch {
-        return;
-      }
+    const applyFrame = (cursorFrame: CursorFrame) => {
+      const frame = cursorFrame as any;
       switch (frame.kind) {
         case "message":
           rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
@@ -861,7 +916,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "bot": {
           const bot = frame.bot as Partial<Bot> & { id: string };
-          // reading the selected chat clears its badge immediately
           if (bot.unread && bot.id === stateRef.current.selectedId) {
             bot.unread = false;
             fetch(`/api/bots/${bot.id}`, {
@@ -889,18 +943,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });
           break;
         case "workspace":
+          workspaceCompleteRef.current = true;
           rawDispatch({ type: "workspaceHydrated", workspace: frame.workspace });
           break;
         case "bot.deleted":
           if (
-            typeof frame.operationId !== "string"
-            || pendingBotDeletes.current.get(frame.botId) !== frame.operationId
+            typeof frame.operationId !== "string" ||
+            pendingBotDeletes.current.get(frame.botId) !== frame.operationId
           ) {
             rawDispatch({ type: "botDeleted", botId: frame.botId });
           }
           break;
-        // a key changed and the fleet hot-reloaded — refresh the picker so
-        // newly available providers un-dim immediately
         case "config":
           rawDispatch({
             type: "configStatus",
@@ -912,8 +965,120 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
       }
     };
+
+    const queueFrame = (frame: CursorFrame) => {
+      if (syncing) {
+        if (buffered.length >= MAX_BUFFERED_FRAMES) {
+          bufferOverflow = true;
+          return;
+        }
+        buffered.push(frame);
+        return;
+      }
+      if (frame.eventCursor <= lastCursor) return;
+      lastCursor = frame.eventCursor;
+      applyFrame(frame);
+    };
+
+    const startBootstrap = () => {
+      const generation = ++syncGeneration;
+      syncing = true;
+      buffered = [];
+      bufferOverflow = false;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      const requestedSelectedId = stateRef.current.selectedId;
+      const query = new URLSearchParams();
+      if (requestedSelectedId) query.set("selectedBotId", requestedSelectedId);
+      const path = `/api/bootstrap${query.size ? `?${query.toString()}` : ""}`;
+
+      void api(path)
+        .then((snapshot: DesktopBootstrap) => {
+          if (!alive || generation !== syncGeneration) return;
+          if (
+            requestedSelectedId &&
+            stateRef.current.selectedId &&
+            stateRef.current.selectedId !== requestedSelectedId
+          ) {
+            startBootstrap();
+            return;
+          }
+          const materialized = materializeDesktopBootstrap(snapshot);
+          workspaceCompleteRef.current = materialized.workspaceComplete;
+          bootstrapReadyRef.current = true;
+          loadedThreadsRef.current = new Set(snapshot.selected ? [snapshot.selected.threadId] : []);
+          loadingThreadsRef.current.clear();
+          rawDispatch({
+            type: "bootstrap",
+            bots: materialized.bots,
+            selectedId: materialized.selectedId,
+            instances: snapshot.instances,
+            config: snapshot.config,
+            workspace: materialized.workspace,
+          });
+          if (stateRef.current.workOpen && !materialized.workspaceComplete) loadFullWorkspace();
+          lastCursor = snapshot.eventCursor;
+          const pending = framesAfterCursor(buffered, lastCursor);
+          const overflowed = bufferOverflow;
+          buffered = [];
+          bufferOverflow = false;
+          syncing = false;
+          if (overflowed) {
+            startBootstrap();
+            return;
+          }
+          for (const frame of pending) {
+            if (frame.eventCursor <= lastCursor) continue;
+            lastCursor = frame.eventCursor;
+            applyFrame(frame);
+          }
+        })
+        .catch(() => {
+          if (!alive || generation !== syncGeneration) return;
+          retryTimer = setTimeout(startBootstrap, 500);
+        });
+    };
+
+    const es = new EventSource("/api/events");
+    es.onopen = () => rawDispatch({ type: "connected", value: true });
+    es.onerror = () => {
+      rawDispatch({ type: "connected", value: false });
+      syncGeneration += 1;
+      syncing = true;
+      buffered = [];
+      bufferOverflow = false;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+    es.onmessage = (raw) => {
+      let value: unknown;
+      try {
+        value = JSON.parse(raw.data);
+      } catch {
+        startBootstrap();
+        return;
+      }
+      if (value && typeof value === "object" && !Array.isArray(value) && (value as any).kind === "hello") {
+        rawDispatch({ type: "connected", value: true });
+        startBootstrap();
+        return;
+      }
+      const frame = parseCursorFrame(value);
+      if (!frame) {
+        startBootstrap();
+        return;
+      }
+      queueFrame(frame);
+    };
+
     return () => {
       alive = false;
+      syncGeneration += 1;
+      if (retryTimer) clearTimeout(retryTimer);
       es.close();
     };
   }, []);

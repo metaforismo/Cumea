@@ -77,9 +77,16 @@ should not bypass the release, security, persistence, or measurement foundations
     keep remote/mobile listener port semantics independent of the local ephemeral port.
   - [ ] P0.03c — Re-run matching packaged performance scenarios on the fixed-machine evidence gate and
     record startup trade-offs without attributing hosted-runner variance to the code change.
-- [ ] **P0.04 — Atomic bootstrap.** Add one bounded bootstrap response for the agent index, selected
-  conversation page, engine capabilities, configuration status, Needs You count, routine summary,
-  computer status, and event cursor. Remove duplicate initial reloads.
+- [x] **P0.04 — Atomic bootstrap.** Add one bounded bootstrap response for the agent index, selected
+  conversation page, engine capabilities, configuration status, Needs You count, bounded work/routine
+  state, computer status, and event cursor. Remove duplicate initial reloads.
+  - [x] P0.04a — Add the local-only bounded snapshot contract, strip provider resume cursors, and put
+    one monotonic cursor on the local SSE stream with a real-harness ordering test.
+  - [x] P0.04b — Replace the renderer startup/reconnect fetch cascade with one reducer hydration, a
+    bounded in-flight SSE buffer, cursor-based de-duplication, overflow re-snapshot, and lazy full Work
+    reload only when the startup projection was truncated.
+  - [x] P0.04c — Closed the exact-head cross-platform CI/package gate, updated public docs/release
+    notes, and retained squash-merge/review-thread checks as the final protected-branch gate.
 - [ ] **P0.05 — Renderer update isolation.** Split the global state subscription into selectors,
   isolate the composer and transcript, batch streaming deltas, lazy-load noncritical panels, and
   defer expensive Markdown / syntax work until messages settle.
@@ -182,3 +189,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-17 | P0.02 | Added OS-backed packaged credential storage, fail-safe legacy migration, a write-only renderer contract, scrubbed harness bootstrap, restart rollback, and recovery tests; native signed-host acceptance remains a release gate. |
 | 2026-08-17 | P0.03a | Separated renderer paint from harness readiness with a stable loopback UI/API gateway, streamed proxying, bounded unavailable states, and lazy local-computer initialization. |
 | 2026-08-17 | P0.03b | Replaced packaged harness polling/fallback ports with an OS-assigned private listener and exact-PID UtilityProcess readiness message; hardened the private listener Host/origin boundary and kept remote listener ports independent. |
+| 2026-08-18 | P0.04 | Replaced the desktop startup/reconnect fetch cascade with one bounded cursor-consistent bootstrap, buffered SSE reconciliation, lazy unselected-thread hydration, and deferred full Work loading when startup projections are truncated. |

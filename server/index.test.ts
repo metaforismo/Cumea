@@ -187,7 +187,10 @@ describe("harness HTTP API", () => {
     const eventStream = await openEventStream(auth);
     expect(await eventStream.next()).toEqual({ kind: "hello" });
     const localEventStream = await openEventStream({}, BASE);
-    expect(await localEventStream.next()).toEqual({ kind: "hello" });
+    const localHello = await localEventStream.next();
+    expect(localHello).toMatchObject({ kind: "hello" });
+    expect(Number.isSafeInteger(localHello.eventCursor)).toBe(true);
+    expect(localHello.eventCursor).toBeGreaterThanOrEqual(0);
     // Config events are local-only. The next remote frame must be the bot
     // created after this update, with provider/session fields removed.
     expect((await api("PUT", "/api/config", { profile: { name: "Remote test host" } })).status).toBe(200);
