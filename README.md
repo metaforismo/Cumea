@@ -80,8 +80,9 @@ local sample data and is not evidence that a provider task ran.
   or private-network gateway. The raw Node HTTP listener must not be exposed to the public internet.
 - Remote computer preview is off by default. If explicitly enabled, it exposes only the latest
   already-captured PNG/JPEG frame, never computer control, and still requires a paired device token.
-- Configuration secrets are never returned by the API and `config.json` is written with owner-only
-  permissions where the platform supports them.
+- Packaged optional credentials are encrypted through the operating-system credential service,
+  remain write-only to the renderer, and are supplied only to a fresh local harness bootstrap.
+  Source/browser hosting retains an explicit owner-only `config.json` fallback.
 - External links are limited to HTTPS, with HTTP allowed only for loopback development URLs.
 - Agents do not receive blanket approval by default. Provider modes that bypass consent remain an
   explicit user choice.
@@ -103,8 +104,13 @@ and where charges may apply.
 | [Composio project API key](https://docs.composio.dev/reference/authenticating-to-composio) | Full connected-app catalog; optional and preferably scoped | `backend.composio.dev`, only while loading that catalog |
 | [Cloud computer token](https://box.ascii.dev) | Remote desktop provisioning and control | `box.ascii.dev`, only for cloud-computer actions |
 
-Credentials are stored in `~/.cumea/config.json` with owner-only permissions where supported. Cumea
-does not proxy them through a Cumea-operated service.
+The packaged Electron desktop encrypts these values through Electron `safeStorage`, migrates legacy
+plaintext only after a decryptable encrypted replacement exists, and refuses new plaintext writes
+when the OS credential service is unavailable. Source/browser hosting has no Electron main process,
+so it retains the explicit `~/.cumea/config.json` owner-only fallback. Cumea does not proxy
+credentials through a Cumea-operated service. See
+[desktop credential storage](docs/credential-storage.md) for migration, recovery, restart, platform,
+and threat-boundary details.
 
 ## Run from source
 
@@ -217,7 +223,7 @@ Preview.
 | `server/contracts.ts` | provider driver and canonical event contracts |
 | `server/drivers/` | Claude, Codex, Grok, Gemini, computer, and peer-agent adapters |
 | `server/harness/` | provider registry and event bus |
-| `electron/` | desktop shell, native permissions, dictation, and local computer use |
+| `electron/` | desktop shell, OS-backed credential vault, native permissions, dictation, and local computer use |
 | `apps/mobile/` | Expo Router companion, agent-list home, pairing, chat, approvals, and routines |
 
 The renderer owns no provider transport. Commands cross the local API, providers emit one canonical

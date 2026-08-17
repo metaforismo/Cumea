@@ -28,6 +28,28 @@ launch URL. The `cumea://pair` string is only a transport format for the
 app's own QR scanner or an explicit paste, because another installed app could
 otherwise register the same custom scheme and intercept the one-time secret.
 
+## Desktop credential storage
+
+The packaged Electron desktop encrypts optional provider/app credentials with
+Electron `safeStorage`. The renderer receives only configured booleans and
+non-secret storage status. It never receives stored values. Migration from
+legacy `~/.cumea/config.json` plaintext writes the encrypted vault first and
+removes plaintext only after that succeeds.
+
+If the operating-system credential service is unavailable or the encrypted
+vault is corrupt, legacy plaintext is retained as a recovery source but the
+packaged harness starts with an empty managed credential set. New packaged
+credential writes fail closed rather than falling back to plaintext. Source and
+browser-host operation retains the documented owner-only file fallback because
+there is no Electron main process to own an OS vault.
+
+The harness receives only an allowlisted one-process bootstrap and deletes
+those fields from `process.env` before provider instances or provider child
+processes are created. Credential replacement restarts the local harness; a
+failed restart rolls the encrypted vault and live bootstrap back on a
+best-effort basis. Full behavior and recovery guidance are documented in
+[Desktop credential storage](docs/credential-storage.md).
+
 ## Reporting a vulnerability
 
 Please **do not open a public issue** for security problems. Use
@@ -40,14 +62,24 @@ so reports, reproduction details, and fixes remain confidential until coordinate
   trusts the local user. The separately enabled mobile listener must require a valid device token
   on every non-pairing request. Any other path that makes the local API reachable off-machine, or
   lets one local *unprivileged other user* drive it, is a vulnerability.
-- API keys live in `~/.cumea/config.json` and are write-only through the API (`configured`
-  booleans out, never values). Any path that echoes a stored secret back — API response, SSE event,
-  log line, argv visible in `ps` — is a vulnerability.
+- Packaged credentials live in the OS-backed encrypted vault; source/browser credentials may use
+  owner-only `~/.cumea/config.json`. Both surfaces are write-only (`configured` booleans out, never
+  values). Any path that echoes a stored secret back — API response, SSE event, renderer state,
+  diagnostic, log line, command-line argument visible in `ps`, or unrelated provider environment —
+  is a vulnerability.
+- A packaged app must not consume preserved legacy plaintext while secure storage is blocked, nor
+  silently downgrade to Electron's Linux `basic_text` backend. Migration must not erase the legacy
+  source before a decryptable encrypted replacement exists.
 - Agents run real CLIs (`claude`, `codex`) with the user's own privileges, and the permission broker
   is the consent layer for risky actions. Bypasses of the broker (approving without a user decision,
   spoofing the broker socket) are vulnerabilities.
 - Spawning must never route user-influenced strings through a shell. Report any `shell: true` /
   `cmd.exe` string-building you find.
+
+The OS-backed vault is not a sandbox against malicious code already running as the same user. A
+compromised Electron main process or harness process, memory inspection with equivalent privileges,
+or a provider process legitimately receiving its own credential remain outside this protection
+boundary.
 
 ## Supported versions
 
