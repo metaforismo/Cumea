@@ -1,6 +1,6 @@
-const RETRYABLE_STARTUP_ERRORS = new Set([
-  "agent host is starting",
-  "agent host is restarting",
+const RETRYABLE_GATEWAY_STATES = new Map([
+  ["starting", "agent host is starting"],
+  ["restarting", "agent host is restarting"],
 ]);
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -57,9 +57,10 @@ export interface StartupApiOptions {
 
 /**
  * API helper for the one period in which the packaged desktop shell exists
- * before its harness. It retries only the gateway's explicit starting /
- * restarting states. Provider errors, validation errors, authentication
- * failures, and the terminal "could not start" state fail immediately.
+ * before its harness. It retries only responses explicitly signed by the
+ * Electron-owned gateway as `starting` or `restarting`, and requires the
+ * matching bounded public error too. A same-text 503 from the real harness is
+ * therefore never treated as proof that retrying a mutating request is safe.
  */
 export async function startupApi<T>(
   input: RequestInfo | URL,
@@ -88,7 +89,11 @@ export async function startupApi<T>(
     if (response.ok) return payload as T;
 
     const message = errorMessage(payload, response.status);
-    const retryable = response.status === 503 && RETRYABLE_STARTUP_ERRORS.has(message);
+    const gatewayState = response.headers.get("x-cumea-desktop-state");
+    const retryable =
+      response.status === 503 &&
+      gatewayState !== null &&
+      RETRYABLE_GATEWAY_STATES.get(gatewayState) === message;
     if (!retryable || now() >= deadline) throw new Error(message);
     await sleepImpl(retryMs, init.signal ?? undefined);
   }
