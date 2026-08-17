@@ -8,12 +8,13 @@ import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { openExternalUrl } from "@/lib/external-url";
 
-export type ConfigSection = "composio" | "composioApi" | "box";
+export type ConfigSection = "xai" | "composio" | "composioApi" | "box";
 
 const SECTIONS: Record<
   ConfigSection,
   { body: (value: string) => unknown; flag: (config: ConfigStatus) => boolean }
 > = {
+  xai: { body: (v) => ({ xai: { key: v } }), flag: (c) => c.xai?.configured ?? false },
   composio: { body: (v) => ({ composio: { key: v } }), flag: (c) => c.composio.configured },
   composioApi: {
     body: (v) => ({ composio: { apiKey: v } }),
@@ -33,6 +34,15 @@ interface CredentialGuide {
 }
 
 const CREDENTIALS: Record<ConfigSection, CredentialGuide> = {
+  xai: {
+    label: "xAI API key",
+    placeholder: "xai-…",
+    docsUrl: "https://console.x.ai/",
+    obtain: "In the xAI Console, select the correct team, open API Keys, and create a scoped key for the Grok API driver.",
+    dataFlow: "Sent to api.x.ai only when a bot explicitly uses Cumea's key-billed Grok API driver. Grok Build CLI login is separate and does not need this key.",
+    warning: "xAI API usage is billed separately. Review limits, rotate keys, and disable a key immediately if it may have leaked.",
+    optional: true,
+  },
   composio: {
     label: "Composio Connect API key",
     placeholder: "Paste your Connect API key",
@@ -92,7 +102,10 @@ async function persistCredential(
   value: string,
 ): Promise<ConfigStatus> {
   const desktop = window.cumea;
-  const mode = desktop?.credentialStorageMode ?? "file";
+  const liveStatus = desktop
+    ? await desktop.credentialsStatus().catch(() => null)
+    : null;
+  const mode = liveStatus?.mode ?? desktop?.credentialStorageMode ?? "file";
   if (mode === "os") {
     const result = await desktop!.credentialSet({
       section,
@@ -101,9 +114,8 @@ async function persistCredential(
     return result.config as ConfigStatus;
   }
   if (mode === "blocked" || mode === "performance-fixture") {
-    const status = await desktop?.credentialsStatus().catch(() => null);
     throw new Error(
-      status?.reason ||
+      liveStatus?.reason ||
         "Secure credential storage is unavailable. Cumea will not save this key in plaintext.",
     );
   }
@@ -186,7 +198,9 @@ export function ApiKeyRow({
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => event.key === "Enter" && save()}
           placeholder={configured ? "••••••••  (paste to replace)" : guide.placeholder}
-          autoComplete="off"
+          autoComplete="new-password"
+          spellCheck={false}
+          aria-label={guide.label}
           className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
         />
         <button
