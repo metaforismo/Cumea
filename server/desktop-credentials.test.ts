@@ -6,6 +6,7 @@ import {
   hasCredentialFields,
   overlayDesktopCredentials,
   providerCredentialEnvironment,
+  sanitizeManagedInstanceEnvironment,
   stripCredentialFields,
 } from "./desktop-credentials.ts";
 
@@ -46,6 +47,21 @@ describe("desktop credential boundary", () => {
     expect(hasCredentialFields({ box: { token: undefined } })).toBe(true);
     expect(hasCredentialFields({ xai: { url: "https://example.test" } })).toBe(false);
     expect(hasCredentialFields({ profile: { name: "Francesco" } })).toBe(false);
+  });
+
+  it("removes credential aliases from plaintext managed instance environments", () => {
+    expect(
+      sanitizeManagedInstanceEnvironment({
+        PATH: "/custom/bin",
+        FEATURE_FLAG: "1",
+        XAI_API_KEY: "plaintext-xai",
+        BOX_TOKEN: "plaintext-box",
+        COMPOSIO_KEY: "plaintext-connect",
+        COMPOSIO_API_KEY: "plaintext-project",
+        CUMEA_DESKTOP_XAI_KEY: "bootstrap-xai",
+        CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
+      }),
+    ).toEqual({ PATH: "/custom/bin", FEATURE_FLAG: "1" });
   });
 
   it("mounts credentials only into the owning provider driver", () => {
