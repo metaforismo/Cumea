@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, AlertTriangle, Loader2, Mic, Monitor } from "lucide-react";
 import { CumeaAvatar } from "./Avatar";
 import { setOnboardingDone } from "@/lib/onboarding";
+import { startupApi } from "@/lib/startup-api";
 
 // Three-step first-run onboarding: local profile, what's installed
 // (live engine checks from the harness), what the app may use (TCC).
@@ -49,30 +50,51 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [instances, setInstances] = useState<InstanceRow[] | null>(null);
+  const [instancesError, setInstancesError] = useState<string | null>(null);
+  const [instancesAttempt, setInstancesAttempt] = useState(0);
   const [perms, setPerms] = useState<{ mic: string } | null>(null);
   const [cua, setCua] = useState<CuaPublicStatus | null>(null);
   const [cuaPending, setCuaPending] = useState<"request" | "retry" | null>(null);
   const valid = !email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
 
-  const saveProfile = () => {
-    // Persisted only on this device (~/.cumea/config.json) — the sidebar
-    // footer reads it back through /api/config
-    void fetch("/api/config", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ profile: { name: name.trim(), email: email.trim().toLowerCase() } }),
-    }).catch(() => {});
-    setStep(1);
+  const saveProfile = async () => {
+    if (profileSaving || !valid) return;
+    setProfileSaving(true);
+    setProfileError(null);
+    try {
+      // The packaged shell can paint before the harness is ready. Retry only
+      // its explicit starting/restarting 503 states so an early Continue never
+      // silently drops the user's local profile.
+      await startupApi("/api/config", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ profile: { name: name.trim(), email: email.trim().toLowerCase() } }),
+      });
+      setStep(1);
+    } catch (cause) {
+      setProfileError(cause instanceof Error ? cause.message : "Could not save your local profile");
+    } finally {
+      setProfileSaving(false);
+    }
   };
 
   useEffect(() => {
-    if (step === 1 && !instances) {
-      fetch("/api/instances")
-        .then((r) => r.json())
-        .then((d) => setInstances(d.instances ?? []))
-        .catch(() => setInstances([]));
-    }
+    if (step !== 1 || instances !== null) return;
+    const controller = new AbortController();
+    setInstancesError(null);
+    void startupApi<{ instances?: InstanceRow[] }>("/api/instances", { signal: controller.signal })
+      .then((data) => setInstances(data.instances ?? []))
+      .catch((cause) => {
+        if (cause instanceof Error && cause.name === "AbortError") return;
+        setInstancesError(cause instanceof Error ? cause.message : "Could not check local engines");
+      });
+    return () => controller.abort();
+  }, [step, instances, instancesAttempt]);
+
+  useEffect(() => {
     if (step === 2 && hasCuaBridge) {
       void window.cumea?.cuaStatus().then(setCua).catch(() => {});
     }
@@ -80,10 +102,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       const poll = () => window.cumea?.permStatus?.().then(setPerms).catch(() => {});
       poll();
       // keep polling — the user may grant in System Settings and come back
-      const t = setInterval(poll, 2000);
-      return () => clearInterval(t);
+      const timer = setInterval(poll, 2000);
+      return () => clearInterval(timer);
     }
-  }, [step, instances]);
+  }, [step]);
 
   const finish = () => {
     setOnboardingDone();
@@ -108,7 +130,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     }
   };
 
-  const byKind = (kind: string) => instances?.find((i) => i.driverKind === kind);
+  const byKind = (kind: string) => instances?.find((instance) => instance.driverKind === kind);
   const claude = byKind("claudeAgent");
   const codex = byKind("codex");
   const grok = byKind("grokAgent");
@@ -128,30 +150,35 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               autoFocus
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(event) => setName(event.target.value)}
               placeholder="Your name"
               className="mt-5 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
             />
             <input
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && valid && saveProfile()}
+              onChange={(event) => setEmail(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && valid && void saveProfile()}
               placeholder="Email (optional)"
               className="mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
             />
             <button
-              onClick={saveProfile}
-              disabled={!valid}
-              className="mt-3 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40"
+              onClick={() => void saveProfile()}
+              disabled={!valid || profileSaving}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40"
             >
-              Continue
+              {profileSaving && <Loader2 size={14} className="animate-spin" />}
+              {profileSaving ? "Starting Cumea…" : "Continue"}
             </button>
+            {profileError && (
+              <div role="alert" className="mt-2 w-full text-center text-[12px] text-danger">
+                {profileError}
+              </div>
+            )}
             <button
-              onClick={() => {
-                setStep(1);
-              }}
-              className="mt-3 text-[12px] text-ink-secondary hover:text-ink"
+              onClick={() => setStep(1)}
+              disabled={profileSaving}
+              className="mt-3 text-[12px] text-ink-secondary hover:text-ink disabled:opacity-40"
             >
               Maybe later
             </button>
@@ -166,9 +193,24 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             </p>
             <div className="mt-4 flex flex-col gap-2.5">
               {!instances ? (
-                <div className="flex items-center gap-2 py-6 text-ink-secondary">
-                  <Loader2 size={16} className="animate-spin" /> Checking…
-                </div>
+                instancesError ? (
+                  <div role="alert" className="rounded-xl bg-card p-3.5 text-[12.5px] text-ink-secondary">
+                    <div className="flex items-start gap-2 text-warning">
+                      <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                      <span>{instancesError}</span>
+                    </div>
+                    <button
+                      onClick={() => setInstancesAttempt((attempt) => attempt + 1)}
+                      className="mt-3 rounded-lg bg-raised px-3 py-1.5 text-[12px] text-ink hover:bg-raised-hover"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 py-6 text-ink-secondary">
+                    <Loader2 size={16} className="animate-spin" /> Starting agent host…
+                  </div>
+                )
               ) : (
                 <>
                   <StatusRow

@@ -11,9 +11,34 @@ All notable changes to Cumea are documented here. This project follows
   deterministic no-provider fixtures, explicit cache treatment, multi-sample median/p95 evidence,
   bounded logs, process-tree timeouts, and versioned manifests. No benchmark result is claimed until
   the same scenarios are run as a trend series on one labelled fixed machine.
+- Packaged desktop startup now has a stable Electron-owned loopback UI/API gateway. The renderer can
+  paint the packaged shell before provider discovery and harness readiness, while API/SSE traffic is
+  attached only to a verified local harness. The renderer origin remains stable so origin-scoped
+  local state does not reset between launches.
+- Local computer initialization is now lazy: normal startup writes a harmless unavailable descriptor
+  without loading the CUA SDK, reading TCC state, probing the local socket, or starting the native
+  daemon. Actual reconciliation happens when the capability is inspected or requested.
+
+### Changed
+
+- P0.03 is split into independently reviewable startup gates. This tranche keeps the existing
+  off-critical-path harness health probe and bounded private fallback ports; the next tranche moves
+  the harness to an OS-assigned port and introduces the Electron parent/child readiness-message
+  contract together with the server listener that consumes it. No startup performance improvement is
+  claimed before fixed-machine evidence exists.
 
 ### Security
 
+- The packaged desktop gateway binds loopback only, requires its exact numeric loopback `Host`,
+  constrains decoded static paths to the packaged UI root, strips static and connection-named hop-by-
+  hop headers, reasserts its security headers on proxied responses, exposes only bounded pre-readiness
+  states, and accepts no arbitrary upstream URL. It rewrites `Origin` only for its exact own renderer
+  origin so the harness origin/CSRF boundary remains effective; foreign origins pass through unchanged
+  for rejection. The temporary private harness listener remains a direct loopback surface until the
+  P0.03b listener/handshake rewrite and is not covered by a stronger claim here.
+- Harness target state is cleared during restart, unexpected child exit, and shutdown so renderer
+  traffic cannot remain pointed at an unverified or later-reused local port. A shutdown latch prevents
+  asynchronous startup from spawning another fallback child while the app is quitting.
 - Packaged Electron credentials now use an allowlisted, versioned vault encrypted through the
   operating-system credential service. Legacy plaintext is removed only after successful encrypted
   migration; unavailable/corrupt storage preserves the recovery source while the packaged harness

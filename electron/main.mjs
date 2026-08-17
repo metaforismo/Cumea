@@ -14,28 +14,41 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   disableCuaForPerformance,
+  prepareCuaForLazyStart,
   publicCuaStatus,
-  startCua,
   stopCua,
   registerCuaIpc,
 } from "./cua.mjs";
 import { createDesktopCredentialController } from "./desktop-credentials.mjs";
+import {
+  createDesktopGateway,
+  DEFAULT_DESKTOP_GATEWAY_PORT,
+} from "./desktop-gateway.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 import { createPerformanceRecorder } from "./performance.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
-// resolve to ::1 and paint a black window
+// resolve to ::1 and paint a black window.
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
-let SERVER_PORT = 8799;
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const PACKAGED_HARNESS_PORTS = [18799, 28799, 38799];
 const MANAGED_SECRET_ENV = [
   "BOX_TOKEN",
   "COMPOSIO_API_KEY",
   "COMPOSIO_KEY",
   "XAI_API_KEY",
 ];
+
+let SERVER_PORT = PACKAGED_HARNESS_PORTS[0];
+let desktopOrigin = null;
+let desktopGateway = null;
+let desktopCredentials = null;
+let serverProc = null;
+let serverReady = !app.isPackaged;
+let serverTransition = Promise.resolve();
+let isQuitting = false;
 
 const performanceOutputFile = process.env.CUMEA_PERFORMANCE_FILE?.trim() ?? "";
 const performanceEnabled = Boolean(performanceOutputFile);
@@ -146,9 +159,8 @@ function isSafeExternalUrl(raw) {
 }
 
 function trustedRenderer(event) {
-  const expected = app.isPackaged
-    ? `http://127.0.0.1:${SERVER_PORT}`
-    : new URL(DEV_URL).origin;
+  const expected = app.isPackaged ? desktopOrigin : new URL(DEV_URL).origin;
+  if (!expected) return false;
   try {
     return new URL(event.senderFrame.url).origin === expected;
   } catch {
@@ -160,9 +172,11 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-let desktopCredentials = null;
-let serverProc = null;
-let serverReady = true;
+function queueServerTransition(work) {
+  const next = serverTransition.catch(() => undefined).then(work);
+  serverTransition = next.catch(() => undefined);
+  return next;
+}
 
 function serverEnvironment() {
   const environment = { ...process.env };
@@ -182,25 +196,35 @@ function serverEnvironment() {
   };
 }
 
-// Packaged: the harness server ships in Resources (compiled JS, zero deps)
-// and runs on Electron's own Node via utilityProcess. It serves the built
-// UI too, so the window talks to one origin and there is no dev proxy.
+// P0.03a deliberately keeps the current bounded health probe while moving it
+// off the renderer's critical path. P0.03b replaces this control plane with
+// the already-tested parent/child readiness message and CUMEA_PORT=0.
 async function startServerOn(port) {
+  if (isQuitting) return null;
   const entry = path.join(process.resourcesPath, "server", "index.js");
   SERVER_PORT = port;
   const proc = utilityProcess.fork(entry, [], {
     env: serverEnvironment(),
     stdio: "inherit",
   });
+  serverProc = proc;
   let exited = false;
   proc.once("exit", () => {
     exited = true;
-    if (serverProc === proc) serverProc = null;
+    if (serverProc === proc) {
+      serverProc = null;
+      serverReady = false;
+      if (!isQuitting) desktopGateway?.clearHarnessTarget("agent host could not start");
+    }
   });
-  // Wait for the port to answer. Identity is verified by the exact child PID,
-  // not by accepting any process that happens to expose a similar endpoint.
+
   for (let i = 0; i < 40; i++) {
-    if (exited) return null;
+    if (exited || isQuitting) {
+      try {
+        proc.kill();
+      } catch {}
+      return null;
+    }
     try {
       const res = await fetch(`http://127.0.0.1:${port}/api/health`);
       if (res.ok) {
@@ -213,6 +237,7 @@ async function startServerOn(port) {
     }
     await delay(500);
   }
+  if (serverProc === proc) serverProc = null;
   try {
     proc.kill();
   } catch {}
@@ -220,22 +245,31 @@ async function startServerOn(port) {
 }
 
 async function startServerPackaged() {
-  // Two passes cover a quit-and-reopen race with a dying previous instance.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    for (const port of [8799, 18799, 28799]) {
+  // The renderer owns stable 127.0.0.1:8799. Until P0.03b gives the harness
+  // an OS-assigned port, keep it on a separate bounded fallback set.
+  for (let attempt = 0; attempt < 2 && !isQuitting; attempt++) {
+    for (const port of PACKAGED_HARNESS_PORTS) {
+      if (isQuitting) return false;
       const proc = await startServerOn(port);
       if (proc) {
         serverProc = proc;
         SERVER_PORT = port;
+        serverReady = true;
+        desktopGateway?.setHarnessTarget(port);
         return true;
       }
     }
-    await delay(2500);
+    if (!isQuitting) await delay(2500);
   }
+  serverReady = false;
+  if (!isQuitting) desktopGateway?.clearHarnessTarget("agent host could not start");
   return false;
 }
 
-async function stopServerProcess() {
+async function stopServerProcess(reason = "agent host is restarting") {
+  if (!isQuitting) desktopGateway?.clearHarnessTarget(reason);
+  else desktopGateway?.clearHarnessTarget("agent host could not start");
+  serverReady = false;
   const current = serverProc;
   serverProc = null;
   if (!current) return;
@@ -256,25 +290,35 @@ async function restartServerForCredentials() {
   if (!app.isPackaged) {
     throw new Error("secure credential updates require the packaged desktop host");
   }
-  const port = SERVER_PORT;
-  await stopServerProcess();
-  await delay(100);
-  const proc = await startServerOn(port);
-  if (!proc) {
-    serverReady = false;
-    throw new Error("the agent host could not restart on its existing port");
-  }
-  serverProc = proc;
-  serverReady = true;
-  const response = await fetch(`http://127.0.0.1:${port}/api/config`);
-  if (!response.ok) throw new Error("the restarted agent host did not return configuration status");
-  return response.json();
+  if (isQuitting) throw new Error("Cumea is shutting down");
+  return queueServerTransition(async () => {
+    if (isQuitting) throw new Error("Cumea is shutting down");
+    const port = SERVER_PORT;
+    await stopServerProcess("agent host is restarting");
+    await delay(100);
+    const proc = await startServerOn(port);
+    if (!proc) {
+      if (!isQuitting) desktopGateway?.clearHarnessTarget("agent host could not start");
+      throw new Error("the agent host could not restart on its existing port");
+    }
+    serverProc = proc;
+    const response = await fetch(`http://127.0.0.1:${port}/api/config`);
+    if (!response.ok) {
+      await stopServerProcess("agent host could not start");
+      throw new Error("the restarted agent host did not return configuration status");
+    }
+    const config = await response.json();
+    if (isQuitting) throw new Error("Cumea is shutting down");
+    serverReady = true;
+    desktopGateway?.setHarnessTarget(port);
+    return config;
+  });
 }
 
 const ERROR_PAGE =
   "data:text/html;charset=utf-8," +
   encodeURIComponent(
-    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">◉</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the agent server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen Cumea — if it keeps happening, restart your computer.</p></div></body>`,
+    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:380px"><div style="font-size:40px">◉</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the desktop shell</h2><p style="color:#fcfcfc99;line-height:1.5">Cumea could not claim its private loopback UI port. Quit other local Cumea or development processes and reopen the app.</p></div></body>`,
   );
 
 function createWindow() {
@@ -309,21 +353,15 @@ function createWindow() {
   });
 
   win.webContents.on("will-navigate", (event, url) => {
-    const allowedOrigin = app.isPackaged
-      ? `http://127.0.0.1:${SERVER_PORT}`
-      : new URL(DEV_URL).origin;
+    const allowedOrigin = app.isPackaged ? desktopOrigin : new URL(DEV_URL).origin;
     try {
-      if (new URL(url).origin === allowedOrigin) return;
+      if (allowedOrigin && new URL(url).origin === allowedOrigin) return;
     } catch {}
     event.preventDefault();
     if (isSafeExternalUrl(url)) void shell.openExternal(url).catch(() => {});
   });
 
-  const url = app.isPackaged
-    ? serverReady
-      ? `http://127.0.0.1:${SERVER_PORT}`
-      : ERROR_PAGE
-    : DEV_URL;
+  const url = app.isPackaged ? desktopOrigin ?? ERROR_PAGE : DEV_URL;
   performanceRecorder.markMain("cumea:main:load-url-start");
   void win.loadURL(url).then(
     () => performanceRecorder.markMain("cumea:main:load-url-resolved"),
@@ -431,8 +469,6 @@ app.whenReady().then(async () => {
   process.env.CUMEA_DESKTOP_CREDENTIAL_STORAGE_MODE = credentialStatus.mode;
 
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
-  // getDisplayMedia stays in the app responsibility chain. Local computer
-  // onboarding uses the CUA SDK gate; this handler does not start the driver.
   session.defaultSession.setDisplayMediaRequestHandler(
     (_request, callback) => {
       desktopCapturer
@@ -443,37 +479,65 @@ app.whenReady().then(async () => {
     { useSystemPicker: false },
   );
   registerCuaIpc();
-  // Resolve the fail-closed CUA state before the packaged harness reads its
-  // descriptor. Deterministic fixture runs bypass the SDK and native daemon;
-  // normal and explicit real-runtime runs retain the production path.
-  performanceRecorder.markMain("cumea:main:cua-start");
+
   if (performanceSkipCua) {
     disableCuaForPerformance();
   } else {
-    await startCua().catch((error) => console.error("[cua] start failed:", error));
+    // Only invalidate a stale descriptor now. The actual SDK/TCC/socket work
+    // is queued by cua:status/request/retry when the user opens or uses the
+    // local-computer surface.
+    await prepareCuaForLazyStart();
   }
-  performanceRecorder.markMain("cumea:main:cua-settled");
+
   if (app.isPackaged) {
-    performanceRecorder.markMain("cumea:main:server-start");
-    serverReady = await startServerPackaged();
-    performanceRecorder.markMain(
-      serverReady ? "cumea:main:server-ready" : "cumea:main:server-failed",
-    );
+    desktopGateway = createDesktopGateway({
+      staticDir: path.join(process.resourcesPath, "ui"),
+      port: DEFAULT_DESKTOP_GATEWAY_PORT,
+    });
+    try {
+      const address = await desktopGateway.start();
+      desktopOrigin = address.origin;
+    } catch (error) {
+      desktopOrigin = null;
+      console.error("[desktop-gateway] start failed:", error);
+    }
   }
+
+  // The renderer no longer waits for provider discovery / harness readiness.
+  // It paints the packaged shell immediately; relative /api calls receive a
+  // bounded 503 until the gateway has a verified harness target. EventSource
+  // then reconnects and the existing store reload path hydrates canonical data.
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+
+  if (app.isPackaged && desktopOrigin && !isQuitting) {
+    performanceRecorder.markMain("cumea:main:server-start");
+    void queueServerTransition(startServerPackaged).then(
+      (ready) => {
+        performanceRecorder.markMain(
+          ready ? "cumea:main:server-ready" : "cumea:main:server-failed",
+        );
+      },
+      (error) => {
+        if (!isQuitting) desktopGateway?.clearHarnessTarget("agent host could not start");
+        performanceRecorder.markMain("cumea:main:server-failed");
+        console.error("[server] asynchronous start failed:", error);
+      },
+    );
+  }
 });
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// Defer the first quit until embedded native/server cleanup completes.
+// Defer the first quit until embedded native/server/gateway cleanup completes.
 let quitCleanupStarted = false;
 let quitCleanupDone = false;
 app.on("before-quit", (event) => {
+  isQuitting = true;
   performanceRecorder.markMain("cumea:main:before-quit");
   performanceRecorder.flush();
   if (quitCleanupDone) return;
@@ -487,7 +551,8 @@ app.on("before-quit", (event) => {
   });
   Promise.race([
     Promise.allSettled([
-      stopServerProcess(),
+      stopServerProcess("agent host is restarting"),
+      desktopGateway?.close(),
       stopCua().catch((error) => console.error("[cua] stop failed:", error)),
     ]),
     timeout,
