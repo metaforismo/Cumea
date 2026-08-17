@@ -16,6 +16,23 @@ const EMPTY_SERVER_CREDENTIAL_ENVIRONMENT = Object.freeze({
   CUMEA_DESKTOP_BOX_TOKEN: "",
 });
 
+const PUBLIC_INITIALIZATION_ERROR_PREFIXES = [
+  "the encrypted credential vault ",
+  "the operating-system credential store ",
+  "Linux is using Electron's insecure basic_text password backend",
+  "credential storage recovery failed",
+  "could not read the existing Cumea configuration",
+  "credential value is too long",
+  "credential value contains invalid characters",
+];
+
+function publicInitializationReason(error) {
+  const message = error instanceof Error ? error.message : "";
+  return PUBLIC_INITIALIZATION_ERROR_PREFIXES.some((prefix) => message.startsWith(prefix))
+    ? message.slice(0, 300)
+    : "the encrypted credential vault could not be initialized";
+}
+
 function confirmedCredentialState(config, section) {
   if (!config || typeof config !== "object" || Array.isArray(config)) return null;
   switch (section) {
@@ -131,10 +148,7 @@ export function createDesktopCredentialController({
         managed: true,
         available: false,
         secure: false,
-        reason:
-          error instanceof Error
-            ? error.message
-            : "the encrypted credential vault could not be initialized",
+        reason: publicInitializationReason(error),
         credentials: {},
       };
     }
