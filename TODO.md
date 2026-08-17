@@ -88,11 +88,13 @@ should not bypass the release, security, persistence, or measurement foundations
   - [x] P0.04c — Closed the exact-head cross-platform CI/package gate, updated public docs/release
     notes, and retained squash-merge/review-thread checks as the final protected-branch gate.
 - [ ] **P0.05 — Renderer update isolation.** Split the global state subscription into selectors,
-  isolate the composer and transcript, batch streaming deltas, lazy-load noncritical panels, and
-  defer expensive Markdown / syntax work until messages settle.
-- [ ] **P0.06 — Desktop conversation paging and scroll contract.** Load bounded pages, preserve the
-  reading position while prepending history, auto-follow only near the end, and expose a
-  jump-to-latest affordance without forcing scroll during selection.
+  isolate and memoize composer/transcript boundaries, batch streaming deltas, lazy-load noncritical
+  panels, defer Markdown / syntax work until messages settle, and cache settled rendering by content
+  hash instead of re-highlighting unchanged code during every stream tick.
+- [ ] **P0.06 — Desktop conversation paging and scroll contract.** Load bounded pages, window long
+  transcripts, preserve the reading position while prepending history, auto-follow only near the end,
+  expose jump-to-latest / show-earlier affordances, and render very long user messages cheaply without
+  forcing scroll during selection.
 - [ ] **P0.07 — Bounded warm-window reuse.** On macOS, hide and retain a sanitized renderer for a short
   TTL, stop sensitive previews and streams while hidden, restore quickly from the Dock, and destroy
   the window after the TTL or on explicit quit.
@@ -101,15 +103,25 @@ should not bypass the release, security, persistence, or measurement foundations
   Windows installer whose unsupported native capabilities fail closed.
 - [ ] **P0.09 — Real journey and packaged-shell tests.** Add browser journeys for onboarding, chat,
   approvals, attachments, Needs You, routines, pairing, and computer degradation, plus packaged
-  Electron isolation and launch smoke tests.
+  Electron isolation/launch smoke tests and retained screenshot or visual-history evidence for the
+  critical journeys.
 - [ ] **P0.10 — Mobile completion gates.** Implement push delivery for Needs You, deep-link to the
   exact request, background reconciliation, offline/host-offline states, and physical-device
   microphone, VoiceOver, and TalkBack acceptance evidence.
+- [ ] **P0.11 — Incremental transcript persistence and local search index.** Replace whole-thread JSON
+  rewrite amplification with a versioned owner-local SQLite/WAL message store, lazy verified legacy
+  import, per-message insert/update, rollback-aware thread deletion, bounded transcript search, and
+  export primitives without making provider-private payloads searchable by default.
+- [ ] **P0.12 — Agent liveness and loop protection.** Add activity-based stall detection with
+  waiting-on-human exemptions, honest working / waiting / no-signal / dead projections, bounded
+  repeated-identical tool/effect detection, and visible recovery through Work / Needs You rather than
+  silently killing legitimate long tasks.
 
 ### P1 — Open-source Grok Bot product parity
 
 - [ ] **P1.01 — Separate Agent, Conversation, and Memory.** Give one persistent agent multiple named,
-  archivable conversations with fresh-context creation, search, export, and durable identity.
+  archivable conversations with fresh-context creation, search, export, durable identity, and a global
+  keyboard navigation/search surface once P0.11 provides the local transcript index.
 - [ ] **P1.02 — Rooms.** Add multi-agent conversations with mentions, a default responder, everyone /
   mentions-only routing, sender attribution, a shared bulletin, reactions, approvals, and clear
   busy/waiting states.
@@ -122,8 +134,8 @@ should not bypass the release, security, persistence, or measurement foundations
   `.cumea-routine` manifests that never export transcripts, credentials, host paths, permissions, or
   internal IDs.
 - [ ] **P1.06 — Explicit memory.** Add personal, agent, project, and conversation scopes with source
-  provenance, revision history, confirmation state, priority, expiry, inspection, editing, and
-  deletion.
+  provenance, revision history, confirmation state, priority, expiry, inspection, editing, deletion,
+  explicit prompt-load budgets, and user-visible topic/projection views instead of opaque hidden notes.
 - [ ] **P1.07 — Triggers and proactive work.** Extend routines with schedule, authenticated webhook,
   email, calendar, file-change, host-started, and previous-run-completed triggers. Keep external
   payloads visibly untrusted and effects idempotent.
@@ -137,6 +149,11 @@ should not bypass the release, security, persistence, or measurement foundations
   progress and approval handling, interruption, and explicit platform capability reporting.
 - [ ] **P1.11 — Unified inspector.** Replace unrelated right-side surfaces with resizable Agent, Work,
   Computer, Apps, and Memory tabs whose state and badges remain scoped to the active agent.
+- [ ] **P1.12 — Pluggable user-owned computer backends.** Put local CUA and the existing cloud-computer
+  path behind one conformance-tested backend contract, then allow optional Docker / E2B / Daytona-
+  compatible implementations without making a Cumea-managed sandbox or cloud service mandatory.
+  Model per-agent private and explicitly shared/team computers separately and report capabilities /
+  degradation honestly.
 
 ### P2 — Cumea differentiation
 
@@ -145,7 +162,8 @@ should not bypass the release, security, persistence, or measurement foundations
 - [ ] **P2.02 — Shared project memory.** Let a council work from a revisioned, inspectable project
   context without silently blending every agent's private memory.
 - [ ] **P2.03 — Durable delegation DAG.** Persist dependencies, retries, checkpoints, cancellation,
-  recursion limits, child-agent ownership, and real completion evidence.
+  recursion limits, child-agent ownership, idempotent short-lived child/subagent spawn keys, per-child
+  budgets, and real completion evidence.
 - [ ] **P2.04 — Central Needs You inbox.** Aggregate approvals, questions, conflicts, expired leases,
   failed automations, and recovery actions across agents, rooms, councils, desktop, and mobile.
 - [ ] **P2.05 — Review and disagreement stage.** Let agents challenge claims, attach evidence, record
@@ -154,14 +172,15 @@ should not bypass the release, security, persistence, or measurement foundations
   links, transformations, tool calls, and the run that produced each output.
 - [ ] **P2.07 — Durable effect journal.** Record intent, approval, idempotency key, provider request,
   response, reconciliation, and notification so restarts cannot silently duplicate external effects.
-- [ ] **P2.08 — Usage and budgets.** Expose per-agent, per-run, provider, model, computer, and connected-
-  app usage with configurable limits and honest unknown-cost states.
+- [ ] **P2.08 — Usage and budgets.** Expose per-agent, per-task/run, provider, model, computer, and
+  connected-app token/usage data with configurable limits and honest unknown-cost states; require
+  child-agent work to inherit explicit budgets rather than consuming an unbounded parent allowance.
 - [ ] **P2.09 — Encrypted backup and migration.** Add inspectable encrypted export/import, schema
   migrations, recovery tests, and selective restore for agents, conversations, memories, routines,
   manifests, and artifacts.
 - [ ] **P2.10 — Leased computer takeover.** Pause agent input, grant a bounded human lease, audit user
-  and agent actions separately, protect clipboard/file channels, heartbeat the lease, and recover
-  safely after disconnect.
+  and agent actions separately, protect clipboard/file channels, heartbeat and expire the lease, and
+  recover safely after disconnect or owner/session loss.
 - [ ] **P2.11 — Optional team/server storage.** Keep SQLite as the local default and add a separately
   tested Postgres mode only where multi-user or server operation requires it.
 
@@ -190,3 +209,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-17 | P0.03a | Separated renderer paint from harness readiness with a stable loopback UI/API gateway, streamed proxying, bounded unavailable states, and lazy local-computer initialization. |
 | 2026-08-17 | P0.03b | Replaced packaged harness polling/fallback ports with an OS-assigned private listener and exact-PID UtilityProcess readiness message; hardened the private listener Host/origin boundary and kept remote listener ports independent. |
 | 2026-08-18 | P0.04 | Replaced the desktop startup/reconnect fetch cascade with one bounded cursor-consistent bootstrap, buffered SSE reconciliation, lazy unselected-thread hydration, and deferred full Work loading when startup projections are truncated. |
+| 2026-08-18 | Competitive audit | Re-audited Cumea against Rakazo `2718b1f` and OpenMausBot `4a9d654`; retained Cumea's privacy/security model while promoting transcript SQLite/search, liveness protection, renderer/thread scaling, inspectable memory, visual journey evidence, and pluggable user-owned computer backends into explicit roadmap gates. |

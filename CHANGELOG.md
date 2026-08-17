@@ -25,6 +25,11 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Changed
 
+- Re-audited current Rakazo and OpenMausBot engineering at pinned commits and folded only compatible
+  ideas into Cumea's roadmap: incremental local transcript persistence/search, liveness and loop
+  protection, renderer/thread scaling, inspectable memory, visual journey evidence, and pluggable
+  user-owned computer backends. Mandatory hosted identity/control-plane assumptions remain out of
+  scope for the local default.
 - P0.03 now keeps the stable renderer gateway while the packaged harness uses an OS-assigned private
   port. Readiness is published over a versioned exact-PID UtilityProcess message instead of HTTP
   polling/fixed fallback ports. The optional remote listener keeps an independent explicit/default
