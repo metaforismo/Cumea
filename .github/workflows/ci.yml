@@ -56,6 +56,8 @@ jobs:
         run: pnpm build
       - name: distributable harness build
         run: pnpm build:server
+      - name: renderer and harness performance budgets
+        run: pnpm perf:budget
       - name: deterministic CycloneDX inventory
         run: pnpm release:sbom
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { publicCuaStatus, startCua, stopCua, registerCuaIpc } from "./cua.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
+import { createPerformanceRecorder } from "./performance.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
@@ -11,6 +12,45 @@ const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 let SERVER_PORT = 8799;
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const performanceOutputFile = process.env.CUMEA_PERFORMANCE_FILE?.trim() ?? "";
+
+const performanceRecorder = createPerformanceRecorder({
+  outputFile: performanceOutputFile,
+  metadata: () => ({
+    ...(process.env.CUMEA_PERFORMANCE_LABEL
+      ? { label: process.env.CUMEA_PERFORMANCE_LABEL.slice(0, 120) }
+      : {}),
+    ...(process.env.CUMEA_PERFORMANCE_SAMPLE
+      ? { sample: process.env.CUMEA_PERFORMANCE_SAMPLE.slice(0, 40) }
+      : {}),
+    ...(process.env.CUMEA_PERFORMANCE_COMMIT || process.env.GITHUB_SHA
+      ? { commit: (process.env.CUMEA_PERFORMANCE_COMMIT || process.env.GITHUB_SHA).slice(0, 80) }
+      : {}),
+    appVersion: app.getVersion(),
+    packaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+    versions: {
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+    },
+  }),
+});
+performanceRecorder.markMain("cumea:main:module-evaluated");
+app.once("will-finish-launching", () =>
+  performanceRecorder.markMain("cumea:main:will-finish-launching"),
+);
+app.once("ready", () => performanceRecorder.markMain("cumea:main:ready"));
+
+ipcMain.on("performance:renderer-mark", (_event, payload) => {
+  const recorded = performanceRecorder.recordRenderer(payload);
+  if (!recorded || payload?.name !== "cumea:renderer:shell-usable-painted") return;
+  performanceRecorder.flush();
+  if (performanceOutputFile && process.env.CUMEA_PERFORMANCE_AUTO_QUIT === "1") {
+    setImmediate(() => app.quit());
+  }
+});
 
 function isSafeExternalUrl(raw) {
   try {
@@ -92,6 +132,7 @@ const ERROR_PAGE =
   );
 
 function createWindow() {
+  performanceRecorder.markMain("cumea:main:window-create-start");
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -107,6 +148,14 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
     },
   });
+  performanceRecorder.markMain("cumea:main:window-created");
+  win.once("show", () => performanceRecorder.markMain("cumea:main:window-shown"));
+  if (win.isVisible()) performanceRecorder.markMain("cumea:main:window-shown");
+  win.once("ready-to-show", () => performanceRecorder.markMain("cumea:main:ready-to-show"));
+  win.webContents.once("dom-ready", () => performanceRecorder.markMain("cumea:main:dom-ready"));
+  win.webContents.once("did-finish-load", () =>
+    performanceRecorder.markMain("cumea:main:did-finish-load"),
+  );
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isSafeExternalUrl(url)) void shell.openExternal(url).catch(() => {});
@@ -122,11 +171,17 @@ function createWindow() {
     if (isSafeExternalUrl(url)) void shell.openExternal(url).catch(() => {});
   });
 
-  if (app.isPackaged) {
-    win.loadURL(serverReady ? `http://127.0.0.1:${SERVER_PORT}` : ERROR_PAGE);
-  } else {
-    win.loadURL(DEV_URL);
-  }
+  const url = app.isPackaged
+    ? serverReady
+      ? `http://127.0.0.1:${SERVER_PORT}`
+      : ERROR_PAGE
+    : DEV_URL;
+  performanceRecorder.markMain("cumea:main:load-url-start");
+  void win.loadURL(url).then(
+    () => performanceRecorder.markMain("cumea:main:load-url-resolved"),
+    () => performanceRecorder.markMain("cumea:main:load-url-rejected"),
+  );
+  return win;
 }
 
 // "This Mac" screen preview — served from the main process so TCC attribution
@@ -198,8 +253,16 @@ app.whenReady().then(async () => {
   // Resolve the fail-closed CUA state before the packaged harness reads its
   // descriptor. If TCC is incomplete this records needs-permissions and does
   // not create or start the embedded daemon.
+  performanceRecorder.markMain("cumea:main:cua-start");
   await startCua().catch((e) => console.error("[cua] start failed:", e));
-  if (app.isPackaged) serverReady = await startServerPackaged();
+  performanceRecorder.markMain("cumea:main:cua-settled");
+  if (app.isPackaged) {
+    performanceRecorder.markMain("cumea:main:server-start");
+    serverReady = await startServerPackaged();
+    performanceRecorder.markMain(
+      serverReady ? "cumea:main:server-ready" : "cumea:main:server-failed",
+    );
+  }
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -215,6 +278,8 @@ app.on("window-all-closed", () => {
 let quitCleanupStarted = false;
 let quitCleanupDone = false;
 app.on("before-quit", (e) => {
+  performanceRecorder.markMain("cumea:main:before-quit");
+  performanceRecorder.flush();
   if (quitCleanupDone) return;
   e.preventDefault();
   if (quitCleanupStarted) return;
@@ -232,6 +297,7 @@ app.on("before-quit", (e) => {
     timeout,
   ]).finally(() => {
     quitCleanupDone = true;
+    performanceRecorder.flush();
     app.quit();
   });
 });

@@ -13,6 +13,11 @@ declare global {
   interface Window {
     cumea?: {
       platform: "darwin" | "win32" | "linux" | string;
+      performanceMark(payload: {
+        name: string;
+        timeOrigin: number;
+        startTime: number;
+      }): void;
       cuaStatus(): Promise<CuaPublicStatus>;
       cuaRequestPermissions(): Promise<CuaPublicStatus>;
       cuaRetry(): Promise<CuaPublicStatus>;

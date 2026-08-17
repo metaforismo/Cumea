@@ -21,7 +21,7 @@
     "dev:desktop": "electron .",
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
-    "test": "vitest run && pnpm test:cua-contract",
+    "test": "vitest run && pnpm test:cua-contract && pnpm test:performance",
     "test:cua-contract": "node --test electron/cua-contract.test.mjs",
     "test:watch": "vitest",
     "mobile:start": "pnpm --dir apps/mobile start",
@@ -42,7 +42,11 @@
     "package:win": "pnpm build && pnpm build:server && electron-builder --win --publish never",
     "release:sbom": "node scripts/generate-sbom.mjs",
     "release:checksums": "node scripts/generate-checksums.mjs --directory release --output release/SHA256SUMS",
-    "release:verify-package": "node scripts/verify-package-contents.mjs"
+    "release:verify-package": "node scripts/verify-package-contents.mjs",
+    "test:performance": "node --test electron/performance.test.mjs scripts/perf-lib.test.mjs",
+    "perf:budget": "node scripts/check-performance-budget.mjs",
+    "perf:summary": "node scripts/perf-summary.mjs",
+    "perf:compare": "node scripts/perf-compare.mjs"
   },
   "dependencies": {
     "@trycua/cua-driver": "0.19.3",

@@ -4,6 +4,17 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("cumea", {
   platform: process.platform,
+  /** Opt-in local performance marks. Rebuild the payload here so a compromised
+   * renderer cannot attach unrelated data; main still validates the exact
+   * mark allowlist and finite clocks. */
+  performanceMark: (payload) => {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
+    ipcRenderer.send("performance:renderer-mark", {
+      name: payload.name,
+      timeOrigin: payload.timeOrigin,
+      startTime: payload.startTime,
+    });
+  },
   /** Public local-computer state. Socket paths and MCP launch details stay in main. */
   cuaStatus: () => ipcRenderer.invoke("cua:status"),
   /** User-initiated TCC prompt/check. Starts or restarts only after both grants. */
