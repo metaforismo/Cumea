@@ -1,0 +1,39 @@
+name: Competitive audit roadmap
+
+on:
+  push:
+    branches:
+      - docs/competitive-audit-2026-08-18
+    paths:
+      - scripts/apply-competitive-audit-roadmap.mjs
+      - .github/workflows/competitive-audit-roadmap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: docs/competitive-audit-2026-08-18
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: node scripts/apply-competitive-audit-roadmap.mjs
+      - name: Verify and commit
+        shell: bash
+        run: |
+          grep -F '**P0.11 — Incremental transcript persistence and local search index.**' TODO.md
+          grep -F '**P0.12 — Agent liveness and loop protection.**' TODO.md
+          grep -F '**P1.12 — Pluggable user-owned computer backends.**' TODO.md
+          grep -F 'competitive-audit-2026-08-18.md' README.md
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add TODO.md README.md CHANGELOG.md
+          git commit -m "docs: fold competitive audit into the execution plan"
+          git push origin HEAD:docs/competitive-audit-2026-08-18
