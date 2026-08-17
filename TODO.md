@@ -64,9 +64,17 @@ should not bypass the release, security, persistence, or measurement foundations
     vault updates, key rotation, bootstrap scrubbing, successful restart, rollback, and the
     deterministic performance fixture. Physical Keychain/DPAPI/Linux acceptance remains part of
     P0.08/P0.09 release evidence rather than being inferred from source tests.
-- [ ] **P0.03 — Non-blocking Electron startup.** Load a packaged local renderer immediately, start the
+- [~] **P0.03 — Non-blocking Electron startup.** Load a packaged local renderer immediately, start the
   harness asynchronously on an OS-assigned port, replace readiness polling with an explicit parent /
   child handshake, and initialize local computer use lazily instead of blocking chat startup.
+  - [~] P0.03a — Put a stable loopback desktop gateway in front of the packaged UI/API, paint the
+    renderer before harness readiness, proxy SSE/API only after a verified child is available, keep
+    renderer origin stable for `localStorage`, and defer CUA SDK/TCC/socket work until first use.
+  - [ ] P0.03b — Move the harness to `CUMEA_PORT=0`, publish its actual bound port through the tested
+    Electron parent/child message contract, remove HTTP readiness polling and fixed harness fallback
+    ports, and preserve remote/mobile listener semantics independently of the local ephemeral port.
+  - [ ] P0.03c — Re-run matching packaged performance scenarios on the fixed-machine evidence gate and
+    record startup trade-offs without attributing hosted-runner variance to the code change.
 - [ ] **P0.04 — Atomic bootstrap.** Add one bounded bootstrap response for the agent index, selected
   conversation page, engine capabilities, configuration status, Needs You count, routine summary,
   computer status, and event cursor. Remove duplicate initial reloads.
@@ -170,3 +178,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-17 | P0.01a | Added opt-in desktop timing evidence, summary/comparison tooling, tests, documentation, and CI bundle budgets without changing startup sequencing. |
 | 2026-08-17 | P0.01b | Added the isolated packaged multi-sample runner, deterministic fixture, first-run/returning/cache protocols, bounded evidence, and cross-platform process tests; fixed-machine trends remain P0.01c. |
 | 2026-08-17 | P0.02 | Added OS-backed packaged credential storage, fail-safe legacy migration, a write-only renderer contract, scrubbed harness bootstrap, restart rollback, and recovery tests; native signed-host acceptance remains a release gate. |
+| 2026-08-17 | P0.03a | Began separating renderer paint from harness readiness with a stable loopback UI/API gateway, streamed proxying, bounded unavailable states, and lazy local-computer initialization; ephemeral harness IPC remains P0.03b. |
