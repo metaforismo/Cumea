@@ -4,6 +4,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("cumea", {
   platform: process.platform,
+  /** Opt-in local performance marks. Main validates an exact allowlist and
+   * ignores the payload unless a local report path was configured. */
+  performanceMark: (payload) => ipcRenderer.send("performance:renderer-mark", payload),
   /** Public local-computer state. Socket paths and MCP launch details stay in main. */
   cuaStatus: () => ipcRenderer.invoke("cua:status"),
   /** User-initiated TCC prompt/check. Starts or restarts only after both grants. */
