@@ -18,6 +18,7 @@ import { cardResponseDecision } from "./response-decision";
 import {
   framesAfterCursor,
   materializeDesktopBootstrap,
+  mergeThreadMessages,
   parseCursorFrame,
   type CursorFrame,
   type DesktopBootstrap,
@@ -270,6 +271,7 @@ type Action =
   | { type: "markUnread"; botId: string }
   | { type: "botPatched"; bot: Partial<Bot> & { id: string } }
   | { type: "messageAdded"; threadId: string; message: Message }
+  | { type: "messagesHydrated"; threadId: string; messages: Message[] }
   | { type: "messagePatched"; threadId: string; message: Message }
   | { type: "streamDelta"; threadId: string; delta: string }
   | { type: "streamClear"; threadId: string }
@@ -423,6 +425,14 @@ function reducer(state: AppState, action: Action): AppState {
               : null;
       const next = kind ? withMascotMotion(state, action.bot.id, kind) : state;
       return updateBot(next, action.bot.id, (b) => ({ ...b, ...action.bot, messages: b.messages }));
+    }
+    case "messagesHydrated": {
+      const bot = state.bots.find((candidate) => candidate.threadId === action.threadId);
+      if (!bot) return state;
+      return updateBot(state, bot.id, (candidate) => ({
+        ...candidate,
+        messages: mergeThreadMessages(candidate.messages, action.messages),
+      }));
     }
     case "messageAdded": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
@@ -644,6 +654,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const workspaceCompleteRef = useRef(false);
   const bootstrapReadyRef = useRef(false);
   const workspaceReloadInFlightRef = useRef(false);
+  const loadedThreadsRef = useRef(new Set<string>());
+  const loadingThreadsRef = useRef(new Set<string>());
 
   const showError = useCallback((error: unknown) => {
     rawDispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
@@ -829,6 +841,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (bot?.unread) {
             api(`/api/bots/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
           }
+          if (
+            bot &&
+            !loadedThreadsRef.current.has(bot.threadId) &&
+            !loadingThreadsRef.current.has(bot.threadId)
+          ) {
+            loadingThreadsRef.current.add(bot.threadId);
+            api(`/api/bots/${bot.id}/messages?limit=80`)
+              .then(({ messages }) => {
+                loadedThreadsRef.current.add(bot.threadId);
+                rawDispatch({ type: "messagesHydrated", threadId: bot.threadId, messages });
+              })
+              .catch(showError)
+              .finally(() => loadingThreadsRef.current.delete(bot.threadId));
+          }
           break;
         }
         case "setModel":
@@ -982,6 +1008,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const materialized = materializeDesktopBootstrap(snapshot);
           workspaceCompleteRef.current = materialized.workspaceComplete;
           bootstrapReadyRef.current = true;
+          loadedThreadsRef.current = new Set(snapshot.selected ? [snapshot.selected.threadId] : []);
+          loadingThreadsRef.current.clear();
           rawDispatch({
             type: "bootstrap",
             bots: materialized.bots,
