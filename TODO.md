@@ -49,9 +49,21 @@ should not bypass the release, security, persistence, or measurement foundations
   - [ ] P0.01c — Run the packaged scenarios on one labelled fixed Mac, retain raw/summary artifacts,
     establish the first trend series, define variance-aware regression review thresholds, and keep
     hosted variable-hardware measurements informational.
-- [ ] **P0.02 — Operating-system secret storage.** Migrate optional desktop credentials from plaintext
+- [x] **P0.02 — Operating-system secret storage.** Migrate optional desktop credentials from plaintext
   configuration to Electron `safeStorage`, keep the renderer write-only, redact diagnostics, and
   retain a tested recovery path when the OS credential store is unavailable.
+  - [x] P0.02a — Add a versioned, allowlisted async `safeStorage` vault with atomic writes, key-
+    rotation handling, value bounds, final-value deletion, and Linux `basic_text` rejection.
+  - [x] P0.02b — Encrypt legacy plaintext before removing it; preserve a failed migration source while
+    booting the packaged harness with an empty managed credential set instead of consuming it.
+  - [x] P0.02c — Route packaged writes through narrow IPC, expose status/configured booleans only, and
+    retain the owner-only file fallback exclusively for source/browser hosting.
+  - [x] P0.02d — Bootstrap a fresh harness without a runtime secret endpoint, delete bootstrap fields
+    before providers load, and roll durable/live credentials back when harness restart fails.
+  - [x] P0.02e — Cover migration, corruption, unavailable storage, insecure Linux fallback, concurrent
+    vault updates, key rotation, bootstrap scrubbing, successful restart, rollback, and the
+    deterministic performance fixture. Physical Keychain/DPAPI/Linux acceptance remains part of
+    P0.08/P0.09 release evidence rather than being inferred from source tests.
 - [ ] **P0.03 — Non-blocking Electron startup.** Load a packaged local renderer immediately, start the
   harness asynchronously on an OS-assigned port, replace readiness polling with an explicit parent /
   child handshake, and initialize local computer use lazily instead of blocking chat startup.
@@ -157,3 +169,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-17 | Planning | Created the ordered execution plan and began triage of draft PR #9. |
 | 2026-08-17 | P0.01a | Added opt-in desktop timing evidence, summary/comparison tooling, tests, documentation, and CI bundle budgets without changing startup sequencing. |
 | 2026-08-17 | P0.01b | Added the isolated packaged multi-sample runner, deterministic fixture, first-run/returning/cache protocols, bounded evidence, and cross-platform process tests; fixed-machine trends remain P0.01c. |
+| 2026-08-17 | P0.02 | Added OS-backed packaged credential storage, fail-safe legacy migration, a write-only renderer contract, scrubbed harness bootstrap, restart rollback, and recovery tests; native signed-host acceptance remains a release gate. |

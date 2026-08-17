@@ -1,18 +1,27 @@
-// Config + data dirs. One file, ~/.cumea/config.json, env fallbacks:
-//   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
-//     "instances": { "<instanceId>": {"driver":"grok", …} } }
+// Config + data dirs. In source/browser mode optional credentials may still
+// use ~/.cumea/config.json. A packaged Electron host instead injects an
+// OS-backed credential bootstrap; this module consumes and deletes those env
+// values before provider processes are loaded, then keeps only an immutable
+// in-memory copy for the life of this harness process.
 import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import type { InstanceConfigMap } from "./contracts.ts";
+import {
+  consumeDesktopCredentialEnvironment,
+  hasCredentialFields,
+  overlayDesktopCredentials,
+  providerCredentialEnvironment,
+  sanitizeManagedInstanceEnvironment,
+  stripCredentialFields,
+} from "./desktop-credentials.ts";
 import { writeFileAtomic } from "./atomic.ts";
 
 export interface AppConfig {
   xai?: { key?: string; url?: string };
-  /** key = ck_… Connect consumer key (connections + agent tools);
-   * apiKey = ak_… project API key — optional, unlocks the full toolkit
-   * catalog with official logos in the plugins marketplace. */
+  /** key = Connect consumer key (connections + agent tools);
+   * apiKey = project API key — optional, unlocks the full toolkit catalog. */
   composio?: { key?: string; apiKey?: string; url?: string };
   box?: { token?: string };
   /** The person using the app (collected in onboarding, shown in the
@@ -21,10 +30,19 @@ export interface AppConfig {
   instances?: InstanceConfigMap;
 }
 
-export const DATA_DIR = process.env.CUMEA_DATA_DIR ? resolve(process.env.CUMEA_DATA_DIR) : join(homedir(), ".cumea");
+export const DATA_DIR = process.env.CUMEA_DATA_DIR
+  ? resolve(process.env.CUMEA_DATA_DIR)
+  : join(homedir(), ".cumea");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
 export const ATTACHMENTS_DIR = join(DATA_DIR, "attachments");
+
+const desktopBootstrap = consumeDesktopCredentialEnvironment(process.env);
+const desktopCredentials = Object.freeze({ ...desktopBootstrap.credentials });
+
+export function desktopCredentialsManaged(): boolean {
+  return desktopBootstrap.managed;
+}
 
 export function ensureDirs() {
   for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR, ATTACHMENTS_DIR]) {
@@ -38,42 +56,65 @@ export function ensureDirs() {
   } catch {}
 }
 
-export function loadConfig(): AppConfig {
-  let cfg: AppConfig = {};
+function diskConfig(): AppConfig {
   try {
-    cfg = JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8"));
+    const value = JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as AppConfig)
+      : {};
   } catch {
-    /* first run — env fallbacks below */
+    return {};
   }
-  cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
-  cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
-  cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
+}
+
+export function loadConfig(): AppConfig {
+  let cfg = diskConfig();
+  if (desktopBootstrap.managed) {
+    // Managed mode never trusts or reuses credential-shaped values from disk.
+    cfg = overlayDesktopCredentials(stripCredentialFields(cfg), desktopCredentials);
+  } else {
+    cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
+    cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
+    cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
+  }
   return cfg;
 }
 
-/** Merge a partial config into ~/.cumea/config.json (secrets never
- * echoed back — callers report configured-or-not booleans only). */
+/** Merge a partial config into ~/.cumea/config.json. The packaged managed
+ * harness rejects credential-shaped API patches entirely: only Electron's
+ * narrow OS-vault IPC is a valid credential transport. */
 export function saveConfig(patch: Partial<AppConfig>): void {
-  const p = join(DATA_DIR, "config.json");
-  let disk: Record<string, unknown> = {};
-  try {
-    disk = JSON.parse(readFileSync(p, "utf8"));
-  } catch {
-    /* first write */
-  }
-  for (const key of ["xai", "composio", "box", "profile"] as const) {
-    if (patch[key] && typeof patch[key] === "object") {
-      disk[key] = { ...(disk[key] as object), ...patch[key] };
+  const target = join(DATA_DIR, "config.json");
+  let disk: AppConfig = diskConfig();
+  let incoming: Partial<AppConfig> = structuredClone(patch);
+  if (desktopBootstrap.managed) {
+    if (hasCredentialFields(incoming)) {
+      throw Object.assign(
+        new Error("packaged credentials must be changed through the desktop credential store"),
+        { status: 409 },
+      );
     }
+    disk = stripCredentialFields(disk);
+    incoming = stripCredentialFields(incoming);
   }
-  mkdirSync(DATA_DIR, { recursive: true });
-  writeFileAtomic(p, JSON.stringify(disk, null, 2), { mode: 0o600 });
+  const document = disk as Record<string, unknown>;
+  for (const key of ["xai", "composio", "box", "profile"] as const) {
+    const value = incoming[key];
+    if (!value || typeof value !== "object") continue;
+    const previous = document[key];
+    document[key] = {
+      ...(previous && typeof previous === "object" ? previous : {}),
+      ...value,
+    };
+  }
+  mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  writeFileAtomic(target, JSON.stringify(document, null, 2), { mode: 0o600 });
 }
 
 // Default fleet: one instance per built-in driver (upstream
 // defaultInstanceIdForDriver — instanceId defaults to the driver kind).
-// Config-file keys are injected as per-instance environment so drivers
-// see them without needing real process env vars.
+// Credentials are mounted only into their owning provider driver. Composio
+// values remain in the harness because connector calls are server-side.
 export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // The deterministic performance fixture is allowed only when the Electron
   // process also has an explicit local report target. It keeps startup data
@@ -86,12 +127,6 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     return {};
   }
 
-  // The default `grok` instance rides the `grokAgent` driver, not the API-key
-  // one: like claude and codex it needs no credential from us, just the CLI
-  // installed and logged in (it shows up unavailable otherwise). The API-key
-  // `grok` driver stays registered but out of the default fleet so an API key
-  // never silently changes billing behavior; an explicit `instances` entry
-  // enables it.
   const map: InstanceConfigMap =
     cfg.instances && Object.keys(cfg.instances).length
       ? cfg.instances
@@ -103,11 +138,16 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
           computer: { driver: "boxAgent" },
         };
   for (const entry of Object.values(map)) {
-    entry.environment = {
-      ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
-      ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
-      ...entry.environment,
-    };
+    const configuredEnvironment = desktopBootstrap.managed
+      ? sanitizeManagedInstanceEnvironment(entry.environment)
+      : { ...(entry.environment ?? {}) };
+    const ownedCredential = providerCredentialEnvironment(entry.driver, {
+      xai: cfg.xai?.key,
+      box: cfg.box?.token,
+    });
+    entry.environment = desktopBootstrap.managed
+      ? { ...configuredEnvironment, ...ownedCredential }
+      : { ...ownedCredential, ...configuredEnvironment };
   }
   return map;
 }
