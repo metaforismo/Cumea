@@ -83,6 +83,21 @@ export function consumeDesktopCredentialEnvironment(
   return { managed, credentials };
 }
 
+/** Credential-shaped fields sent to the ordinary config API are an invalid
+ * transport in managed desktop mode, even when the value is null/empty. */
+export function hasCredentialFields(value: unknown): boolean {
+  const config = ownRecord(value);
+  const xai = ownRecord(config.xai);
+  const composio = ownRecord(config.composio);
+  const box = ownRecord(config.box);
+  return (
+    Object.hasOwn(xai, "key") ||
+    Object.hasOwn(composio, "key") ||
+    Object.hasOwn(composio, "apiKey") ||
+    Object.hasOwn(box, "token")
+  );
+}
+
 export function overlayDesktopCredentials<T extends SecretConfigShape>(
   config: T,
   credentials: DesktopCredentials,
