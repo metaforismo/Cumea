@@ -1,0 +1,38 @@
+name: P0.04 renderer bootstrap
+
+on:
+  push:
+    branches:
+      - perf/atomic-bootstrap-v2
+    paths:
+      - scripts/apply-p004-store.mjs
+      - .github/workflows/p004-store.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: perf/atomic-bootstrap-v2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: node scripts/apply-p004-store.mjs
+      - name: Verify and commit
+        shell: bash
+        run: |
+          grep -F 'MAX_BUFFERED_FRAMES = 2_048' src/state/store.tsx
+          grep -F 'materializeDesktopBootstrap(snapshot)' src/state/store.tsx
+          if grep -F 'loadAll(); // resync' src/state/store.tsx; then exit 1; fi
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/state/store.tsx
+          git commit -m "perf: hydrate renderer from one cursor-consistent bootstrap"
+          git push origin HEAD:perf/atomic-bootstrap-v2
