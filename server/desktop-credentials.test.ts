@@ -11,14 +11,18 @@ import {
 } from "./desktop-credentials.ts";
 
 describe("desktop credential boundary", () => {
-  it("consumes and deletes bootstrap secrets before providers can inherit them", () => {
+  it("consumes and deletes bootstrap and ambient aliases before providers load", () => {
     const environment: NodeJS.ProcessEnv = {
       PATH: "/bin",
-      CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
-      CUMEA_DESKTOP_XAI_KEY: " xai-secret ",
-      CUMEA_DESKTOP_COMPOSIO_KEY: "connect-secret",
+      cumea_desktop_credentials_managed: "1",
+      Cumea_Desktop_Xai_Key: " xai-secret ",
+      cumea_desktop_composio_key: "connect-secret",
       CUMEA_DESKTOP_COMPOSIO_API_KEY: "project-secret",
-      CUMEA_DESKTOP_BOX_TOKEN: "box-secret",
+      Cumea_Desktop_Box_Token: "box-secret",
+      xai_api_key: "ambient-xai",
+      Box_Token: "ambient-box",
+      composio_key: "ambient-connect",
+      Composio_Api_Key: "ambient-project",
     };
 
     const result = consumeDesktopCredentialEnvironment(environment);
@@ -34,9 +38,13 @@ describe("desktop credential boundary", () => {
     expect(environment).toEqual({ PATH: "/bin" });
   });
 
-  it("rejects malformed credential values", () => {
+  it("rejects malformed and oversized credential values", () => {
     expect(() => applyDesktopCredential({}, "box", "line\nbreak")).toThrow(
       /invalid characters/,
+    );
+    expect(applyDesktopCredential({}, "box", "x".repeat(2_048)).box).toHaveLength(2_048);
+    expect(() => applyDesktopCredential({}, "box", "x".repeat(2_049))).toThrow(
+      /credential value is too long/,
     );
   });
 
@@ -54,12 +62,12 @@ describe("desktop credential boundary", () => {
       sanitizeManagedInstanceEnvironment({
         PATH: "/custom/bin",
         FEATURE_FLAG: "1",
-        XAI_API_KEY: "plaintext-xai",
-        BOX_TOKEN: "plaintext-box",
+        xai_api_key: "plaintext-xai",
+        Box_Token: "plaintext-box",
         COMPOSIO_KEY: "plaintext-connect",
-        COMPOSIO_API_KEY: "plaintext-project",
-        CUMEA_DESKTOP_XAI_KEY: "bootstrap-xai",
-        CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
+        composio_api_key: "plaintext-project",
+        Cumea_Desktop_Xai_Key: "bootstrap-xai",
+        cumea_desktop_credentials_managed: "1",
       }),
     ).toEqual({ PATH: "/custom/bin", FEATURE_FLAG: "1" });
   });
