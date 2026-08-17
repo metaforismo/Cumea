@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
@@ -28,6 +28,35 @@ async function freePort() {
   const port = await listen(reservation);
   await close(reservation);
   return port;
+}
+
+function rawRequest(url, { method = "GET", headers = {}, body = "" } = {}) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const req = httpRequest(
+      {
+        host: target.hostname,
+        port: Number(target.port),
+        path: `${target.pathname}${target.search}`,
+        method,
+        headers,
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+      },
+    );
+    req.once("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
 }
 
 test("gateway serves the packaged shell before a harness target exists", async () => {
@@ -101,7 +130,7 @@ test("gateway streams API/SSE and translates only its own browser Origin", async
     const { origin } = await gateway.start();
     gateway.setHarnessTarget(harnessPort);
 
-    const response = await fetch(`${origin}/api/config`, {
+    const response = await rawRequest(`${origin}/api/config`, {
       method: "POST",
       headers: {
         "content-type": "text/plain",
@@ -112,20 +141,20 @@ test("gateway streams API/SSE and translates only its own browser Origin", async
       body: "candidate",
     });
     assert.equal(response.status, 201);
-    assert.equal(response.headers.get("x-upstream"), "yes");
-    assert.equal(response.headers.get("x-hop-only"), null);
-    const payload = await response.json();
+    assert.equal(response.headers["x-upstream"], "yes");
+    assert.equal(response.headers["x-hop-only"], undefined);
+    const payload = JSON.parse(response.body);
     assert.equal(payload.method, "POST");
     assert.equal(payload.body, "candidate");
     assert.equal(payload.host, `127.0.0.1:${harnessPort}`);
     assert.equal(payload.origin, `http://127.0.0.1:${harnessPort}`);
     assert.equal(payload.hopOnly, null);
 
-    const foreign = await fetch(`${origin}/api/config`, {
+    const foreign = await rawRequest(`${origin}/api/config`, {
       method: "POST",
       headers: { origin: "https://attacker.example" },
     });
-    assert.equal((await foreign.json()).origin, "https://attacker.example");
+    assert.equal(JSON.parse(foreign.body).origin, "https://attacker.example");
 
     const events = await fetch(`${origin}/api/events`);
     assert.equal(events.status, 200);
