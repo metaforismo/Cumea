@@ -1,8 +1,9 @@
-// Paste-a-key rows for PUT /api/config. The server persists to
-// ~/.cumea/config.json and hot-reloads the provider fleet; secrets
-// are write-only — GET /api/config returns configured flags, never values.
+// Write-only credential rows. A packaged Electron app uses the operating-
+// system credential store through a narrow IPC bridge and restarts the local
+// harness with a fresh bootstrap. Browser/source mode retains the documented
+// owner-only config-file fallback because no Electron credential store exists.
 import { useState } from "react";
-import { Check, CircleHelp, ExternalLink, Loader2 } from "lucide-react";
+import { Check, CircleHelp, ExternalLink, Loader2, ShieldCheck, TriangleAlert } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { openExternalUrl } from "@/lib/external-url";
@@ -86,6 +87,57 @@ function CredentialHelp({ guide }: { guide: CredentialGuide }) {
   );
 }
 
+async function persistCredential(
+  section: ConfigSection,
+  value: string,
+): Promise<ConfigStatus> {
+  const desktop = window.cumea;
+  const mode = desktop?.credentialStorageMode ?? "file";
+  if (mode === "os") {
+    const result = await desktop!.credentialSet({
+      section,
+      value: value.trim() || null,
+    });
+    return result.config as ConfigStatus;
+  }
+  if (mode === "blocked" || mode === "performance-fixture") {
+    const status = await desktop?.credentialsStatus().catch(() => null);
+    throw new Error(
+      status?.reason ||
+        "Secure credential storage is unavailable. Cumea will not save this key in plaintext.",
+    );
+  }
+  return api("/api/config", {
+    method: "PUT",
+    body: JSON.stringify(SECTIONS[section].body(value.trim())),
+  });
+}
+
+function StorageBadge() {
+  const mode = window.cumea?.credentialStorageMode ?? "file";
+  if (mode === "os") {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded bg-success/10 px-1.5 py-0.5 text-[10px] text-success"
+        title="Encrypted by the operating-system credential store"
+      >
+        <ShieldCheck size={10} /> OS protected
+      </span>
+    );
+  }
+  if (mode === "blocked") {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning"
+        title="Cumea will not fall back to plaintext storage in the packaged app"
+      >
+        <TriangleAlert size={10} /> Storage unavailable
+      </span>
+    );
+  }
+  return null;
+}
+
 export function ApiKeyRow({
   section,
   onSaved,
@@ -107,16 +159,13 @@ export function ApiKeyRow({
     if (saving || (!value.trim() && !configured)) return;
     setSaving(true);
     setError(null);
-    api("/api/config", {
-      method: "PUT",
-      body: JSON.stringify(SECTIONS[section].body(value.trim())),
-    })
-      .then((status: ConfigStatus) => {
+    persistCredential(section, value)
+      .then((status) => {
         dispatch({ type: "configStatus", config: status });
         setValue("");
         onSaved?.(SECTIONS[section].flag(status));
       })
-      .catch((e) => setError(e.message))
+      .catch((error) => setError(error instanceof Error ? error.message : String(error)))
       .finally(() => setSaving(false));
   };
 
@@ -127,14 +176,15 @@ export function ApiKeyRow({
         {guide.label}
         {guide.optional && <span className="rounded bg-raised px-1.5 py-0.5 text-[10px] text-ink-secondary">Optional</span>}
         {configured && <span className="text-[11px] text-success">Connected</span>}
+        <StorageBadge />
         <CredentialHelp guide={guide} />
       </div>
       <div className="flex gap-2">
         <input
           type="password"
           value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && save()}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => event.key === "Enter" && save()}
           placeholder={configured ? "••••••••  (paste to replace)" : guide.placeholder}
           autoComplete="off"
           className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
@@ -151,7 +201,15 @@ export function ApiKeyRow({
           )}
           title={clearing ? "Remove the saved key" : "Save"}
         >
-          {saving ? <Loader2 size={13} className="animate-spin" /> : clearing ? "Clear" : <><Check size={13} />Save</>}
+          {saving ? (
+            <Loader2 size={13} className="animate-spin" />
+          ) : clearing ? (
+            "Clear"
+          ) : (
+            <>
+              <Check size={13} /> Save
+            </>
+          )}
         </button>
       </div>
       {error && <div className="mt-1 text-[12px] text-danger">{error}</div>}
