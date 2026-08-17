@@ -15,6 +15,12 @@ const STATIC_HOP_BY_HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+const LOCKED_RESPONSE_HEADERS = new Set([
+  "cross-origin-resource-policy",
+  "referrer-policy",
+  "x-content-type-options",
+  "x-frame-options",
+]);
 const PUBLIC_UNAVAILABLE_REASONS = new Set([
   "agent host is starting",
   "agent host is restarting",
@@ -117,7 +123,8 @@ function sanitizedResponseHeaders(headers) {
     if (
       value === undefined ||
       STATIC_HOP_BY_HOP_HEADERS.has(normalizedName) ||
-      dynamicHopHeaders.has(normalizedName)
+      dynamicHopHeaders.has(normalizedName) ||
+      LOCKED_RESPONSE_HEADERS.has(normalizedName)
     ) {
       continue;
     }
@@ -249,11 +256,20 @@ export function createDesktopGateway({
     throw new Error("desktop gateway requires a stable TCP port");
   }
 
+  const expectedHostHeader = `${LOOPBACK_HOST}:${port}`;
   let targetPort = null;
   let unavailableReason = "agent host is starting";
   let started = null;
   let closing = null;
   const server = createServer((req, res) => {
+    // Binding loopback is not sufficient against browser DNS rebinding. The
+    // renderer always navigates to the numeric loopback origin, so any other
+    // Host value is invalid and must be rejected before serving UI or API.
+    if (req.headers.host !== expectedHostHeader) {
+      publicError(res, 403, "host not allowed");
+      return;
+    }
+
     let pathname = "/";
     try {
       pathname = new URL(req.url || "/", "http://cumea.invalid").pathname;
