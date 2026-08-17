@@ -21,6 +21,7 @@ The port remains stable because Chromium storage is origin-scoped. Moving the re
 The gateway:
 
 - binds IPv4 loopback only;
+- requires the exact numeric loopback `Host` header for its own port before serving UI or API, preventing a DNS-rebound hostname from being treated as the desktop origin;
 - serves the packaged Vite output itself;
 - returns a bounded `503` for `/api/*` while no verified harness is attached;
 - streams API requests, downloads, and SSE to one internally selected loopback harness port;
@@ -29,6 +30,7 @@ The gateway:
 - returns `404` for missing file-like assets rather than serving the SPA HTML with the wrong MIME type;
 - applies a same-origin CSP to HTML;
 - strips static and `Connection`-named hop-by-hop headers;
+- reasserts its own security headers on proxied responses rather than letting the private upstream weaken them;
 - rewrites `Origin` only when it exactly equals the gateway's own renderer origin, translating it to the private harness origin so the harness's CSRF/origin boundary remains effective;
 - leaves foreign origins unchanged so the harness can reject them.
 
@@ -73,13 +75,14 @@ P0.03a intentionally keeps the pre-existing bounded HTTP health probe and a sepa
 38799
 ```
 
-Those ports are now outside the renderer's critical path, but they are not the final architecture.
+Those ports are now outside the renderer's critical path, but they are not the final architecture. The private harness listener is still directly reachable on loopback during this tranche; the gateway's exact-Host protection therefore hardens the stable renderer surface but is not presented as a complete replacement for hardening the backend listener itself.
 
-P0.03b must replace them with:
+P0.03b must replace the fixed backend ports and finish the private-listener boundary with:
 
 ```text
 CUMEA_PORT=0
 → operating system chooses the harness port
+→ child validates its local listener Host/origin contract
 → child sends {kind, version, pid, port} through Electron UtilityProcess messaging
 → parent validates exact child PID + bounded port
 → gateway attaches to the announced port
@@ -139,6 +142,7 @@ P0.03a intentionally does not claim:
 
 - an OS-assigned harness port;
 - parent/child readiness messaging in production;
+- complete direct-harness DNS-rebinding hardening before the P0.03b listener rewrite;
 - atomic renderer bootstrap;
 - fixed-machine startup improvement numbers;
 - signed/notarized packaged-launch acceptance;
