@@ -5,6 +5,13 @@ All notable changes to Cumea are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- An opt-in packaged desktop performance runner with isolated first-run and returning profiles,
+  deterministic no-provider fixtures, explicit cache treatment, multi-sample median/p95 evidence,
+  bounded logs, process-tree timeouts, and versioned manifests. No benchmark result is claimed until
+  the same scenarios are run as a trend series on one labelled fixed machine.
+
 ## [0.1.0] - 2026-08-13 — Developer Preview
 
 ### Added
