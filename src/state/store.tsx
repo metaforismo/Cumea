@@ -642,11 +642,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // that event so a failed request never removes the bot from the desktop.
   const pendingBotDeletes = useRef(new Map<string, string>());
   const workspaceCompleteRef = useRef(false);
+  const bootstrapReadyRef = useRef(false);
+  const workspaceReloadInFlightRef = useRef(false);
 
   const showError = useCallback((error: unknown) => {
     rawDispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
     setTimeout(() => rawDispatch({ type: "error", message: null }), 6000);
   }, []);
+
+  const loadFullWorkspace = useCallback(() => {
+    if (workspaceReloadInFlightRef.current) return;
+    workspaceReloadInFlightRef.current = true;
+    void api("/api/work")
+      .then(({ workspace }) => {
+        workspaceCompleteRef.current = true;
+        rawDispatch({ type: "workspaceHydrated", workspace });
+      })
+      .catch(showError)
+      .finally(() => {
+        workspaceReloadInFlightRef.current = false;
+      });
+  }, [showError]);
 
   const sendMessage = useCallback(async (input: {
     botId: string;
@@ -826,13 +842,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "toggleWork": {
           const opening = action.open ?? !stateRef.current.workOpen;
-          if (opening && !workspaceCompleteRef.current) {
-            api("/api/work")
-              .then(({ workspace }) => {
-                workspaceCompleteRef.current = true;
-                rawDispatch({ type: "workspaceHydrated", workspace });
-              })
-              .catch(showError);
+          if (opening && bootstrapReadyRef.current && !workspaceCompleteRef.current) {
+            loadFullWorkspace();
           }
           break;
         }
@@ -855,7 +866,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     return wrapped;
-  }, [showError]);
+  }, [showError, loadFullWorkspace]);
 
   // ── atomic bootstrap + cursor-aware SSE fold ───────────────────────
   useEffect(() => {
@@ -970,6 +981,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           const materialized = materializeDesktopBootstrap(snapshot);
           workspaceCompleteRef.current = materialized.workspaceComplete;
+          bootstrapReadyRef.current = true;
           rawDispatch({
             type: "bootstrap",
             bots: materialized.bots,
@@ -978,6 +990,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             config: snapshot.config,
             workspace: materialized.workspace,
           });
+          if (stateRef.current.workOpen && !materialized.workspaceComplete) loadFullWorkspace();
           lastCursor = snapshot.eventCursor;
           const pending = framesAfterCursor(buffered, lastCursor);
           const overflowed = bufferOverflow;
