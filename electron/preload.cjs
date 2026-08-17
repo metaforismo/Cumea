@@ -10,9 +10,28 @@ const performanceScenario = performanceEnabled
       seedOnboarding: process.env.CUMEA_PERFORMANCE_SEED_ONBOARDING === "1",
     })
   : undefined;
+const credentialStorageMode = new Set([
+  "os",
+  "blocked",
+  "file",
+  "performance-fixture",
+]).has(process.env.CUMEA_DESKTOP_CREDENTIAL_STORAGE_MODE)
+  ? process.env.CUMEA_DESKTOP_CREDENTIAL_STORAGE_MODE
+  : "file";
 
 contextBridge.exposeInMainWorld("cumea", {
   platform: process.platform,
+  credentialStorageMode,
+  credentialsStatus: () => ipcRenderer.invoke("credentials:status"),
+  credentialSet: (payload) => {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return Promise.reject(new Error("credential update is invalid"));
+    }
+    return ipcRenderer.invoke("credentials:set", {
+      section: payload.section,
+      value: payload.value,
+    });
+  },
   /** Non-secret benchmark mode, available only with an explicit local report
    * target. It can seed the isolated profile's onboarding marker but cannot
    * alter provider, permission, filesystem, or transport state. */
