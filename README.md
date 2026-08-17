@@ -82,7 +82,9 @@ local sample data and is not evidence that a provider task ran.
   already-captured PNG/JPEG frame, never computer control, and still requires a paired device token.
 - Packaged optional credentials are encrypted through the operating-system credential service,
   remain write-only to the renderer, and are supplied only to a fresh local harness bootstrap.
-  Source/browser hosting retains an explicit owner-only `config.json` fallback.
+  Credential-shaped writes to the ordinary packaged config API are rejected, and each provider
+  receives only the credential it owns. Source/browser hosting retains an explicit owner-only
+  `config.json` fallback.
 - External links are limited to HTTPS, with HTTP allowed only for loopback development URLs.
 - Agents do not receive blanket approval by default. Provider modes that bypass consent remain an
   explicit user choice.
@@ -100,14 +102,17 @@ and where charges may apply.
 
 | Credential | What it enables | Sent to |
 |---|---|---|
+| [xAI API key](https://console.x.ai/) | Optional key-billed Grok API driver; Grok Build CLI authentication is separate | `api.x.ai`, only for turns explicitly routed through that API driver |
 | [Composio Connect API key](https://docs.composio.dev/docs/composio-connect) | App discovery, OAuth connection, and app actions | `connect.composio.dev`, only when connected apps are used |
 | [Composio project API key](https://docs.composio.dev/reference/authenticating-to-composio) | Full connected-app catalog; optional and preferably scoped | `backend.composio.dev`, only while loading that catalog |
 | [Cloud computer token](https://box.ascii.dev) | Remote desktop provisioning and control | `box.ascii.dev`, only for cloud-computer actions |
 
 The packaged Electron desktop encrypts these values through Electron `safeStorage`, migrates legacy
 plaintext only after a decryptable encrypted replacement exists, and refuses new plaintext writes
-when the OS credential service is unavailable. Source/browser hosting has no Electron main process,
-so it retains the explicit `~/.cumea/config.json` owner-only fallback. Cumea does not proxy
+when the OS credential service is unavailable. Its OS vault is authoritative: ambient or advanced
+instance credential aliases cannot silently replace it, and unrelated Claude, Codex, Gemini, or
+Grok Build CLI processes do not inherit these values. Source/browser hosting has no Electron main
+process, so it retains the explicit `~/.cumea/config.json` owner-only fallback. Cumea does not proxy
 credentials through a Cumea-operated service. See
 [desktop credential storage](docs/credential-storage.md) for migration, recovery, restart, platform,
 and threat-boundary details.
