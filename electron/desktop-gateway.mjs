@@ -21,11 +21,12 @@ const LOCKED_RESPONSE_HEADERS = new Set([
   "x-content-type-options",
   "x-frame-options",
 ]);
-const PUBLIC_UNAVAILABLE_REASONS = new Set([
-  "agent host is starting",
-  "agent host is restarting",
-  "agent host could not start",
+const GATEWAY_STATE_BY_REASON = new Map([
+  ["agent host is starting", "starting"],
+  ["agent host is restarting", "restarting"],
+  ["agent host could not start", "failed"],
 ]);
+const PUBLIC_UNAVAILABLE_REASONS = new Set(GATEWAY_STATE_BY_REASON.keys());
 
 const SECURITY_HEADERS = Object.freeze({
   "x-content-type-options": "nosniff",
@@ -60,12 +61,18 @@ const MIME = Object.freeze({
 
 function publicError(res, status, message) {
   const body = Buffer.from(`${JSON.stringify({ error: message })}\n`, "utf8");
+  const gatewayState = status === 503 ? GATEWAY_STATE_BY_REASON.get(message) : undefined;
   res.writeHead(status, {
     ...SECURITY_HEADERS,
     "cache-control": "no-store",
     "content-type": "application/json; charset=utf-8",
     "content-length": String(body.length),
-    ...(status === 503 ? { "retry-after": "1" } : {}),
+    ...(gatewayState
+      ? {
+          "retry-after": "1",
+          "x-cumea-desktop-state": gatewayState,
+        }
+      : {}),
   });
   res.end(body);
 }
