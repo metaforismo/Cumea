@@ -83,12 +83,12 @@ P0.03b must replace the fixed backend ports and finish the private-listener boun
 CUMEA_PORT=0
 → operating system chooses the harness port
 → child validates its local listener Host/origin contract
-→ child sends {kind, version, pid, port} through Electron UtilityProcess messaging
+→ child sends a versioned {kind, pid, port} readiness message through Electron UtilityProcess messaging
 → parent validates exact child PID + bounded port
 → gateway attaches to the announced port
 ```
 
-The message contract is already covered by `electron/harness-process.test.mjs`; it is not yet active in P0.03a and must not be described as shipped behavior.
+The readiness protocol and its tests belong to P0.03b together with the server listener that consumes it. P0.03a deliberately carries no unused handshake implementation.
 
 ## Harness restart contract
 
