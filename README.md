@@ -234,6 +234,13 @@ Preview.
 The renderer owns no provider transport. Commands cross the local API, providers emit one canonical
 event stream, and the UI folds that stream into visible conversation state.
 
+Packaged desktop startup keeps the renderer on the stable private origin `http://127.0.0.1:8799`.
+Electron serves the built UI from its own loopback gateway, starts the API-only harness on an
+OS-assigned private loopback port, and attaches that port only after a versioned UtilityProcess
+readiness message matches the exact child PID. The packaged harness therefore does not expose a
+second renderer origin or rely on fixed private fallback ports. Source development still uses the
+fixed `:5199` UI and `:8799` harness pair described above.
+
 ## Direction
 
 The immediate priorities are push/background notification delivery, signed physical-device
