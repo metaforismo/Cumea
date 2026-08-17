@@ -31,10 +31,13 @@ export default defineConfig({
       ignored: ["**/release/**", "**/build/**", "**/dist/**", "**/electron/resources/**"],
     },
     // the harness server owns every provider process; the app only ever
-    // talks to /api — clients hold no transports
+    // talks to /api — clients hold no transports. changeOrigin ensures the
+    // private harness can enforce its own exact loopback Host while the
+    // browser Origin remains the explicit Vite dev origin (5199).
     proxy: {
       "/api": {
         target: `http://127.0.0.1:${process.env.CUMEA_PORT || 8799}`,
+        changeOrigin: true,
       },
     },
   },
