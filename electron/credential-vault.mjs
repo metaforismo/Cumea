@@ -112,8 +112,13 @@ function previousFile(file) {
 }
 
 /** Recover the only ambiguous Windows fallback state: the prior target was
- * moved aside but the replacement was not installed before process exit. */
-function recoverInterruptedReplacement(file) {
+ * moved aside but the replacement was not installed before process exit.
+ *
+ * Encrypted-vault backups can be cleaned best-effort after a committed target
+ * exists. Legacy config migration is stricter because its `.previous` file can
+ * still contain plaintext credentials: that path must not report success while
+ * a stale backup cannot be removed. */
+function recoverInterruptedReplacement(file, { requirePreviousCleanup = false } = {}) {
   const previous = previousFile(file);
   if (!existsSync(previous)) return;
   if (existsSync(file)) {
@@ -121,7 +126,17 @@ function recoverInterruptedReplacement(file) {
     // was interrupted. The target is the committed version.
     try {
       rmSync(previous, { force: true });
-    } catch {}
+    } catch (error) {
+      if (requirePreviousCleanup) {
+        throw new Error(
+          "credential storage recovery failed; stale plaintext backup could not be removed",
+          { cause: error },
+        );
+      }
+    }
+    if (requirePreviousCleanup && existsSync(previous)) {
+      throw new Error("credential storage recovery failed; stale plaintext backup still exists");
+    }
     return;
   }
   try {
@@ -132,9 +147,9 @@ function recoverInterruptedReplacement(file) {
   }
 }
 
-function writeAtomic(file, bytes) {
+function writeAtomic(file, bytes, { requirePreviousCleanup = false } = {}) {
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  recoverInterruptedReplacement(file);
+  recoverInterruptedReplacement(file, { requirePreviousCleanup });
 
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   const previous = previousFile(file);
@@ -196,11 +211,23 @@ function writeAtomic(file, bytes) {
 
     syncParentDirectory(file);
     if (movedPrevious) {
-      // Cleanup failure is non-fatal: the next read recognizes target+backup
-      // as a committed replacement and removes the stale backup.
       try {
         rmSync(previous, { force: true });
-      } catch {}
+      } catch (error) {
+        if (requirePreviousCleanup) {
+          throw new Error(
+            "credential storage replacement committed but stale plaintext backup could not be removed",
+            { cause: error },
+          );
+        }
+        // Encrypted vault cleanup failure is non-fatal: the next read
+        // recognizes target+backup as a committed replacement and retries.
+      }
+      if (requirePreviousCleanup && existsSync(previous)) {
+        throw new Error(
+          "credential storage replacement committed but stale plaintext backup still exists",
+        );
+      }
     }
     try {
       chmodSync(file, 0o600);
@@ -221,7 +248,7 @@ function writeAtomic(file, bytes) {
 
 function readConfigDocument(file) {
   try {
-    recoverInterruptedReplacement(file);
+    recoverInterruptedReplacement(file, { requirePreviousCleanup: true });
     const value = JSON.parse(readFileSync(file, "utf8"));
     return isRecord(value) ? value : {};
   } catch (error) {
@@ -383,8 +410,12 @@ export async function migrateLegacyCredentials({ configFile, vault }) {
   if (legacyPresent) {
     await vault.replace(credentials);
     // A failed vault write leaves config untouched. Only this later atomic
-    // rewrite is allowed to erase the recoverable plaintext source.
-    writeAtomic(configFile, `${JSON.stringify(stripLegacyCredentials(config), null, 2)}\n`);
+    // rewrite is allowed to erase the recoverable plaintext source. Strict
+    // backup cleanup ensures a Windows `.previous` copy cannot silently retain
+    // the just-migrated plaintext while migration reports success.
+    writeAtomic(configFile, `${JSON.stringify(stripLegacyCredentials(config), null, 2)}\n`, {
+      requirePreviousCleanup: true,
+    });
   }
   return {
     managed: true,
