@@ -43,12 +43,22 @@ credential writes fail closed rather than falling back to plaintext. Source and
 browser-host operation retains the documented owner-only file fallback because
 there is no Electron main process to own an OS vault.
 
-The harness receives only an allowlisted one-process bootstrap and deletes
-those fields from `process.env` before provider instances or provider child
-processes are created. Credential replacement restarts the local harness; a
-failed restart rolls the encrypted vault and live bootstrap back on a
-best-effort basis. Full behavior and recovery guidance are documented in
-[Desktop credential storage](docs/credential-storage.md).
+In packaged managed mode, credential-shaped writes to `/api/config` are
+rejected; the narrow Electron IPC method is the only valid write or clear path.
+The harness receives an allowlisted one-process bootstrap, overrides ambient
+dedicated fields, and deletes them from `process.env` before provider instances
+or provider child processes are created. Plaintext credential aliases in
+advanced instance environments are ignored. xAI and Box credentials are
+mounted only into their owning API/Box drivers; connector credentials remain in
+the harness and unrelated Claude, Codex, Gemini, and Grok Build CLI processes
+do not inherit them.
+
+Credential replacement restarts the local harness and requires the returned
+configuration flags to confirm the exact candidate state. Candidate failure or
+mismatch triggers encrypted and live rollback. An unverifiable encrypted
+rollback blocks further writes and requires restart instead of presenting an
+ambiguous state as recovered. Full behavior and recovery guidance are
+documented in [Desktop credential storage](docs/credential-storage.md).
 
 ## Reporting a vulnerability
 
@@ -67,9 +77,15 @@ so reports, reproduction details, and fixes remain confidential until coordinate
   values). Any path that echoes a stored secret back — API response, SSE event, renderer state,
   diagnostic, log line, command-line argument visible in `ps`, or unrelated provider environment —
   is a vulnerability.
+- In packaged managed mode, bypassing the Electron vault through `/api/config`, an ambient bootstrap
+  variable, or an advanced instance environment is a vulnerability. A credential supplied to one
+  provider must not be inherited by an unrelated provider process.
 - A packaged app must not consume preserved legacy plaintext while secure storage is blocked, nor
   silently downgrade to Electron's Linux `basic_text` backend. Migration must not erase the legacy
   source before a decryptable encrypted replacement exists.
+- A credential update must not report success until the restarted harness confirms the expected
+  configured flag. Failed or mismatched startup must restore the prior encrypted state or fail
+  visibly into a blocked/restart-required condition.
 - Agents run real CLIs (`claude`, `codex`) with the user's own privileges, and the permission broker
   is the consent layer for risky actions. Bypasses of the broker (approving without a user decision,
   spoofing the broker socket) are vulnerabilities.
