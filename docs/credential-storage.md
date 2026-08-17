@@ -76,15 +76,17 @@ The harness validates and copies the bootstrap into memory, then deletes those d
 mode it also ignores credential aliases embedded in plaintext advanced instance environments.
 Non-secret instance environment values remain supported.
 
-Credentials are scoped by owner:
+Credentials are scoped by use:
 
-- the xAI API key is mounted only into the key-billed `grok` API driver;
-- the Box token is mounted only into the `boxAgent` driver;
-- Composio credentials stay inside the harness because connector calls are server-side;
-- Claude, Codex, Gemini, Grok Build CLI, and unrelated custom drivers do not receive these values.
+- the xAI API key is mounted as process environment only into the key-billed `grok` API driver;
+- the Box token is mounted as process environment only into the `boxAgent` driver;
+- Composio credentials remain in the harness until an apps-enabled turn is routed to a driver that
+  explicitly advertises Composio MCP support; only that integration receives the Connect key;
+- providers and turns that do not own or explicitly mount one of those capabilities do not inherit
+  the corresponding credential through a generic environment merge.
 
-A provider process that legitimately owns a credential can still read that credential; this design
-prevents unrelated inheritance, not access by the intended consumer.
+A provider process or integration that legitimately owns a credential can still read that
+credential; this design prevents unrelated inheritance, not access by the intended consumer.
 
 ## Credential update and harness restart
 
@@ -139,14 +141,15 @@ provider-authentication evidence.
 
 This design protects against accidental plaintext-at-rest persistence, renderer/API secret reads,
 stale plaintext reuse in a blocked packaged app, direct managed-API bypasses, ambient/bootstrap
-overrides, and unintentional inheritance by unrelated provider processes.
+overrides, and unintentional inheritance by unrelated provider processes or turns.
 
 It does not protect credentials from:
 
 - malicious code already running as the same operating-system user;
 - a compromised Electron main process or harness process;
 - memory inspection with equivalent local privileges;
-- a provider process that legitimately needs and receives its configured credential;
+- a provider process or MCP integration that legitimately needs and receives its configured
+  credential;
 - the third-party service receiving the credential during an explicitly requested operation;
 - insecure backups or disk images made before migration.
 
