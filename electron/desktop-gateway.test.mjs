@@ -81,6 +81,10 @@ test("gateway serves the packaged shell before a harness target exists", async (
     assert.deepEqual(await pending.json(), { error: "agent host is starting" });
     assert.equal(pending.headers.get("cache-control"), "no-store");
 
+    const rebound = await rawRequest(origin, { headers: { host: "attacker.example" } });
+    assert.equal(rebound.status, 403);
+    assert.deepEqual(JSON.parse(rebound.body), { error: "host not allowed" });
+
     const missingAsset = await fetch(`${origin}/assets/missing.js`);
     assert.equal(missingAsset.status, 404);
     const routeFallback = await fetch(`${origin}/settings`);
@@ -111,6 +115,8 @@ test("gateway streams API/SSE and translates only its own browser Origin", async
         connection: "close, x-hop-only",
         "x-hop-only": "must-not-cross",
         "x-upstream": "yes",
+        "x-frame-options": "ALLOWALL",
+        "x-content-type-options": "off",
       });
       res.end(
         JSON.stringify({
@@ -143,6 +149,8 @@ test("gateway streams API/SSE and translates only its own browser Origin", async
     assert.equal(response.status, 201);
     assert.equal(response.headers["x-upstream"], "yes");
     assert.equal(response.headers["x-hop-only"], undefined);
+    assert.equal(response.headers["x-frame-options"], "DENY");
+    assert.equal(response.headers["x-content-type-options"], "nosniff");
     const payload = JSON.parse(response.body);
     assert.equal(payload.method, "POST");
     assert.equal(payload.body, "candidate");
