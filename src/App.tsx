@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { StoreProvider, useStore } from "@/state/store";
 import { Onboarding } from "@/components/Onboarding";
 import { onboardingDone } from "@/lib/onboarding";
+import { markAfterPaint, markOnce } from "@/lib/performance";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -14,6 +15,23 @@ import { WorkPanel } from "@/components/WorkPanel";
 function Shell() {
   const { state } = useStore();
   const bot = state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0];
+  const shellUsable = state.connected && state.config !== null && Boolean(bot);
+
+  useLayoutEffect(() => {
+    markOnce("cumea:renderer:shell-committed");
+    return markAfterPaint("cumea:renderer:shell-painted");
+  }, []);
+
+  useLayoutEffect(() => {
+    if (state.connected) markOnce("cumea:renderer:transport-connected");
+  }, [state.connected]);
+
+  useLayoutEffect(() => {
+    if (!shellUsable) return;
+    markOnce("cumea:renderer:shell-usable-committed");
+    return markAfterPaint("cumea:renderer:shell-usable-painted");
+  }, [shellUsable]);
+
   return (
     <div className="relative flex h-full">
       <Sidebar />
