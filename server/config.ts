@@ -10,6 +10,7 @@ import { join, resolve } from "node:path";
 import type { InstanceConfigMap } from "./contracts.ts";
 import {
   consumeDesktopCredentialEnvironment,
+  hasCredentialFields,
   overlayDesktopCredentials,
   stripCredentialFields,
 } from "./desktop-credentials.ts";
@@ -77,14 +78,20 @@ export function loadConfig(): AppConfig {
   return cfg;
 }
 
-/** Merge a partial config into ~/.cumea/config.json. In managed desktop mode
- * credential fields are stripped from both the previous document and the
- * incoming patch as a final defense against accidental plaintext writes. */
+/** Merge a partial config into ~/.cumea/config.json. The packaged managed
+ * harness rejects credential-shaped API patches entirely: only Electron's
+ * narrow OS-vault IPC is a valid credential transport. */
 export function saveConfig(patch: Partial<AppConfig>): void {
   const target = join(DATA_DIR, "config.json");
   let disk: AppConfig = diskConfig();
   let incoming: Partial<AppConfig> = structuredClone(patch);
   if (desktopBootstrap.managed) {
+    if (hasCredentialFields(incoming)) {
+      throw Object.assign(
+        new Error("packaged credentials must be changed through the desktop credential store"),
+        { status: 409 },
+      );
+    }
     disk = stripCredentialFields(disk);
     incoming = stripCredentialFields(incoming);
   }
