@@ -20,11 +20,11 @@ All notable changes to Cumea are documented here. This project follows
   starts without credentials instead of silently reusing or rewriting plaintext.
 - Packaged credential values remain write-only to the renderer. Credential-shaped writes to the
   ordinary managed config API are rejected, ambient and advanced-instance credential aliases cannot
-  override the vault, bootstrap fields are removed before providers load, and only the owning xAI or
-  Box driver receives its credential; Composio values remain in the harness.
-- Credential changes restart the harness and require the exact configured flag to confirm the new
-  bootstrap. Failed or mismatched startup restores the encrypted and live state; an unverifiable
-  rollback blocks further writes and requires restart instead of reporting ambiguous recovery.
+  override the vault, bootstrap fields are removed before providers load, and credentials are
+  mounted only into owning providers or explicitly capable integrations.
+- Credential changes validate an in-memory candidate in a fresh harness and require the exact
+  configured flag before atomically committing the vault. Failed validation or persistence leaves
+  the prior encrypted vault authoritative and restores its live harness state when possible.
 - Source/browser hosting retains the explicit owner-only `config.json` fallback. The unsigned package
   smoke verifies layout only and does not yet prove Keychain, DPAPI, Linux secret-service, signing,
   notarization, migration on a real prior profile, or physical-machine behavior.
