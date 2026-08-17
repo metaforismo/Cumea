@@ -249,13 +249,16 @@ fixed `:5199` UI and `:8799` harness pair described above.
 
 ## Direction
 
-The immediate priorities are push/background notification delivery, signed physical-device
-acceptance, voice input on mobile, demonstrated desktop-workflow
-recording, wider provider-tool parity, and hands-on Linux/Windows validation. The Grok-like
-three-pane desktop model and agent-list-first mobile model remain the product direction; this work
-extends their capabilities rather than replacing either interface.
-See [ROADMAP.md](ROADMAP.md) for the ordered backlog and
-[docs/UPSTREAM.md](docs/UPSTREAM.md) for the upstream issue/PR audit behind it.
+The immediate engineering priorities are steady-state renderer/thread scaling, incremental local
+transcript persistence and search, agent liveness/loop protection, signed consumer distribution,
+mobile completion gates, and wider provider/computer capability parity. These changes keep Cumea's
+no-account local-first security model and its Grok-like three-pane desktop / agent-list-first mobile
+identity instead of replacing them with a hosted control plane.
+
+See [ROADMAP.md](ROADMAP.md) for the ordered backlog,
+[the 2026-08-18 Rakazo/OpenMaus engineering audit](docs/competitive-audit-2026-08-18.md) for the latest
+`adopt / adapt / reject` decisions, and [docs/UPSTREAM.md](docs/UPSTREAM.md) for the earlier upstream
+issue/PR audit.
 
 ## Contributing
 
