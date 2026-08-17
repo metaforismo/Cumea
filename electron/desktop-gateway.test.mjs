@@ -51,13 +51,19 @@ test("gateway serves the packaged shell before a harness target exists", async (
     assert.equal(pending.status, 503);
     assert.deepEqual(await pending.json(), { error: "agent host is starting" });
     assert.equal(pending.headers.get("cache-control"), "no-store");
+
+    const missingAsset = await fetch(`${origin}/assets/missing.js`);
+    assert.equal(missingAsset.status, 404);
+    const routeFallback = await fetch(`${origin}/settings`);
+    assert.equal(routeFallback.status, 200);
+    assert.equal(await routeFallback.text(), "<main>Cumea shell</main>");
   } finally {
     await gateway.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("gateway streams API and SSE traffic only to its validated loopback target", async () => {
+test("gateway streams API/SSE and translates only its own browser Origin", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "cumea-gateway-"));
   writeFileSync(path.join(directory, "index.html"), "shell");
   const harness = createServer((req, res) => {
@@ -73,13 +79,23 @@ test("gateway streams API and SSE traffic only to its validated loopback target"
       const body = Buffer.concat(chunks).toString("utf8");
       res.writeHead(201, {
         "content-type": "application/json",
-        connection: "close",
+        connection: "close, x-hop-only",
+        "x-hop-only": "must-not-cross",
         "x-upstream": "yes",
       });
-      res.end(JSON.stringify({ method: req.method, body, host: req.headers.host }));
+      res.end(
+        JSON.stringify({
+          method: req.method,
+          body,
+          host: req.headers.host,
+          origin: req.headers.origin ?? null,
+          hopOnly: req.headers["x-hop-only"] ?? null,
+        }),
+      );
     });
   });
-  const gateway = createDesktopGateway({ staticDir: directory, port: await freePort() });
+  const gatewayPort = await freePort();
+  const gateway = createDesktopGateway({ staticDir: directory, port: gatewayPort });
   try {
     const harnessPort = await listen(harness);
     const { origin } = await gateway.start();
@@ -87,15 +103,29 @@ test("gateway streams API and SSE traffic only to its validated loopback target"
 
     const response = await fetch(`${origin}/api/config`, {
       method: "POST",
-      headers: { "content-type": "text/plain", connection: "keep-alive" },
+      headers: {
+        "content-type": "text/plain",
+        origin,
+        connection: "keep-alive, x-hop-only",
+        "x-hop-only": "must-not-cross",
+      },
       body: "candidate",
     });
     assert.equal(response.status, 201);
     assert.equal(response.headers.get("x-upstream"), "yes");
+    assert.equal(response.headers.get("x-hop-only"), null);
     const payload = await response.json();
     assert.equal(payload.method, "POST");
     assert.equal(payload.body, "candidate");
     assert.equal(payload.host, `127.0.0.1:${harnessPort}`);
+    assert.equal(payload.origin, `http://127.0.0.1:${harnessPort}`);
+    assert.equal(payload.hopOnly, null);
+
+    const foreign = await fetch(`${origin}/api/config`, {
+      method: "POST",
+      headers: { origin: "https://attacker.example" },
+    });
+    assert.equal((await foreign.json()).origin, "https://attacker.example");
 
     const events = await fetch(`${origin}/api/events`);
     assert.equal(events.status, 200);
@@ -114,7 +144,7 @@ test("gateway streams API and SSE traffic only to its validated loopback target"
   }
 });
 
-test("gateway rejects invalid targets and filesystem escape attempts", async () => {
+test("gateway rejects invalid targets, public states, and filesystem escapes", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "cumea-gateway-"));
   const directory = path.join(root, "ui");
   mkdirSync(directory);
@@ -126,6 +156,10 @@ test("gateway rejects invalid targets and filesystem escape attempts", async () 
     assert.throws(() => gateway.setHarnessTarget(0), /invalid harness target/);
     assert.throws(() => gateway.setHarnessTarget(70_000), /invalid harness target/);
     assert.throws(() => gateway.setHarnessTarget(port), /cannot proxy to itself/);
+    assert.throws(
+      () => gateway.clearHarnessTarget("internal error: /Users/alice/private"),
+      /invalid public harness unavailable reason/,
+    );
 
     const escaped = await fetch(`${origin}/..%2Fsecret.txt`);
     assert.equal(escaped.status, 404);
