@@ -61,6 +61,13 @@ function Shell() {
 
 export default function App() {
   const [gated, setGated] = useState(() => !onboardingDone());
+
+  useLayoutEffect(() => {
+    if (!gated) return;
+    markOnce("cumea:renderer:onboarding-committed");
+    return markAfterPaint("cumea:renderer:onboarding-painted");
+  }, [gated]);
+
   return (
     <StoreProvider>
       <Shell />
