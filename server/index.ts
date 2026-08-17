@@ -9,6 +9,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node
 import { fileURLToPath } from "node:url";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { buildDesktopBootstrap } from "./bootstrap.ts";
 import {
   localHostAllowed,
   localOriginAllowed,
@@ -192,6 +193,15 @@ interface SseClient {
 }
 
 const sseClients = new Map<ServerResponse, SseClient>();
+let localEventCursor = 0;
+
+function nextLocalEventCursor(): number {
+  if (localEventCursor >= Number.MAX_SAFE_INTEGER) {
+    throw new Error("local event cursor exhausted");
+  }
+  localEventCursor += 1;
+  return localEventCursor;
+}
 interface BroadcastOptions {
   /** Used only when the local event has a deliberately different remote
    * meaning, such as a visible bot becoming hidden. */
@@ -233,6 +243,7 @@ function visibleRemoteSsePayload(payload: unknown, allowDeletedBot: boolean): un
 }
 
 function broadcast(payload: unknown, options: BroadcastOptions = {}) {
+  const eventCursor = nextLocalEventCursor();
   for (const [res, client] of [...sseClients]) {
     if (client.surface === "remote" && (!client.deviceId || !pairing.isActive(client.deviceId))) {
       sseClients.delete(res);
@@ -250,7 +261,11 @@ function broadcast(payload: unknown, options: BroadcastOptions = {}) {
       ? sanitizeRemoteSsePayload(visibleCandidate, { visibleBotIds: visibleRemoteBotIds() })
       : visibleCandidate;
     if (outgoing === null) continue;
-    const frame = `data: ${JSON.stringify(outgoing)}\n\n`;
+    const visible =
+      surface === "local" && outgoing && typeof outgoing === "object" && !Array.isArray(outgoing)
+        ? { ...(outgoing as Record<string, unknown>), eventCursor }
+        : outgoing;
+    const frame = `data: ${JSON.stringify(visible)}\n\n`;
     try {
       res.write(frame);
     } catch {
@@ -1170,7 +1185,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         "cache-control": "no-cache",
         connection: "keep-alive",
       });
-      res.write(`data: ${JSON.stringify({ kind: "hello" })}\n\n`);
+      res.write(`data: ${JSON.stringify(surface === "local" ? { kind: "hello", eventCursor: localEventCursor } : { kind: "hello" })}\n\n`);
       sseClients.set(res, { surface, ...(authenticatedDeviceId ? { deviceId: authenticatedDeviceId } : {}) });
       const keepalive = setInterval(() => {
         const client = sseClients.get(res);
@@ -1189,6 +1204,42 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         sseClients.delete(res);
       });
       return;
+    }
+
+    // ── atomic desktop startup snapshot ───────────────────────────────
+    if (method === "GET" && path === "/api/bootstrap") {
+      if (surface !== "local") return json(res, 403, { error: "desktop bootstrap is local-only" });
+      const rawSelected = url.searchParams.get("selectedBotId");
+      if (rawSelected && !/^[\w-]{1,100}$/.test(rawSelected)) {
+        return json(res, 400, { error: "invalid selectedBotId" });
+      }
+
+      // Discovery may await provider processes. Do it before the synchronous
+      // snapshot cut; any event after the cut receives a strictly greater
+      // localEventCursor and is replayed by the renderer's buffered SSE fold.
+      const instances = await registry.describe();
+      const workspaceSnapshot = publicWorkspace();
+      const eventCursor = localEventCursor;
+      const needsYouCount = workspaceSnapshot.runs.filter(
+        (run) => run.status === "needs_attention",
+      ).length;
+      const computerStatus = {
+        cloudConfigured: box.boxConfigured(cfg),
+        localConfigured: Boolean(readCuaConnection()),
+      };
+      const snapshot = buildDesktopBootstrap({
+        bots: store.bots,
+        messagesFor: (threadId) => store.messagesFor(threadId),
+        selectedBotId: rawSelected,
+        config: configStatus(),
+        instances,
+        workspace: workspaceSnapshot,
+        needsYouCount,
+        computerStatus,
+        eventCursor,
+      });
+      res.setHeader("cache-control", "no-store");
+      return json(res, 200, snapshot);
     }
 
     // ── durable work model: sections, tasks, runs, artifacts, routines ──
