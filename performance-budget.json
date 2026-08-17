@@ -1,0 +1,16 @@
+{
+  "schema": "cumea.performance-budget",
+  "version": 1,
+  "targets": [
+    {
+      "path": "dist",
+      "maxTotalBytes": 12582912,
+      "maxFileBytes": 5242880
+    },
+    {
+      "path": "dist-server",
+      "maxTotalBytes": 8388608,
+      "maxFileBytes": 2097152
+    }
+  ]
+}
