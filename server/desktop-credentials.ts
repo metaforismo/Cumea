@@ -16,12 +16,10 @@ const ENV_FIELDS: Record<DesktopCredentialSection, string> = {
 };
 
 const MANAGED_ENV = "CUMEA_DESKTOP_CREDENTIALS_MANAGED";
-const TOKEN_ENV = "CUMEA_DESKTOP_CREDENTIAL_TOKEN";
 const MAX_CREDENTIAL_LENGTH = 8_192;
 
 export interface DesktopCredentialBootstrap {
   managed: boolean;
-  token: string;
   credentials: DesktopCredentials;
 }
 
@@ -68,13 +66,9 @@ export function consumeDesktopCredentialEnvironment(
   environment: NodeJS.ProcessEnv,
 ): DesktopCredentialBootstrap {
   const managed = environment[MANAGED_ENV] === "1";
-  const token = managed ? String(environment[TOKEN_ENV] ?? "").trim() : "";
   const credentials: DesktopCredentials = {};
 
   if (managed) {
-    if (!/^[a-f0-9]{48,128}$/i.test(token)) {
-      throw new Error("desktop credential management requires a valid per-boot token");
-    }
     for (const section of DESKTOP_CREDENTIAL_SECTIONS) {
       const normalized = normalizeDesktopCredentialValue(environment[ENV_FIELDS[section]]);
       if (normalized !== null) credentials[section] = normalized;
@@ -84,10 +78,9 @@ export function consumeDesktopCredentialEnvironment(
   // These values must never reach provider child processes through inherited
   // environment. The server keeps only the validated in-memory copy above.
   delete environment[MANAGED_ENV];
-  delete environment[TOKEN_ENV];
   for (const field of Object.values(ENV_FIELDS)) delete environment[field];
 
-  return { managed, token, credentials };
+  return { managed, credentials };
 }
 
 export function overlayDesktopCredentials<T extends SecretConfigShape>(
