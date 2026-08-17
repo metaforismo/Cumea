@@ -54,12 +54,14 @@ the harness until an apps-enabled turn explicitly mounts them into a driver
 that advertises Composio MCP support; unrelated or ineligible turns do not
 receive them.
 
-Credential replacement restarts the local harness and requires the returned
-configuration flags to confirm the exact candidate state. Candidate failure or
-mismatch triggers encrypted and live rollback. An unverifiable encrypted
-rollback blocks further writes and requires restart instead of presenting an
-ambiguous state as recovered. Full behavior and recovery guidance are
-documented in [Desktop credential storage](docs/credential-storage.md).
+A credential candidate is first validated in a fresh harness and must match the
+exact configured flag before the encrypted vault is replaced. The prior vault
+remains untouched during validation and is the transaction anchor. Candidate
+failure, confirmation mismatch, or secure-storage commit failure restores the
+previous in-memory bootstrap and harness. If that previous harness cannot
+recover and confirm, Cumea requires a full restart instead of presenting an
+ambiguous state as restored. Full behavior and recovery guidance are documented
+in [Desktop credential storage](docs/credential-storage.md).
 
 ## Reporting a vulnerability
 
@@ -85,9 +87,9 @@ so reports, reproduction details, and fixes remain confidential until coordinate
 - A packaged app must not consume preserved legacy plaintext while secure storage is blocked, nor
   silently downgrade to Electron's Linux `basic_text` backend. Migration must not erase the legacy
   source before a decryptable encrypted replacement exists.
-- A credential update must not report success until the restarted harness confirms the expected
-  configured flag. Failed or mismatched startup must restore the prior encrypted state or fail
-  visibly into a blocked/restart-required condition.
+- A credential update must not commit the candidate vault until the restarted harness confirms the
+  expected configured flag. Failed validation or persistence must leave the prior encrypted vault
+  authoritative and either restore its harness state or visibly require restart.
 - Agents run real CLIs (`claude`, `codex`) with the user's own privileges, and the permission broker
   is the consent layer for risky actions. Bypasses of the broker (approving without a user decision,
   spoofing the broker socket) are vulnerabilities.
