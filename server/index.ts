@@ -9,6 +9,14 @@ import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node
 import { fileURLToPath } from "node:url";
 
 import { writeFileAtomic } from "./atomic.ts";
+import {
+  localHostAllowed,
+  localOriginAllowed,
+  postHarnessReady,
+  requestedLocalPort,
+  requestedRemotePort,
+  tcpPort,
+} from "./local-listener.ts";
 import * as box from "./box.ts";
 import * as composio from "./composio.ts";
 import { ATTACHMENTS_DIR, ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
@@ -33,7 +41,8 @@ import { PairingStore } from "./pairing.ts";
 import { mentionedBots, parseBotAvatar, Store, type Message } from "./store.ts";
 import { WorkspaceStore, type AttachmentRecord, type RoutineSchedule, type TaskSource } from "./workspace.ts";
 
-const PORT = Number(process.env.CUMEA_PORT || 8799);
+const REQUESTED_LOCAL_PORT = requestedLocalPort();
+let LOCAL_PORT = REQUESTED_LOCAL_PORT;
 const STATIC_DIR = process.env.CUMEA_STATIC_DIR || null;
 
 interface RemoteListenerConfig {
@@ -46,8 +55,8 @@ type RequestSurface = "local" | "remote";
 
 function remoteListenerConfig(): RemoteListenerConfig | null {
   if (process.env.CUMEA_REMOTE_ACCESS !== "1") return null;
-  const port = Number(process.env.CUMEA_REMOTE_PORT || PORT + 1);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535 || port === PORT) {
+  const port = requestedRemotePort();
+  if (!Number.isInteger(port) || port < 1 || port > 65_535 || REQUESTED_LOCAL_PORT !== 0 && port === REQUESTED_LOCAL_PORT) {
     throw new Error("CUMEA_REMOTE_PORT must be a valid port different from CUMEA_PORT");
   }
   const bind = String(process.env.CUMEA_REMOTE_BIND || "127.0.0.1").trim();
@@ -117,7 +126,7 @@ function agentsIntegration(botId: string, depth: number) {
     args: [agentsProxyPath],
     env: {
       ...AGENTS_NODE_FLAG,
-      CUMEA_HARNESS_URL: `http://127.0.0.1:${PORT}`,
+      CUMEA_HARNESS_URL: `http://127.0.0.1:${LOCAL_PORT}`,
       CUMEA_BOT_ID: botId,
       CUMEA_COMMS_TOKEN: COMMS_TOKEN,
       CUMEA_TURN_DEPTH: String(depth),
@@ -935,13 +944,7 @@ function requestOriginAllowed(req: IncomingMessage, method: string): boolean {
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return true;
   const origin = req.headers.origin;
   if (!origin) return true; // native app, CLI, and internal agent helpers
-  try {
-    const url = new URL(origin);
-    const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
-    return url.protocol === "http:" && loopback && [String(PORT), "5199"].includes(url.port);
-  } catch {
-    return false;
-  }
+  return localOriginAllowed(origin, LOCAL_PORT);
 }
 
 function bearerToken(req: IncomingMessage): string | null {
@@ -998,12 +1001,15 @@ function parseRoutineSchedule(value: unknown): RoutineSchedule {
 async function handleRequest(req: IncomingMessage, res: ServerResponse, surface: RequestSurface) {
   let url: URL;
   try {
-    url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+    url = new URL(req.url ?? "/", `http://localhost:${LOCAL_PORT}`);
   } catch {
     return json(res, 400, { error: "invalid request URL" });
   }
   const path = url.pathname;
   const method = req.method ?? "GET";
+  if (surface === "local" && !localHostAllowed(req.headers.host, LOCAL_PORT)) {
+    return json(res, 403, { error: "host not allowed" });
+  }
   try {
     const pairingClaim = method === "POST" && path === "/api/pairing/claim";
     let authenticatedDeviceId: string | undefined;
@@ -1745,15 +1751,42 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
   }
 }
 
-const server = createServer((req, res) => void handleRequest(req, res, "local"));
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`cumea server on http://127.0.0.1:${PORT}`);
-});
+function listenTcp(
+  listener: ReturnType<typeof createServer>,
+  port: number,
+  bind: string,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error) => {
+      listener.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      listener.off("error", onError);
+      try {
+        resolve(tcpPort(listener.address()));
+      } catch (error) {
+        listener.close();
+        reject(error);
+      }
+    };
+    listener.once("error", onError);
+    listener.once("listening", onListening);
+    listener.listen(port, bind);
+  });
+}
 
-const remoteServer = REMOTE ? createServer((req, res) => void handleRequest(req, res, "remote")) : null;
-remoteServer?.listen(REMOTE!.port, REMOTE!.bind, () => {
-  console.log(`cumea authenticated mobile listener on http://${REMOTE!.bind}:${REMOTE!.port}`);
-});
+let remoteServer: ReturnType<typeof createServer> | null = null;
+if (REMOTE) {
+  remoteServer = createServer((req, res) => void handleRequest(req, res, "remote"));
+  await listenTcp(remoteServer, REMOTE.port, REMOTE.bind);
+  console.log(`Cumea remote listener running on ${REMOTE.bind}:${REMOTE.port}`);
+}
+
+const server = createServer((req, res) => void handleRequest(req, res, "local"));
+LOCAL_PORT = await listenTcp(server, REQUESTED_LOCAL_PORT, "127.0.0.1");
+console.log(`Cumea server running on http://127.0.0.1:${LOCAL_PORT}`);
+postHarnessReady(LOCAL_PORT);
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
