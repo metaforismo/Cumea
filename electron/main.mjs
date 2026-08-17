@@ -19,7 +19,7 @@ import {
   stopCua,
   registerCuaIpc,
 } from "./cua.mjs";
-import { createDesktopCredentialController } from "./credential-controller.mjs";
+import { createDesktopCredentialController } from "./desktop-credentials.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 import { createPerformanceRecorder } from "./performance.mjs";
 
