@@ -20,8 +20,17 @@ function bootstrap(values = {}) {
   return { ...EMPTY_BOOTSTRAP, ...values };
 }
 
-function fakeSafeStorage({ available = true, backend = "gnome_libsecret" } = {}) {
+function fakeSafeStorage({
+  available = true,
+  backend = "gnome_libsecret",
+  failEncryptions = [],
+} = {}) {
+  let encryptions = 0;
+  const failures = new Set(failEncryptions);
   return {
+    get encryptions() {
+      return encryptions;
+    },
     async isAsyncEncryptionAvailable() {
       return available;
     },
@@ -29,6 +38,8 @@ function fakeSafeStorage({ available = true, backend = "gnome_libsecret" } = {})
       return backend;
     },
     async encryptStringAsync(text) {
+      encryptions += 1;
+      if (failures.has(encryptions)) throw new Error("encryption failed");
       return Buffer.from(Buffer.from(text, "utf8").toString("base64"), "utf8");
     },
     async decryptStringAsync(buffer) {
@@ -66,6 +77,15 @@ async function fixture(options = {}) {
     vaultFile,
   });
   return { root, dataDir, vaultFile, app, safeStorage, controller };
+}
+
+async function readVault(current) {
+  const reopened = createCredentialVault({
+    file: current.vaultFile,
+    safeStorage: current.safeStorage,
+    platform: process.platform,
+  });
+  return reopened.read();
 }
 
 test("source mode keeps the explicit owner-only file fallback", async () => {
@@ -159,7 +179,7 @@ test("unavailable OS storage preserves recovery data but boots the harness empty
   }
 });
 
-test("successful updates persist first and restart with the new bootstrap", async () => {
+test("successful updates persist first and require harness confirmation", async () => {
   const current = await fixture();
   try {
     await current.controller.initialize();
@@ -176,12 +196,27 @@ test("successful updates persist first and restart with the new bootstrap", asyn
       composio: { configured: false },
       box: { configured: true },
     });
-    const reopened = createCredentialVault({
-      file: current.vaultFile,
-      safeStorage: current.safeStorage,
-      platform: process.platform,
-    });
-    assert.deepEqual(await reopened.read(), { box: "new-box" });
+    assert.deepEqual(await readVault(current), { box: "new-box" });
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
+test("an unconfirmed candidate is rolled back even when the restart returned", async () => {
+  const current = await fixture();
+  try {
+    await current.controller.initialize();
+    let restarts = 0;
+    await assert.rejects(
+      current.controller.update("box", "new-box", async () => {
+        restarts += 1;
+        return { box: { configured: false } };
+      }),
+      /credential was not changed/,
+    );
+    assert.equal(restarts, 2);
+    assert.deepEqual(await readVault(current), {});
+    assert.equal(current.controller.publicStatus().configured.box, false);
   } finally {
     rmSync(current.root, { recursive: true, force: true });
   }
@@ -191,24 +226,75 @@ test("failed harness restart rolls durable and live credentials back", async () 
   const current = await fixture();
   try {
     await current.controller.initialize();
-    await current.controller.update("box", "old-box", async () => ({}));
+    await current.controller.update("box", "old-box", async () => ({
+      box: { configured: true },
+    }));
     const observed = [];
     await assert.rejects(
       current.controller.update("box", "new-box", async () => {
         observed.push(current.controller.serverEnvironment().CUMEA_DESKTOP_BOX_TOKEN);
         if (observed.length === 1) throw new Error("restart failed");
-        return {};
+        return { box: { configured: true } };
       }),
       /credential was not changed/,
     );
     assert.deepEqual(observed, ["new-box", "old-box"]);
     assert.equal(current.controller.publicStatus().configured.box, true);
-    const reopened = createCredentialVault({
-      file: current.vaultFile,
-      safeStorage: current.safeStorage,
-      platform: process.platform,
-    });
-    assert.deepEqual(await reopened.read(), { box: "old-box" });
+    assert.deepEqual(await readVault(current), { box: "old-box" });
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
+test("failed durable rollback blocks further writes without lying about state", async () => {
+  const safeStorage = fakeSafeStorage({ failEncryptions: [3] });
+  const current = await fixture({ safeStorage });
+  try {
+    await current.controller.initialize();
+    await current.controller.update("box", "old-box", async () => ({
+      box: { configured: true },
+    }));
+    await assert.rejects(
+      current.controller.update("box", "new-box", async () => {
+        throw new Error("restart failed");
+      }),
+      /could not be rolled back safely/,
+    );
+    const status = current.controller.publicStatus();
+    assert.equal(status.mode, "blocked");
+    assert.equal(status.available, false);
+    assert.equal(status.configured.box, false);
+    assert.match(status.reason, /rollback could not be verified/);
+    // The durable value is deliberately treated as unknown/unsafe by the
+    // controller. In this fixture the candidate write is what remained.
+    assert.deepEqual(await readVault(current), { box: "new-box" });
+    await assert.rejects(
+      current.controller.update("box", "another", async () => ({ box: { configured: true } })),
+      /restart Cumea before retrying/,
+    );
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
+test("a restored vault reports when the harness itself cannot recover", async () => {
+  const current = await fixture();
+  try {
+    await current.controller.initialize();
+    await current.controller.update("box", "old-box", async () => ({
+      box: { configured: true },
+    }));
+    let restarts = 0;
+    await assert.rejects(
+      current.controller.update("box", "new-box", async () => {
+        restarts += 1;
+        if (restarts === 1) throw new Error("candidate restart failed");
+        return { box: { configured: false } };
+      }),
+      /could not recover automatically/,
+    );
+    assert.deepEqual(await readVault(current), { box: "old-box" });
+    assert.equal(current.controller.publicStatus().configured.box, true);
   } finally {
     rmSync(current.root, { recursive: true, force: true });
   }
