@@ -98,6 +98,22 @@ export function hasCredentialFields(value: unknown): boolean {
   );
 }
 
+/** Provider processes receive only the credential owned by their driver.
+ * Connector credentials stay in the harness and are never mounted into an
+ * unrelated Claude/Codex/Gemini/Grok CLI environment. */
+export function providerCredentialEnvironment(
+  driverKind: string,
+  credentials: Pick<DesktopCredentials, "xai" | "box">,
+): Record<string, string> {
+  if (driverKind === "grok" && credentials.xai) {
+    return { XAI_API_KEY: credentials.xai };
+  }
+  if (driverKind === "boxAgent" && credentials.box) {
+    return { BOX_TOKEN: credentials.box };
+  }
+  return {};
+}
+
 export function overlayDesktopCredentials<T extends SecretConfigShape>(
   config: T,
   credentials: DesktopCredentials,
