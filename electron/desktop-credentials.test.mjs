@@ -179,13 +179,14 @@ test("unavailable OS storage preserves recovery data but boots the harness empty
   }
 });
 
-test("successful updates persist first and require harness confirmation", async () => {
+test("successful updates confirm the harness before committing the vault", async () => {
   const current = await fixture();
   try {
     await current.controller.initialize();
     let observed;
     const result = await current.controller.update("box", "new-box", async () => {
       observed = current.controller.serverEnvironment();
+      assert.equal(current.safeStorage.encryptions, 0);
       return { composio: { configured: false }, box: { configured: true } };
     });
     assert.deepEqual(
@@ -196,13 +197,14 @@ test("successful updates persist first and require harness confirmation", async 
       composio: { configured: false },
       box: { configured: true },
     });
+    assert.equal(current.safeStorage.encryptions, 1);
     assert.deepEqual(await readVault(current), { box: "new-box" });
   } finally {
     rmSync(current.root, { recursive: true, force: true });
   }
 });
 
-test("an unconfirmed candidate is rolled back even when the restart returned", async () => {
+test("an unconfirmed candidate never replaces the previous vault", async () => {
   const current = await fixture();
   try {
     await current.controller.initialize();
@@ -215,6 +217,7 @@ test("an unconfirmed candidate is rolled back even when the restart returned", a
       /credential was not changed/,
     );
     assert.equal(restarts, 2);
+    assert.equal(current.safeStorage.encryptions, 0);
     assert.deepEqual(await readVault(current), {});
     assert.equal(current.controller.publicStatus().configured.box, false);
   } finally {
@@ -222,7 +225,7 @@ test("an unconfirmed candidate is rolled back even when the restart returned", a
   }
 });
 
-test("failed harness restart rolls durable and live credentials back", async () => {
+test("failed candidate restart restores the previous live and durable state", async () => {
   const current = await fixture();
   try {
     await current.controller.initialize();
@@ -239,6 +242,7 @@ test("failed harness restart rolls durable and live credentials back", async () 
       /credential was not changed/,
     );
     assert.deepEqual(observed, ["new-box", "old-box"]);
+    assert.equal(current.safeStorage.encryptions, 1);
     assert.equal(current.controller.publicStatus().configured.box, true);
     assert.deepEqual(await readVault(current), { box: "old-box" });
   } finally {
@@ -246,38 +250,31 @@ test("failed harness restart rolls durable and live credentials back", async () 
   }
 });
 
-test("failed durable rollback blocks further writes without lying about state", async () => {
-  const safeStorage = fakeSafeStorage({ failEncryptions: [3] });
+test("failed secure-storage commit leaves the previous vault untouched", async () => {
+  const safeStorage = fakeSafeStorage({ failEncryptions: [2] });
   const current = await fixture({ safeStorage });
   try {
     await current.controller.initialize();
     await current.controller.update("box", "old-box", async () => ({
       box: { configured: true },
     }));
+    const observed = [];
     await assert.rejects(
       current.controller.update("box", "new-box", async () => {
-        throw new Error("restart failed");
+        observed.push(current.controller.serverEnvironment().CUMEA_DESKTOP_BOX_TOKEN);
+        return { box: { configured: true } };
       }),
-      /could not be rolled back safely/,
+      /secure storage could not commit it/,
     );
-    const status = current.controller.publicStatus();
-    assert.equal(status.mode, "blocked");
-    assert.equal(status.available, false);
-    assert.equal(status.configured.box, false);
-    assert.match(status.reason, /rollback could not be verified/);
-    // The durable value is deliberately treated as unknown/unsafe by the
-    // controller. In this fixture the candidate write is what remained.
-    assert.deepEqual(await readVault(current), { box: "new-box" });
-    await assert.rejects(
-      current.controller.update("box", "another", async () => ({ box: { configured: true } })),
-      /restart Cumea before retrying/,
-    );
+    assert.deepEqual(observed, ["new-box", "old-box"]);
+    assert.equal(current.controller.publicStatus().configured.box, true);
+    assert.deepEqual(await readVault(current), { box: "old-box" });
   } finally {
     rmSync(current.root, { recursive: true, force: true });
   }
 });
 
-test("a restored vault reports when the harness itself cannot recover", async () => {
+test("the previous vault stays authoritative when harness recovery fails", async () => {
   const current = await fixture();
   try {
     await current.controller.initialize();
@@ -291,8 +288,9 @@ test("a restored vault reports when the harness itself cannot recover", async ()
         if (restarts === 1) throw new Error("candidate restart failed");
         return { box: { configured: false } };
       }),
-      /could not recover automatically/,
+      /previous vault is still authoritative/,
     );
+    assert.equal(current.safeStorage.encryptions, 1);
     assert.deepEqual(await readVault(current), { box: "old-box" });
     assert.equal(current.controller.publicStatus().configured.box, true);
   } finally {
