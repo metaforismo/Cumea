@@ -8,9 +8,18 @@ type Returns<TFunction, TValue> = TFunction extends (...args: never[]) => infer 
     : false
   : false;
 
-type _EncryptionAvailabilityIsSynchronous = Assert<
-  Returns<SafeStorage["isEncryptionAvailable"], boolean>
+type AsyncDecryptResult = Promise<{
+  result: string;
+  shouldReEncrypt: boolean;
+}>;
+
+type _AsyncAvailabilityReturnsPromise = Assert<
+  Returns<SafeStorage["isAsyncEncryptionAvailable"], Promise<boolean>>
 >;
-type _EncryptionReturnsBuffer = Assert<Returns<SafeStorage["encryptString"], Buffer>>;
-type _DecryptionReturnsString = Assert<Returns<SafeStorage["decryptString"], string>>;
+type _AsyncEncryptionReturnsBufferPromise = Assert<
+  Returns<SafeStorage["encryptStringAsync"], Promise<Buffer>>
+>;
+type _AsyncDecryptionReturnsRotationMetadata = Assert<
+  Returns<SafeStorage["decryptStringAsync"], AsyncDecryptResult>
+>;
 type _LinuxBackendIsInspectable = SafeStorage["getSelectedStorageBackend"];
