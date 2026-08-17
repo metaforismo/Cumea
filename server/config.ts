@@ -13,6 +13,7 @@ import {
   hasCredentialFields,
   overlayDesktopCredentials,
   providerCredentialEnvironment,
+  sanitizeManagedInstanceEnvironment,
   stripCredentialFields,
 } from "./desktop-credentials.ts";
 import { writeFileAtomic } from "./atomic.ts";
@@ -137,13 +138,16 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
           computer: { driver: "boxAgent" },
         };
   for (const entry of Object.values(map)) {
-    entry.environment = {
-      ...providerCredentialEnvironment(entry.driver, {
-        xai: cfg.xai?.key,
-        box: cfg.box?.token,
-      }),
-      ...entry.environment,
-    };
+    const configuredEnvironment = desktopBootstrap.managed
+      ? sanitizeManagedInstanceEnvironment(entry.environment)
+      : { ...(entry.environment ?? {}) };
+    const ownedCredential = providerCredentialEnvironment(entry.driver, {
+      xai: cfg.xai?.key,
+      box: cfg.box?.token,
+    });
+    entry.environment = desktopBootstrap.managed
+      ? { ...configuredEnvironment, ...ownedCredential }
+      : { ...ownedCredential, ...configuredEnvironment };
   }
   return map;
 }
