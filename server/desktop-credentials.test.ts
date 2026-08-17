@@ -8,11 +8,10 @@ import {
 } from "./desktop-credentials.ts";
 
 describe("desktop credential boundary", () => {
-  it("consumes and deletes per-boot secrets before providers can inherit them", () => {
+  it("consumes and deletes bootstrap secrets before providers can inherit them", () => {
     const environment: NodeJS.ProcessEnv = {
       PATH: "/bin",
       CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
-      CUMEA_DESKTOP_CREDENTIAL_TOKEN: "a".repeat(64),
       CUMEA_DESKTOP_XAI_KEY: " xai-secret ",
       CUMEA_DESKTOP_COMPOSIO_KEY: "connect-secret",
       CUMEA_DESKTOP_COMPOSIO_API_KEY: "project-secret",
@@ -22,7 +21,6 @@ describe("desktop credential boundary", () => {
     const result = consumeDesktopCredentialEnvironment(environment);
     expect(result).toEqual({
       managed: true,
-      token: "a".repeat(64),
       credentials: {
         xai: "xai-secret",
         composio: "connect-secret",
@@ -33,13 +31,7 @@ describe("desktop credential boundary", () => {
     expect(environment).toEqual({ PATH: "/bin" });
   });
 
-  it("rejects malformed managed bootstrap tokens and credential values", () => {
-    expect(() =>
-      consumeDesktopCredentialEnvironment({
-        CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
-        CUMEA_DESKTOP_CREDENTIAL_TOKEN: "short",
-      }),
-    ).toThrow(/per-boot token/);
+  it("rejects malformed credential values", () => {
     expect(() => applyDesktopCredential({}, "box", "line\nbreak")).toThrow(
       /invalid characters/,
     );
