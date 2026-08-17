@@ -16,6 +16,9 @@ A fixed-machine workflow and trend history remain tracked separately in `TODO.md
 lands, timings collected on arbitrary hosted runners or different developer machines are diagnostic,
 not verified Cumea improvement claims.
 
+For packaged startup phase semantics and the P0.03 split, see
+[`desktop-startup.md`](desktop-startup.md).
+
 ## Run the packaged benchmark
 
 On macOS, the default command builds an unsigned directory package and then measures five returning-
@@ -25,14 +28,20 @@ profile warm launches:
 pnpm perf:desktop -- --label baseline
 ```
 
-The default runtime is `fixture`. It still exercises the packaged Electron main process, embedded
-harness, durable store seed, HTTP API, SSE transport, React renderer, and normal shell readiness, but:
+The default runtime is `fixture`. For a **returning usable-shell sample** it exercises the packaged
+Electron main process, local gateway, embedded harness, durable store seed, HTTP API, SSE transport,
+React renderer, and usable-shell readiness. The fixture additionally:
 
 - uses an empty provider fleet, so it does not probe or launch Claude, Codex, Grok, Gemini, or Box;
 - removes known external API-key environment variables from child processes;
 - disables remote access;
 - records an unavailable local-computer descriptor without loading the native CUA SDK or daemon;
 - stores Electron profile/session/log/crash data and Cumea data inside the run directory.
+
+P0.03 changes the sequencing of **first-run paint**: the packaged shell and onboarding can now paint
+before the harness is ready. Therefore a first-run sample still exercises the real packaged desktop
+path up to its terminal paint mark, but it must not be described as proof that the harness/provider
+bootstrap completed before that mark. Harness readiness remains a separate timing dimension.
 
 This is the reproducible startup fixture. It is not evidence that a live provider or computer-use
 journey works.
@@ -50,6 +59,10 @@ pnpm perf:desktop -- \
   --samples 5
 ```
 
+After P0.03a this mark can occur while the harness is still starting. That is intentional: it measures
+the user-visible first-run surface, not full agent-host readiness. `CUMEA_PERFORMANCE_AUTO_QUIT=1`
+may consequently terminate the still-starting harness after the terminal mark is flushed.
+
 A first-run benchmark cannot be labelled warm or Chromium-cold. The runner rejects mixed semantics
 rather than silently producing incomparable samples.
 
@@ -65,6 +78,10 @@ pnpm perf:desktop -- \
   --cache warm \
   --samples 5
 ```
+
+The returning terminal mark remains `shell-usable-painted`, which requires the existing connected,
+configured, active-agent condition. It therefore remains later than mere shell paint and normally
+includes harness availability.
 
 The prime report remains in `raw/prime.json` for inspection but is excluded from median and p95.
 
@@ -101,9 +118,11 @@ pass `--app`, or use `--skip-build` when a compatible package already exists und
 
 ### Explicit real-runtime measurement
 
-`--runtime real` preserves ambient provider/CLI environment and follows the production CUA path. It
-may inspect authenticated local CLIs, start native components, contact configured third parties, or
-show operating-system permission prompts depending on the isolated configuration and host state:
+`--runtime real` preserves ambient provider/CLI environment and follows production capability paths.
+It may inspect authenticated local CLIs, contact configured third parties, or show operating-system
+permission prompts when the corresponding capability is actually inspected or requested. P0.03a
+makes local-computer reconciliation lazy, so merely painting the normal packaged shell is no longer
+supposed to initialize the CUA SDK/TCC/socket path.
 
 ```sh
 pnpm perf:desktop -- \
@@ -222,19 +241,21 @@ can be compared without assuming their `performance.timeOrigin` values are ident
 |---|---|
 | `main.module-to-ready` | Electron main module evaluated → Electron `ready` event |
 | `main.cache-clear` | Chromium HTTP/code cache maintenance start → settle; maintenance reports only |
-| `main.cua-initialization` | local-computer initialization or deterministic-disable start → settle |
-| `main.server-startup` | packaged harness startup request → verified harness readiness |
+| `main.cua-initialization` | local-computer initialization/disable marks where explicitly recorded; normal P0.03a startup no longer performs real CUA reconciliation |
+| `main.server-startup` | asynchronous packaged harness startup request → verified harness readiness |
 | `main.window-creation` | `BrowserWindow` construction start → constructor returned |
 | `main.navigation` | `loadURL` request → renderer `did-finish-load` |
-| `renderer.entry-to-shell-painted` | renderer entry evaluated → initial shell received two paint opportunities |
+| `renderer.entry-to-shell-painted` | renderer entry evaluated → initial packaged shell received two paint opportunities; **does not imply harness readiness** |
 | `renderer.entry-to-shell-usable` | renderer entry evaluated → SSE connected, configuration present, an active agent present, and that committed state received two paint opportunities |
-| `renderer.entry-to-onboarding-painted` | renderer entry evaluated → first-run onboarding received two paint opportunities |
+| `renderer.entry-to-onboarding-painted` | renderer entry evaluated → first-run onboarding received two paint opportunities; can precede harness readiness after P0.03a |
 | `desktop.module-to-shell-usable` | Electron main module evaluated → returning usable-shell paint |
 | `desktop.module-to-onboarding-painted` | Electron main module evaluated → first-run onboarding paint |
 
-The readiness definitions are intentionally explicit and versioned. Later atomic-bootstrap work may
-tighten them; that change must document or version the semantics rather than silently comparing
-unlike measurements.
+The readiness definitions are intentionally explicit and versioned. P0.03a changes sequencing rather
+than silently pretending the old first-run paint and new first-run paint contain identical work.
+P0.03b will also change the harness readiness mechanism from HTTP polling/fixed fallback ports to an
+OS-assigned port plus parent/child message. P0.04 may later tighten application-data readiness through
+an atomic bootstrap. Each change must be documented before cross-version comparisons are published.
 
 ## Cold, warm, and reopen terminology
 
@@ -268,12 +289,16 @@ A public before/after table must include:
 - exact before and after commits;
 - matching machine fingerprint and an honest hardware/OS description;
 - packaged production build mode;
-- matching profile, data fixture, cache treatment, and runtime;
+- matching profile, data fixture, cache treatment, runtime, and readiness semantics;
 - number of samples;
 - median and p95, not only the best run;
 - raw or summarized report artifacts;
 - any trade-off, including memory regressions;
 - a statement when the PR combines changes and cannot attribute gains individually.
+
+A comparison that crosses a documented startup-sequencing change must state which work moved before
+or after the terminal mark. Do not use a faster paint number as evidence that the agent host itself
+became ready faster.
 
 Until a fixed-machine workflow and trend series exist, timing numbers remain diagnostic and must not
 be presented as independently verified Cumea performance improvements.
