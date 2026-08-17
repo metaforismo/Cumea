@@ -1,20 +1,17 @@
 // Config + data dirs. In source/browser mode optional credentials may still
 // use ~/.cumea/config.json. A packaged Electron host instead injects an
 // OS-backed credential bootstrap; this module consumes and deletes those env
-// values before provider processes are loaded, then keeps only an in-memory
-// copy for the life of this harness process.
+// values before provider processes are loaded, then keeps only an immutable
+// in-memory copy for the life of this harness process.
 import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import type { InstanceConfigMap } from "./contracts.ts";
 import {
-  applyDesktopCredential,
   consumeDesktopCredentialEnvironment,
   overlayDesktopCredentials,
   stripCredentialFields,
-  type DesktopCredentialSection,
-  type DesktopCredentials,
 } from "./desktop-credentials.ts";
 import { writeFileAtomic } from "./atomic.ts";
 
@@ -38,25 +35,10 @@ export const NATIVE_DIR = join(DATA_DIR, "native");
 export const ATTACHMENTS_DIR = join(DATA_DIR, "attachments");
 
 const desktopBootstrap = consumeDesktopCredentialEnvironment(process.env);
-let desktopCredentials: DesktopCredentials = desktopBootstrap.credentials;
+const desktopCredentials = Object.freeze({ ...desktopBootstrap.credentials });
 
 export function desktopCredentialsManaged(): boolean {
   return desktopBootstrap.managed;
-}
-
-export function desktopCredentialToken(): string {
-  return desktopBootstrap.token;
-}
-
-export function setDesktopCredential(
-  section: DesktopCredentialSection,
-  value: unknown,
-): AppConfig {
-  if (!desktopBootstrap.managed) {
-    throw new Error("desktop credential management is not enabled for this harness");
-  }
-  desktopCredentials = applyDesktopCredential(desktopCredentials, section, value);
-  return loadConfig();
 }
 
 export function ensureDirs() {
@@ -108,7 +90,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   }
   for (const key of ["xai", "composio", "box", "profile"] as const) {
     if (incoming[key] && typeof incoming[key] === "object") {
-      disk[key] = { ...(disk[key] as object), ...incoming[key] } as never;
+      Object.assign((disk[key] ??= {} as never), incoming[key]);
     }
   }
   mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
