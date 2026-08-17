@@ -12,6 +12,19 @@ All notable changes to Cumea are documented here. This project follows
   bounded logs, process-tree timeouts, and versioned manifests. No benchmark result is claimed until
   the same scenarios are run as a trend series on one labelled fixed machine.
 
+### Security
+
+- Packaged Electron credentials now use an allowlisted, versioned vault encrypted through the
+  operating-system credential service. Legacy plaintext is removed only after successful encrypted
+  migration; unavailable/corrupt storage preserves the recovery source while the packaged harness
+  starts without credentials instead of silently reusing or rewriting plaintext.
+- Packaged credential values remain write-only to the renderer, are supplied only to a fresh harness
+  bootstrap, and are removed from the harness environment before provider child processes load.
+  Credential changes restart the harness and roll the encrypted/live state back when restart fails.
+- Source/browser hosting retains the explicit owner-only `config.json` fallback. The unsigned package
+  smoke verifies layout only and does not yet prove Keychain, DPAPI, Linux secret-service, signing,
+  notarization, or physical-machine behavior.
+
 ## [0.1.0] - 2026-08-13 — Developer Preview
 
 ### Added
