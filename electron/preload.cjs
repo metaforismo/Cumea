@@ -2,8 +2,21 @@
 // this narrow surface (window.cumea), never Node or ipcRenderer itself.
 const { contextBridge, ipcRenderer } = require("electron");
 
+const performanceEnabled = Boolean(process.env.CUMEA_PERFORMANCE_FILE?.trim());
+const performanceScenario = performanceEnabled
+  ? Object.freeze({
+      profile:
+        process.env.CUMEA_PERFORMANCE_PROFILE === "first-run" ? "first-run" : "returning",
+      seedOnboarding: process.env.CUMEA_PERFORMANCE_SEED_ONBOARDING === "1",
+    })
+  : undefined;
+
 contextBridge.exposeInMainWorld("cumea", {
   platform: process.platform,
+  /** Non-secret benchmark mode, available only with an explicit local report
+   * target. It can seed the isolated profile's onboarding marker but cannot
+   * alter provider, permission, filesystem, or transport state. */
+  performanceScenario,
   /** Opt-in local performance marks. Rebuild the payload here so a compromised
    * renderer cannot attach unrelated data; main still validates the exact
    * mark allowlist and finite clocks. */

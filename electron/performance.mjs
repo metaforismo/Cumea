@@ -13,6 +13,8 @@ export const MAIN_PERFORMANCE_MARKS = new Set([
   "cumea:main:module-evaluated",
   "cumea:main:will-finish-launching",
   "cumea:main:ready",
+  "cumea:main:cache-clear-start",
+  "cumea:main:cache-clear-settled",
   "cumea:main:cua-start",
   "cumea:main:cua-settled",
   "cumea:main:server-start",
@@ -39,10 +41,13 @@ export const RENDERER_PERFORMANCE_MARKS = new Set([
   "cumea:renderer:transport-connected",
   "cumea:renderer:shell-usable-committed",
   "cumea:renderer:shell-usable-painted",
+  "cumea:renderer:onboarding-committed",
+  "cumea:renderer:onboarding-painted",
 ]);
 
 const DURATION_PAIRS = Object.freeze({
   "main.module-to-ready": ["cumea:main:module-evaluated", "cumea:main:ready"],
+  "main.cache-clear": ["cumea:main:cache-clear-start", "cumea:main:cache-clear-settled"],
   "main.cua-initialization": ["cumea:main:cua-start", "cumea:main:cua-settled"],
   "main.server-startup": ["cumea:main:server-start", "cumea:main:server-ready"],
   "main.window-creation": ["cumea:main:window-create-start", "cumea:main:window-created"],
@@ -55,9 +60,17 @@ const DURATION_PAIRS = Object.freeze({
     "cumea:renderer:entry-evaluated",
     "cumea:renderer:shell-usable-painted",
   ],
+  "renderer.entry-to-onboarding-painted": [
+    "cumea:renderer:entry-evaluated",
+    "cumea:renderer:onboarding-painted",
+  ],
   "desktop.module-to-shell-usable": [
     "cumea:main:module-evaluated",
     "cumea:renderer:shell-usable-painted",
+  ],
+  "desktop.module-to-onboarding-painted": [
+    "cumea:main:module-evaluated",
+    "cumea:renderer:onboarding-painted",
   ],
 });
 

@@ -75,6 +75,11 @@ export function summarizePerformanceReports(
       packaged: environmentValues(validReports, "packaged"),
       appVersion: environmentValues(validReports, "appVersion"),
       commit: environmentValues(validReports, "commit"),
+      profile: environmentValues(validReports, "profile"),
+      cacheTreatment: environmentValues(validReports, "cacheTreatment"),
+      runtime: environmentValues(validReports, "runtime"),
+      machineFingerprint: environmentValues(validReports, "machineFingerprint"),
+      machineLabel: environmentValues(validReports, "machineLabel"),
     },
     metrics,
   };

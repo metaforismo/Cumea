@@ -26,6 +26,18 @@ test("renderer marks accept only the bounded allowlist and finite clocks", () =>
       atEpochMs: 1_025.125,
     },
   );
+  assert.deepEqual(
+    normalizeRendererMark({
+      name: "cumea:renderer:onboarding-painted",
+      timeOrigin: 2_000,
+      startTime: 50,
+    }),
+    {
+      name: "cumea:renderer:onboarding-painted",
+      source: "renderer",
+      atEpochMs: 2_050,
+    },
+  );
   assert.equal(
     normalizeRendererMark({ name: "cumea:renderer:secret", timeOrigin: 1, startTime: 1 }),
     null,
@@ -52,13 +64,16 @@ test("duration derivation ignores missing or backwards pairs", () => {
   );
 });
 
-test("reports are sorted and contain derived metrics", () => {
+test("reports are sorted and contain shell, onboarding, and cache metrics", () => {
   const report = buildPerformanceReport({
     generatedAt: new Date("2026-08-17T12:00:00.000Z"),
     metadata: { label: "fixture" },
     marks: [
       { name: "cumea:renderer:shell-usable-painted", source: "renderer", atEpochMs: 1_500 },
+      { name: "cumea:renderer:onboarding-painted", source: "renderer", atEpochMs: 1_450 },
       { name: "cumea:main:module-evaluated", source: "main", atEpochMs: 1_000 },
+      { name: "cumea:main:cache-clear-start", source: "main", atEpochMs: 1_080 },
+      { name: "cumea:main:cache-clear-settled", source: "main", atEpochMs: 1_100 },
       { name: "cumea:renderer:entry-evaluated", source: "renderer", atEpochMs: 1_300 },
     ],
   });
@@ -66,12 +81,18 @@ test("reports are sorted and contain derived metrics", () => {
   assert.equal(report.generatedAt, "2026-08-17T12:00:00.000Z");
   assert.deepEqual(report.marks.map((mark) => mark.name), [
     "cumea:main:module-evaluated",
+    "cumea:main:cache-clear-start",
+    "cumea:main:cache-clear-settled",
     "cumea:renderer:entry-evaluated",
+    "cumea:renderer:onboarding-painted",
     "cumea:renderer:shell-usable-painted",
   ]);
   assert.deepEqual(report.durationsMs, {
+    "main.cache-clear": 20,
     "renderer.entry-to-shell-usable": 200,
+    "renderer.entry-to-onboarding-painted": 150,
     "desktop.module-to-shell-usable": 500,
+    "desktop.module-to-onboarding-painted": 450,
   });
 });
 

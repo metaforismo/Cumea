@@ -14,17 +14,26 @@ import { normalizeCuaPermissions, toPublicCuaStatus } from "./cua-contract.mjs";
 const INSTALLED_DRIVER = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
 const STANDALONE_SOCKET = path.join(app.getPath("home"), "Library/Caches/cua-driver/cua-driver.sock");
 const HOST_BUNDLE_ID = "io.github.metaforismo.cumea";
-const CONNECTION_PATH = path.join(app.getPath("userData"), "cua-connection.json");
 
 let embeddedHost = null;
 let connection = null;
 let activeGeneration = null;
 let transition = Promise.resolve();
+let performanceDisabled = false;
+
+function connectionPath() {
+  // app.setPath("userData", …) is applied by the benchmark entry after static
+  // imports have evaluated. Resolve lazily so an isolated run can never write
+  // its descriptor into the developer's normal Cumea profile.
+  return path.join(app.getPath("userData"), "cua-connection.json");
+}
 
 function persistConnection(value) {
-  const temporary = `${CONNECTION_PATH}.tmp-${process.pid}`;
+  const target = connectionPath();
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  const temporary = `${target}.tmp-${process.pid}`;
   fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(temporary, CONNECTION_PATH);
+  fs.renameSync(temporary, target);
 }
 
 function setConnection(value) {
@@ -185,6 +194,15 @@ async function reconcileEmbedded(binary, { request = false, restart = false } = 
 }
 
 async function reconcileCua(options = {}) {
+  if (performanceDisabled) {
+    await stopEmbedded().catch(() => undefined);
+    return setConnection({
+      mode: "unavailable",
+      state: "unavailable",
+      reason: "local computer control is disabled in the deterministic performance fixture",
+    });
+  }
+
   if (process.platform !== "darwin") {
     await stopEmbedded().catch(() => undefined);
     return setConnection({
@@ -223,6 +241,15 @@ async function reconcileCua(options = {}) {
 
 export function publicCuaStatus() {
   return toPublicCuaStatus(connection);
+}
+
+export function disableCuaForPerformance() {
+  performanceDisabled = true;
+  return setConnection({
+    mode: "unavailable",
+    state: "unavailable",
+    reason: "local computer control is disabled in the deterministic performance fixture",
+  });
 }
 
 export function startCua() {

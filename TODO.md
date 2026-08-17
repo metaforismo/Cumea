@@ -43,8 +43,12 @@ should not bypass the release, security, persistence, or measurement foundations
   definitions, and bundle-size budgets before changing startup behavior.
   - [x] P0.01a — Add opt-in cross-process timing marks, a versioned local report format,
     deterministic summary/comparison tests, documented metric semantics, and CI bundle budgets.
-  - [ ] P0.01b — Add a packaged multi-sample runner with isolated first-run/returning profiles,
-    explicit cache treatment, timeout/recovery behavior, and fixed-machine trend artifacts.
+  - [x] P0.01b — Add an isolated packaged multi-sample runner for first-run, returning warm, and
+    Chromium-cold profiles, with a deterministic no-provider fixture, explicit real-runtime mode,
+    separate cache-maintenance launches, bounded logs, process-tree timeouts, manifests, and tests.
+  - [ ] P0.01c — Run the packaged scenarios on one labelled fixed Mac, retain raw/summary artifacts,
+    establish the first trend series, define variance-aware regression review thresholds, and keep
+    hosted variable-hardware measurements informational.
 - [ ] **P0.02 — Operating-system secret storage.** Migrate optional desktop credentials from plaintext
   configuration to Electron `safeStorage`, keep the renderer write-only, redact diagnostics, and
   retain a tested recovery path when the OS credential store is unavailable.
@@ -152,3 +156,4 @@ Every implementation PR must include, where applicable:
 |---|---|---|
 | 2026-08-17 | Planning | Created the ordered execution plan and began triage of draft PR #9. |
 | 2026-08-17 | P0.01a | Added opt-in desktop timing evidence, summary/comparison tooling, tests, documentation, and CI bundle budgets without changing startup sequencing. |
+| 2026-08-17 | P0.01b | Added the isolated packaged multi-sample runner, deterministic fixture, first-run/returning/cache protocols, bounded evidence, and cross-platform process tests; fixed-machine trends remain P0.01c. |

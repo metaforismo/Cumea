@@ -43,8 +43,9 @@
     "release:sbom": "node scripts/generate-sbom.mjs",
     "release:checksums": "node scripts/generate-checksums.mjs --directory release --output release/SHA256SUMS",
     "release:verify-package": "node scripts/verify-package-contents.mjs",
-    "test:performance": "node --test electron/performance.test.mjs scripts/perf-lib.test.mjs",
+    "test:performance": "node --check electron/main.mjs && node --check electron/cua.mjs && node --check electron/preload.cjs && node --check scripts/perf-desktop.mjs && node --test electron/performance.test.mjs scripts/perf-lib.test.mjs scripts/perf-desktop.test.mjs",
     "perf:budget": "node scripts/check-performance-budget.mjs",
+    "perf:desktop": "node scripts/perf-desktop.mjs",
     "perf:summary": "node scripts/perf-summary.mjs",
     "perf:compare": "node scripts/perf-compare.mjs"
   },

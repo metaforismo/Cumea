@@ -7,6 +7,8 @@ const ALLOWED_MARKS = new Set([
   "cumea:renderer:transport-connected",
   "cumea:renderer:shell-usable-committed",
   "cumea:renderer:shell-usable-painted",
+  "cumea:renderer:onboarding-committed",
+  "cumea:renderer:onboarding-painted",
 ]);
 
 function publish(name: string, startTime: number) {

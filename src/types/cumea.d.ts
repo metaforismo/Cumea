@@ -13,6 +13,10 @@ declare global {
   interface Window {
     cumea?: {
       platform: "darwin" | "win32" | "linux" | string;
+      performanceScenario?: {
+        profile: "first-run" | "returning";
+        seedOnboarding: boolean;
+      };
       performanceMark(payload: {
         name: string;
         timeOrigin: number;
