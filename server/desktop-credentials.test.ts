@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyDesktopCredential,
   consumeDesktopCredentialEnvironment,
+  hasCredentialFields,
   overlayDesktopCredentials,
   stripCredentialFields,
 } from "./desktop-credentials.ts";
@@ -35,6 +36,15 @@ describe("desktop credential boundary", () => {
     expect(() => applyDesktopCredential({}, "box", "line\nbreak")).toThrow(
       /invalid characters/,
     );
+  });
+
+  it("detects every credential-shaped config patch, including clears", () => {
+    expect(hasCredentialFields({ xai: { key: "secret" } })).toBe(true);
+    expect(hasCredentialFields({ composio: { key: null } })).toBe(true);
+    expect(hasCredentialFields({ composio: { apiKey: "" } })).toBe(true);
+    expect(hasCredentialFields({ box: { token: undefined } })).toBe(true);
+    expect(hasCredentialFields({ xai: { url: "https://example.test" } })).toBe(false);
+    expect(hasCredentialFields({ profile: { name: "Francesco" } })).toBe(false);
   });
 
   it("applies replacement and clear operations without mutating the current state", () => {
