@@ -75,6 +75,17 @@ export function saveConfig(patch: Partial<AppConfig>): void {
 // Config-file keys are injected as per-instance environment so drivers
 // see them without needing real process env vars.
 export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
+  // The deterministic performance fixture is allowed only when the Electron
+  // process also has an explicit local report target. It keeps startup data
+  // real (store, API, SSE, renderer) while avoiding CLI probes, accounts,
+  // provider processes, and network-dependent model discovery.
+  if (
+    process.env.CUMEA_PERFORMANCE_MODE === "1" &&
+    Boolean(process.env.CUMEA_PERFORMANCE_FILE?.trim())
+  ) {
+    return {};
+  }
+
   // The default `grok` instance rides the `grokAgent` driver, not the API-key
   // one: like claude and codex it needs no credential from us, just the CLI
   // installed and logged in (it shows up unavailable otherwise). The API-key
