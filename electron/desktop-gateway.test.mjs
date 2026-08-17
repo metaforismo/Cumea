@@ -80,10 +80,25 @@ test("gateway serves the packaged shell before a harness target exists", async (
     assert.equal(pending.status, 503);
     assert.deepEqual(await pending.json(), { error: "agent host is starting" });
     assert.equal(pending.headers.get("cache-control"), "no-store");
+    assert.equal(pending.headers.get("retry-after"), "1");
+    assert.equal(pending.headers.get("x-cumea-desktop-state"), "starting");
+
+    gateway.clearHarnessTarget("agent host is restarting");
+    const restarting = await fetch(`${origin}/api/config`);
+    assert.equal(restarting.status, 503);
+    assert.deepEqual(await restarting.json(), { error: "agent host is restarting" });
+    assert.equal(restarting.headers.get("x-cumea-desktop-state"), "restarting");
+
+    gateway.clearHarnessTarget("agent host could not start");
+    const failed = await fetch(`${origin}/api/config`);
+    assert.equal(failed.status, 503);
+    assert.deepEqual(await failed.json(), { error: "agent host could not start" });
+    assert.equal(failed.headers.get("x-cumea-desktop-state"), "failed");
 
     const rebound = await rawRequest(origin, { headers: { host: "attacker.example" } });
     assert.equal(rebound.status, 403);
     assert.deepEqual(JSON.parse(rebound.body), { error: "host not allowed" });
+    assert.equal(rebound.headers["x-cumea-desktop-state"], undefined);
 
     const missingAsset = await fetch(`${origin}/assets/missing.js`);
     assert.equal(missingAsset.status, 404);
@@ -174,6 +189,7 @@ test("gateway streams API/SSE and translates only its own browser Origin", async
     gateway.clearHarnessTarget();
     const afterClear = await fetch(`${origin}/api/health`);
     assert.equal(afterClear.status, 503);
+    assert.equal(afterClear.headers.get("x-cumea-desktop-state"), "starting");
   } finally {
     await gateway.close();
     await close(harness);
