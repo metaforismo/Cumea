@@ -1,0 +1,39 @@
+name: P0.03b final helper cleanup
+
+on:
+  push:
+    branches:
+      - perf/harness-ready-handshake
+    paths:
+      - .github/workflows/p003b-final-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: perf/harness-ready-handshake
+      - name: Remove every one-time refactor helper
+        shell: bash
+        run: |
+          git rm -f --ignore-unmatch \
+            .github/workflows/p003b-refactor.yml \
+            .github/workflows/p003b-electron-refactor.yml \
+            .github/workflows/p003b-cleanup.yml \
+            .github/workflows/p003b-final-cleanup.yml \
+            scripts/apply-p003b-server-refactor.mjs \
+            scripts/apply-p003b-electron-refactor.mjs
+          git diff --check
+      - name: Commit final cleanup to branch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: remove temporary P0.03b automation"
+          git push origin HEAD:perf/harness-ready-handshake
