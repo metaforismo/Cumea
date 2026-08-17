@@ -1,4 +1,14 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, session, shell, systemPreferences, utilityProcess } from "electron";
+import {
+  app,
+  BrowserWindow,
+  desktopCapturer,
+  ipcMain,
+  safeStorage,
+  session,
+  shell,
+  systemPreferences,
+  utilityProcess,
+} from "electron";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +19,7 @@ import {
   stopCua,
   registerCuaIpc,
 } from "./cua.mjs";
+import { createDesktopCredentialController } from "./desktop-credentials.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 import { createPerformanceRecorder } from "./performance.mjs";
 
@@ -19,6 +30,12 @@ const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 let SERVER_PORT = 8799;
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const MANAGED_SECRET_ENV = [
+  "BOX_TOKEN",
+  "COMPOSIO_API_KEY",
+  "COMPOSIO_KEY",
+  "XAI_API_KEY",
+];
 
 const performanceOutputFile = process.env.CUMEA_PERFORMANCE_FILE?.trim() ?? "";
 const performanceEnabled = Boolean(performanceOutputFile);
@@ -121,39 +138,52 @@ ipcMain.on("performance:renderer-mark", (_event, payload) => {
 function isSafeExternalUrl(raw) {
   try {
     const url = new URL(raw);
-    return url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname));
+    return url.protocol === "https:" ||
+      (url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname));
   } catch {
     return false;
   }
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+let desktopCredentials = null;
+let serverProc = null;
+let serverReady = true;
+
+function serverEnvironment() {
+  const environment = { ...process.env };
+  if (desktopCredentials?.publicStatus().managed) {
+    for (const name of MANAGED_SECRET_ENV) delete environment[name];
+  }
+  return {
+    ...environment,
+    ...desktopCredentials?.serverEnvironment(),
+    CUMEA_STATIC_DIR: path.join(process.resourcesPath, "ui"),
+    CUMEA_PORT: String(SERVER_PORT),
+    CUMEA_CUA_CONNECTION: path.join(app.getPath("userData"), "cua-connection.json"),
+  };
+}
+
 // Packaged: the harness server ships in Resources (compiled JS, zero deps)
 // and runs on Electron's own Node via utilityProcess. It serves the built
 // UI too, so the window talks to one origin and there is no dev proxy.
-// A stray server on the default port must not brick the app — fall back to
-// alternate ports until one binds AND identifies as ours (the probe checks
-// our API shape, not just a 200).
-let serverProc = null;
-let serverReady = true;
 async function startServerOn(port) {
   const entry = path.join(process.resourcesPath, "server", "index.js");
+  SERVER_PORT = port;
   const proc = utilityProcess.fork(entry, [], {
-    env: {
-      ...process.env,
-      CUMEA_STATIC_DIR: path.join(process.resourcesPath, "ui"),
-      CUMEA_PORT: String(port),
-      CUMEA_CUA_CONNECTION: path.join(app.getPath("userData"), "cua-connection.json"),
-    },
+    env: serverEnvironment(),
     stdio: "inherit",
   });
   let exited = false;
   proc.once("exit", () => {
     exited = true;
+    if (serverProc === proc) serverProc = null;
   });
-  // wait for the port to answer (fresh machine: first boot writes data dirs).
-  // Identity check is by PID: a dev harness server has the same API shape,
-  // so only the child we actually forked (matching pid + static serving)
-  // counts as ours.
+  // Wait for the port to answer. Identity is verified by the exact child PID,
+  // not by accepting any process that happens to expose a similar endpoint.
   for (let i = 0; i < 40; i++) {
     if (exited) return null;
     try {
@@ -161,12 +191,12 @@ async function startServerOn(port) {
       if (res.ok) {
         const body = await res.json().catch(() => null);
         if (body?.app === "cumea" && body.pid === proc.pid && body.static) return proc;
-        break; // someone else owns this port — try the next one
+        break;
       }
     } catch {
       /* not up yet */
     }
-    await new Promise((r) => setTimeout(r, 500));
+    await delay(500);
   }
   try {
     proc.kill();
@@ -175,8 +205,7 @@ async function startServerOn(port) {
 }
 
 async function startServerPackaged() {
-  // two passes: a quit-and-reopen relaunch can race the dying instance's
-  // server during teardown — one settle-and-retry covers it
+  // Two passes cover a quit-and-reopen race with a dying previous instance.
   for (let attempt = 0; attempt < 2; attempt++) {
     for (const port of [8799, 18799, 28799]) {
       const proc = await startServerOn(port);
@@ -186,9 +215,45 @@ async function startServerPackaged() {
         return true;
       }
     }
-    await new Promise((r) => setTimeout(r, 2500));
+    await delay(2500);
   }
   return false;
+}
+
+async function stopServerProcess() {
+  const current = serverProc;
+  serverProc = null;
+  if (!current) return;
+  await Promise.race([
+    new Promise((resolve) => {
+      current.once("exit", resolve);
+      try {
+        current.kill();
+      } catch {
+        resolve();
+      }
+    }),
+    delay(3000),
+  ]);
+}
+
+async function restartServerForCredentials() {
+  if (!app.isPackaged) {
+    throw new Error("secure credential updates require the packaged desktop host");
+  }
+  const port = SERVER_PORT;
+  await stopServerProcess();
+  await delay(100);
+  const proc = await startServerOn(port);
+  if (!proc) {
+    serverReady = false;
+    throw new Error("the agent host could not restart on its existing port");
+  }
+  serverProc = proc;
+  serverReady = true;
+  const response = await fetch(`http://127.0.0.1:${port}/api/config`);
+  if (!response.ok) throw new Error("the restarted agent host did not return configuration status");
+  return response.json();
 }
 
 const ERROR_PAGE =
@@ -229,7 +294,9 @@ function createWindow() {
   });
 
   win.webContents.on("will-navigate", (event, url) => {
-    const allowedOrigin = app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin;
+    const allowedOrigin = app.isPackaged
+      ? `http://127.0.0.1:${SERVER_PORT}`
+      : new URL(DEV_URL).origin;
     try {
       if (new URL(url).origin === allowedOrigin) return;
     } catch {}
@@ -264,11 +331,11 @@ ipcMain.handle("screen:frame", async () => {
 
 // Onboarding permission checks. Status reads are free; the mic request
 // pops the real TCC prompt attributed to the app.
-//
-// CUA Accessibility/Screen Recording permission requests use the official SDK
-// in cua.mjs. These generic handlers remain for dictation and repair links.
 ipcMain.handle("perm:status", () => ({
-  mic: process.platform === "darwin" ? systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown" : "unavailable",
+  mic:
+    process.platform === "darwin"
+      ? systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown"
+      : "unavailable",
 }));
 ipcMain.handle("perm:request-mic", async () => {
   if (process.platform !== "darwin") return false;
@@ -283,7 +350,11 @@ ipcMain.handle("perm:request-mic", async () => {
 // Settings; deep-link straight to the right privacy pane.
 ipcMain.handle("perm:open-settings", (_event, pane) => {
   if (process.platform === "win32") {
-    const targets = { mic: "ms-settings:privacy-microphone", screen: "ms-settings:privacy-screenshots", speech: "ms-settings:privacy-speech" };
+    const targets = {
+      mic: "ms-settings:privacy-microphone",
+      screen: "ms-settings:privacy-screenshots",
+      speech: "ms-settings:privacy-speech",
+    };
     return shell.openExternal(Object.hasOwn(targets, pane) ? targets[pane] : "ms-settings:privacy");
   }
   if (process.platform !== "darwin") return false;
@@ -302,6 +373,20 @@ ipcMain.handle("speech:start", (event) => {
 });
 ipcMain.handle("speech:stop", () => stopSpeech());
 
+ipcMain.handle("credentials:status", () => desktopCredentials?.publicStatus());
+ipcMain.handle("credentials:set", async (event, payload) => {
+  if (!BrowserWindow.fromWebContents(event.sender)) throw new Error("desktop window is unavailable");
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("credential update is invalid");
+  }
+  const config = await desktopCredentials.update(
+    payload.section,
+    payload.value,
+    restartServerForCredentials,
+  );
+  return { storage: desktopCredentials.publicStatus(), config };
+});
+
 app.whenReady().then(async () => {
   if (performanceClearCache) {
     performanceRecorder.markMain("cumea:main:cache-clear-start");
@@ -316,6 +401,16 @@ app.whenReady().then(async () => {
       return;
     }
   }
+
+  desktopCredentials = createDesktopCredentialController({
+    app,
+    safeStorage,
+    performanceFixture: performanceEnabled && performanceRuntime === "fixture",
+  });
+  const credentialStatus = await desktopCredentials.initialize();
+  // Non-secret mode only. The preload uses this to prevent a packaged app
+  // from silently falling back to plaintext writes when the OS store fails.
+  process.env.CUMEA_DESKTOP_CREDENTIAL_STORAGE_MODE = credentialStatus.mode;
 
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
   // getDisplayMedia stays in the app responsibility chain. Local computer
@@ -337,7 +432,7 @@ app.whenReady().then(async () => {
   if (performanceSkipCua) {
     disableCuaForPerformance();
   } else {
-    await startCua().catch((e) => console.error("[cua] start failed:", e));
+    await startCua().catch((error) => console.error("[cua] start failed:", error));
   }
   performanceRecorder.markMain("cumea:main:cua-settled");
   if (app.isPackaged) {
@@ -357,27 +452,26 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// EMBEDDING.md lifecycle rule: defer the first quit until the embedded
-// daemon's async cleanup completes — it can't run after the host exits.
+// Defer the first quit until embedded native/server cleanup completes.
 let quitCleanupStarted = false;
 let quitCleanupDone = false;
-app.on("before-quit", (e) => {
+app.on("before-quit", (event) => {
   performanceRecorder.markMain("cumea:main:before-quit");
   performanceRecorder.flush();
   if (quitCleanupDone) return;
-  e.preventDefault();
+  event.preventDefault();
   if (quitCleanupStarted) return;
   quitCleanupStarted = true;
-  try {
-    serverProc?.kill();
-  } catch {}
   stopSpeech();
   const timeout = new Promise((resolve) => {
-    const timer = setTimeout(resolve, 2500);
+    const timer = setTimeout(resolve, 3000);
     timer.unref?.();
   });
   Promise.race([
-    stopCua().catch((error) => console.error("[cua] stop failed:", error)),
+    Promise.allSettled([
+      stopServerProcess(),
+      stopCua().catch((error) => console.error("[cua] stop failed:", error)),
+    ]),
     timeout,
   ]).finally(() => {
     quitCleanupDone = true;
