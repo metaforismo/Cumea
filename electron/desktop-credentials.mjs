@@ -16,6 +16,26 @@ const EMPTY_SERVER_CREDENTIAL_ENVIRONMENT = Object.freeze({
   CUMEA_DESKTOP_BOX_TOKEN: "",
 });
 
+function confirmedCredentialState(config, section) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return null;
+  switch (section) {
+    case "xai":
+      return typeof config.xai?.configured === "boolean" ? config.xai.configured : null;
+    case "composio":
+      return typeof config.composio?.configured === "boolean"
+        ? config.composio.configured
+        : null;
+    case "composioApi":
+      return typeof config.composio?.apiKeyConfigured === "boolean"
+        ? config.composio.apiKeyConfigured
+        : null;
+    case "box":
+      return typeof config.box?.configured === "boolean" ? config.box.configured : null;
+    default:
+      return null;
+  }
+}
+
 export function createDesktopCredentialController({
   app,
   safeStorage,
@@ -142,17 +162,50 @@ export function createDesktopCredentialController({
       }
       const previous = normalizeCredentials(state.credentials);
       const candidate = applyCredentialPatch(previous, section, value);
+      const expectedCandidateState = Boolean(candidate[section]);
       await vault.replace(candidate);
       state = { ...state, credentials: candidate, migrated: false, legacyPresent: false };
       try {
-        return await restartHarness();
+        const config = await restartHarness();
+        if (confirmedCredentialState(config, section) !== expectedCandidateState) {
+          throw new Error("the restarted agent host did not confirm the credential state");
+        }
+        return config;
       } catch {
-        // The current process may have failed after persistence but before the
-        // harness accepted the new bootstrap. Restore both durable and live
-        // state, then make one best-effort attempt to restore service.
-        await vault.replace(previous).catch(() => undefined);
+        // A failure after persistence must not leave the UI claiming an old
+        // value while the vault contains the candidate. Durable rollback is
+        // therefore mandatory and its failure blocks further writes.
+        try {
+          await vault.replace(previous);
+        } catch {
+          state = {
+            ...state,
+            mode: "blocked",
+            available: false,
+            secure: false,
+            reason:
+              "credential update failed and encrypted rollback could not be verified; restart Cumea before retrying",
+            credentials: {},
+          };
+          throw new Error(
+            "the credential update failed and could not be rolled back safely; restart Cumea before retrying",
+          );
+        }
+
         state = { ...state, credentials: previous };
-        await restartHarness().catch(() => undefined);
+        let recovered = false;
+        try {
+          const recoveryConfig = await restartHarness();
+          recovered =
+            confirmedCredentialState(recoveryConfig, section) === Boolean(previous[section]);
+        } catch {
+          recovered = false;
+        }
+        if (!recovered) {
+          throw new Error(
+            "the credential was restored, but the agent host could not recover automatically; restart Cumea",
+          );
+        }
         throw new Error("the credential was not changed because the agent host could not restart");
       }
     });
