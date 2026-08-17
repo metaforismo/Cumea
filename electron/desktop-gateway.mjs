@@ -4,7 +4,7 @@ import path from "node:path";
 
 const LOOPBACK_HOST = "127.0.0.1";
 export const DEFAULT_DESKTOP_GATEWAY_PORT = 8799;
-const HOP_BY_HOP_HEADERS = new Set([
+const STATIC_HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "keep-alive",
   "proxy-authenticate",
@@ -72,11 +72,37 @@ function gatewayAddress(server) {
   return { port: address.port, origin: `http://${LOOPBACK_HOST}:${address.port}` };
 }
 
-function sanitizedProxyHeaders(headers, targetPort) {
+function connectionNamedHeaders(headers) {
+  const named = new Set();
+  const raw = headers.connection;
+  if (typeof raw === "string") {
+    for (const value of raw.split(",")) {
+      const normalized = value.trim().toLowerCase();
+      if (normalized) named.add(normalized);
+    }
+  }
+  return named;
+}
+
+function sanitizedProxyHeaders(headers, targetPort, gatewayPort) {
   const next = {};
+  const dynamicHopHeaders = connectionNamedHeaders(headers);
   for (const [name, value] of Object.entries(headers)) {
-    if (value === undefined || HOP_BY_HOP_HEADERS.has(name.toLowerCase())) continue;
-    if (name.toLowerCase() === "host") continue;
+    const normalizedName = name.toLowerCase();
+    if (
+      value === undefined ||
+      STATIC_HOP_BY_HOP_HEADERS.has(normalizedName) ||
+      dynamicHopHeaders.has(normalizedName)
+    ) {
+      continue;
+    }
+    if (normalizedName === "host") continue;
+    if (normalizedName === "origin") {
+      const gatewayOrigin = `http://${LOOPBACK_HOST}:${gatewayPort}`;
+      next.origin =
+        value === gatewayOrigin ? `http://${LOOPBACK_HOST}:${targetPort}` : value;
+      continue;
+    }
     next[name] = value;
   }
   next.host = `${LOOPBACK_HOST}:${targetPort}`;
@@ -85,8 +111,16 @@ function sanitizedProxyHeaders(headers, targetPort) {
 
 function sanitizedResponseHeaders(headers) {
   const next = { ...SECURITY_HEADERS };
+  const dynamicHopHeaders = connectionNamedHeaders(headers);
   for (const [name, value] of Object.entries(headers)) {
-    if (value === undefined || HOP_BY_HOP_HEADERS.has(name.toLowerCase())) continue;
+    const normalizedName = name.toLowerCase();
+    if (
+      value === undefined ||
+      STATIC_HOP_BY_HOP_HEADERS.has(normalizedName) ||
+      dynamicHopHeaders.has(normalizedName)
+    ) {
+      continue;
+    }
     next[name] = value;
   }
   return next;
@@ -136,6 +170,12 @@ function serveStatic(req, res, staticDir) {
   let selected = candidate;
   let details = readableFile(selected);
   if (!details) {
+    // Only route-like paths fall back to the SPA shell. Missing asset/module
+    // paths fail closed instead of returning HTML with a misleading MIME type.
+    if (path.extname(candidate)) {
+      publicError(res, 404, "not found");
+      return;
+    }
     selected = path.join(path.resolve(staticDir), "index.html");
     details = readableFile(selected);
   }
@@ -166,14 +206,14 @@ function serveStatic(req, res, staticDir) {
   stream.pipe(res);
 }
 
-function proxyApi(req, res, targetPort) {
+function proxyApi(req, res, targetPort, gatewayPort) {
   const upstream = httpRequest(
     {
       host: LOOPBACK_HOST,
       port: targetPort,
       method: req.method,
       path: req.url,
-      headers: sanitizedProxyHeaders(req.headers, targetPort),
+      headers: sanitizedProxyHeaders(req.headers, targetPort, gatewayPort),
     },
     (upstreamResponse) => {
       res.writeHead(
@@ -226,7 +266,7 @@ export function createDesktopGateway({
         publicError(res, 503, unavailableReason);
         return;
       }
-      proxyApi(req, res, targetPort);
+      proxyApi(req, res, targetPort, port);
       return;
     }
     serveStatic(req, res, staticDir);
