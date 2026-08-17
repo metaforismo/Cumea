@@ -88,13 +88,18 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     disk = stripCredentialFields(disk);
     incoming = stripCredentialFields(incoming);
   }
+  const document = disk as Record<string, unknown>;
   for (const key of ["xai", "composio", "box", "profile"] as const) {
-    if (incoming[key] && typeof incoming[key] === "object") {
-      Object.assign((disk[key] ??= {} as never), incoming[key]);
-    }
+    const value = incoming[key];
+    if (!value || typeof value !== "object") continue;
+    const previous = document[key];
+    document[key] = {
+      ...(previous && typeof previous === "object" ? previous : {}),
+      ...value,
+    };
   }
   mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-  writeFileAtomic(target, JSON.stringify(disk, null, 2), { mode: 0o600 });
+  writeFileAtomic(target, JSON.stringify(document, null, 2), { mode: 0o600 });
 }
 
 // Default fleet: one instance per built-in driver (upstream
