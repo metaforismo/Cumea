@@ -276,6 +276,7 @@ export function createDesktopGateway({
       if (closing) return closing;
       if (!server.listening) return;
       closing = new Promise((resolve) => server.close(() => resolve()));
+      server.closeAllConnections?.();
       await closing;
     },
   };
