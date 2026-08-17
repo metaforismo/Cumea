@@ -12,9 +12,10 @@ const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 let SERVER_PORT = 8799;
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const performanceOutputFile = process.env.CUMEA_PERFORMANCE_FILE?.trim() ?? "";
 
 const performanceRecorder = createPerformanceRecorder({
-  outputFile: process.env.CUMEA_PERFORMANCE_FILE,
+  outputFile: performanceOutputFile,
   metadata: () => ({
     ...(process.env.CUMEA_PERFORMANCE_LABEL
       ? { label: process.env.CUMEA_PERFORMANCE_LABEL.slice(0, 120) }
@@ -46,7 +47,7 @@ ipcMain.on("performance:renderer-mark", (_event, payload) => {
   const recorded = performanceRecorder.recordRenderer(payload);
   if (!recorded || payload?.name !== "cumea:renderer:shell-usable-painted") return;
   performanceRecorder.flush();
-  if (process.env.CUMEA_PERFORMANCE_AUTO_QUIT === "1") {
+  if (performanceOutputFile && process.env.CUMEA_PERFORMANCE_AUTO_QUIT === "1") {
     setImmediate(() => app.quit());
   }
 });
