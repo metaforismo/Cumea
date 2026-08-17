@@ -1,7 +1,14 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, session, shell, systemPreferences, utilityProcess } from "electron";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { publicCuaStatus, startCua, stopCua, registerCuaIpc } from "./cua.mjs";
+import {
+  disableCuaForPerformance,
+  publicCuaStatus,
+  startCua,
+  stopCua,
+  registerCuaIpc,
+} from "./cua.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 import { createPerformanceRecorder } from "./performance.mjs";
 
@@ -12,7 +19,51 @@ const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 let SERVER_PORT = 8799;
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
 const performanceOutputFile = process.env.CUMEA_PERFORMANCE_FILE?.trim() ?? "";
+const performanceEnabled = Boolean(performanceOutputFile);
+const performanceProfile =
+  performanceEnabled && process.env.CUMEA_PERFORMANCE_PROFILE === "first-run"
+    ? "first-run"
+    : "returning";
+const performanceCacheTreatment = performanceEnabled
+  ? ["fresh-profile", "warm", "chromium-cold"].includes(
+      process.env.CUMEA_PERFORMANCE_CACHE_TREATMENT,
+    )
+    ? process.env.CUMEA_PERFORMANCE_CACHE_TREATMENT
+    : performanceProfile === "first-run"
+      ? "fresh-profile"
+      : "warm"
+  : undefined;
+const performanceRuntime =
+  performanceEnabled && process.env.CUMEA_PERFORMANCE_RUNTIME === "real" ? "real" : "fixture";
+const performanceUserData = performanceEnabled
+  ? process.env.CUMEA_PERFORMANCE_USER_DATA?.trim() ?? ""
+  : "";
+const performanceClearCache =
+  performanceEnabled && process.env.CUMEA_PERFORMANCE_CLEAR_CACHE === "1";
+const performanceClearCacheOnly =
+  performanceClearCache && process.env.CUMEA_PERFORMANCE_CLEAR_CACHE_ONLY === "1";
+const performanceSkipCua =
+  performanceEnabled && process.env.CUMEA_PERFORMANCE_SKIP_CUA === "1";
+const performanceAutoQuitMark =
+  performanceProfile === "first-run"
+    ? "cumea:renderer:onboarding-painted"
+    : "cumea:renderer:shell-usable-painted";
+
+if (performanceUserData) {
+  const root = path.resolve(performanceUserData);
+  const isolatedPaths = {
+    userData: root,
+    sessionData: path.join(root, "session"),
+    logs: path.join(root, "logs"),
+    crashDumps: path.join(root, "crash-dumps"),
+  };
+  for (const target of Object.values(isolatedPaths)) {
+    mkdirSync(target, { recursive: true, mode: 0o700 });
+  }
+  for (const [name, target] of Object.entries(isolatedPaths)) app.setPath(name, target);
+}
 
 const performanceRecorder = createPerformanceRecorder({
   outputFile: performanceOutputFile,
@@ -25,6 +76,21 @@ const performanceRecorder = createPerformanceRecorder({
       : {}),
     ...(process.env.CUMEA_PERFORMANCE_COMMIT || process.env.GITHUB_SHA
       ? { commit: (process.env.CUMEA_PERFORMANCE_COMMIT || process.env.GITHUB_SHA).slice(0, 80) }
+      : {}),
+    ...(performanceEnabled
+      ? {
+          profile: performanceProfile,
+          cacheTreatment: performanceCacheTreatment,
+          runtime: performanceRuntime,
+        }
+      : {}),
+    ...(process.env.CUMEA_PERFORMANCE_MACHINE_FINGERPRINT
+      ? {
+          machineFingerprint: process.env.CUMEA_PERFORMANCE_MACHINE_FINGERPRINT.slice(0, 80),
+        }
+      : {}),
+    ...(process.env.CUMEA_PERFORMANCE_MACHINE_LABEL
+      ? { machineLabel: process.env.CUMEA_PERFORMANCE_MACHINE_LABEL.slice(0, 120) }
       : {}),
     appVersion: app.getVersion(),
     packaged: app.isPackaged,
@@ -45,7 +111,7 @@ app.once("ready", () => performanceRecorder.markMain("cumea:main:ready"));
 
 ipcMain.on("performance:renderer-mark", (_event, payload) => {
   const recorded = performanceRecorder.recordRenderer(payload);
-  if (!recorded || payload?.name !== "cumea:renderer:shell-usable-painted") return;
+  if (!recorded || payload?.name !== performanceAutoQuitMark) return;
   performanceRecorder.flush();
   if (performanceOutputFile && process.env.CUMEA_PERFORMANCE_AUTO_QUIT === "1") {
     setImmediate(() => app.quit());
@@ -237,6 +303,20 @@ ipcMain.handle("speech:start", (event) => {
 ipcMain.handle("speech:stop", () => stopSpeech());
 
 app.whenReady().then(async () => {
+  if (performanceClearCache) {
+    performanceRecorder.markMain("cumea:main:cache-clear-start");
+    await Promise.all([
+      session.defaultSession.clearCache(),
+      session.defaultSession.clearCodeCaches({}),
+    ]);
+    performanceRecorder.markMain("cumea:main:cache-clear-settled");
+    performanceRecorder.flush();
+    if (performanceClearCacheOnly) {
+      app.quit();
+      return;
+    }
+  }
+
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
   // getDisplayMedia stays in the app responsibility chain. Local computer
   // onboarding uses the CUA SDK gate; this handler does not start the driver.
@@ -251,10 +331,14 @@ app.whenReady().then(async () => {
   );
   registerCuaIpc();
   // Resolve the fail-closed CUA state before the packaged harness reads its
-  // descriptor. If TCC is incomplete this records needs-permissions and does
-  // not create or start the embedded daemon.
+  // descriptor. Deterministic fixture runs bypass the SDK and native daemon;
+  // normal and explicit real-runtime runs retain the production path.
   performanceRecorder.markMain("cumea:main:cua-start");
-  await startCua().catch((e) => console.error("[cua] start failed:", e));
+  if (performanceSkipCua) {
+    disableCuaForPerformance();
+  } else {
+    await startCua().catch((e) => console.error("[cua] start failed:", e));
+  }
   performanceRecorder.markMain("cumea:main:cua-settled");
   if (app.isPackaged) {
     performanceRecorder.markMain("cumea:main:server-start");
