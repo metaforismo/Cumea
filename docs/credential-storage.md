@@ -90,14 +90,15 @@ credential; this design prevents unrelated inheritance, not access by the intend
 
 ## Credential update and harness restart
 
-When a packaged credential changes, Electron:
+A packaged credential update uses the previous encrypted vault as a transaction anchor:
 
-1. writes the candidate encrypted vault;
-2. stops the local harness;
-3. starts a fresh harness on the existing loopback port with the new bootstrap;
-4. verifies the new child by PID and health response;
-5. reads `/api/config` and requires the exact credential's configured flag to match the candidate;
-6. lets the renderer's existing SSE connection reconnect and resynchronize.
+1. keep the previous vault untouched;
+2. place the candidate only in Electron's in-memory bootstrap state;
+3. restart the harness on the existing loopback port with that candidate;
+4. verify the new child by PID and health response;
+5. read `/api/config` and require the exact credential's configured flag to match the candidate;
+6. only after confirmation, atomically commit the candidate to the encrypted vault;
+7. let the renderer's existing SSE connection reconnect and resynchronize.
 
 A successful process restart without the expected configured flag is treated as a failed update.
 This catches malformed or lost bootstraps instead of reporting a credential as saved merely because
@@ -106,14 +107,19 @@ a child process answered HTTP.
 This restart can interrupt in-flight provider turns, just as the previous provider-fleet reload did.
 The UI must not describe a credential update as background-safe.
 
-If candidate startup or confirmation fails, Electron first restores the previous encrypted vault,
-then restores the in-memory set and starts a second harness with the previous bootstrap. The update
-is reported as failed even when automatic recovery succeeds.
+If candidate startup or confirmation fails, Electron restores the previous in-memory set and starts
+a second harness with the previous bootstrap. The encrypted vault was never replaced, so it remains
+the durable source of truth. The update is reported as failed even when automatic recovery succeeds.
 
-If encrypted rollback itself cannot be verified, the controller enters `blocked` mode, clears its
-public configured flags, refuses further writes, and requires a full Cumea restart before retrying.
-If the vault is restored but the harness cannot recover and confirm the previous state, the error
-states that the user must restart Cumea instead of pretending service was restored.
+If the candidate harness confirms but encryption or atomic persistence fails, Electron again restores
+the previous bootstrap and harness. Because vault replacement is the final commit point, the prior
+vault remains untouched on that failure path. If the old harness cannot recover and confirm the
+previous state, the error explicitly requires a Cumea restart instead of claiming that service was
+restored.
+
+A process kill between candidate validation and vault commit also leaves the previous encrypted
+vault authoritative. The candidate child exits with the Electron app and is not silently persisted
+on the next launch.
 
 ## Source and browser mode
 
