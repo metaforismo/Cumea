@@ -23,7 +23,7 @@
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
     "test": "vitest run && pnpm test:cua-contract && pnpm test:performance && pnpm test:credentials",
     "test:cua-contract": "node --test electron/cua-contract.test.mjs",
-    "test:credentials": "node --check electron/credential-vault.mjs && node --check electron/desktop-credentials.mjs && node --test electron/credential-vault.test.mjs electron/desktop-credentials.test.mjs",
+    "test:credentials": "node --check electron/credential-vault.mjs && node --check electron/desktop-credentials.mjs && node --test electron/credential-vault.test.mjs electron/desktop-credentials.test.mjs electron/desktop-credentials-redaction.test.mjs",
     "test:watch": "vitest",
     "mobile:start": "pnpm --dir apps/mobile start",
     "mobile:ios": "pnpm --dir apps/mobile ios",
