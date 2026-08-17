@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import path from "node:path";
 
@@ -18,7 +22,7 @@ export const DESKTOP_CREDENTIAL_SECTIONS = [
   "box",
 ];
 
-const MAX_CREDENTIAL_LENGTH = 8_192;
+const MAX_CREDENTIAL_LENGTH = 2_048;
 const SERVER_ENV_FIELDS = {
   xai: "CUMEA_DESKTOP_XAI_KEY",
   composio: "CUMEA_DESKTOP_COMPOSIO_KEY",
@@ -86,30 +90,145 @@ export function stripLegacyCredentials(config) {
   return next;
 }
 
-function writeAtomic(file, bytes) {
-  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, bytes, { mode: 0o600 });
+function syncParentDirectory(file) {
+  let descriptor = null;
   try {
-    renameSync(temporary, file);
-  } catch (error) {
-    if (error?.code !== "EEXIST" && error?.code !== "EPERM") throw error;
-    rmSync(file, { force: true });
-    renameSync(temporary, file);
+    descriptor = openSync(path.dirname(file), "r");
+    fsyncSync(descriptor);
+  } catch {
+    // Directory fsync is unavailable on some filesystems, notably Windows.
+    // The temporary file itself was still flushed before replacement.
   } finally {
-    rmSync(temporary, { force: true });
+    if (descriptor !== null) {
+      try {
+        closeSync(descriptor);
+      } catch {}
+    }
+  }
+}
+
+function previousFile(file) {
+  return `${file}.previous`;
+}
+
+/** Recover the only ambiguous Windows fallback state: the prior target was
+ * moved aside but the replacement was not installed before process exit. */
+function recoverInterruptedReplacement(file) {
+  const previous = previousFile(file);
+  if (!existsSync(previous)) return;
+  if (existsSync(file)) {
+    // A target plus a backup means installation completed and only cleanup
+    // was interrupted. The target is the committed version.
+    try {
+      rmSync(previous, { force: true });
+    } catch {}
+    return;
   }
   try {
-    chmodSync(file, 0o600);
-  } catch {}
+    renameSync(previous, file);
+    syncParentDirectory(file);
+  } catch {
+    throw new Error("credential storage recovery failed; restart after repairing file permissions");
+  }
+}
+
+function writeAtomic(file, bytes) {
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  recoverInterruptedReplacement(file);
+
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  const previous = previousFile(file);
+  const data = typeof bytes === "string" ? Buffer.from(bytes, "utf8") : Buffer.from(bytes);
+  let descriptor = null;
+  let installed = false;
+  let movedPrevious = false;
+
+  try {
+    descriptor = openSync(temporary, "wx", 0o600);
+    let offset = 0;
+    while (offset < data.length) {
+      const written = writeSync(descriptor, data, offset, data.length - offset);
+      if (written <= 0) throw new Error("credential storage write made no progress");
+      offset += written;
+    }
+    try {
+      chmodSync(temporary, 0o600);
+    } catch (error) {
+      if (process.platform !== "win32") throw error;
+    }
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = null;
+
+    try {
+      renameSync(temporary, file);
+      installed = true;
+    } catch (error) {
+      if (error?.code !== "EEXIST" && error?.code !== "EPERM") throw error;
+
+      // Some Windows filesystems do not replace an existing target through
+      // rename. Move the prior complete file aside, install the flushed
+      // candidate, and retain a recoverable marker until installation ends.
+      if (existsSync(file)) {
+        rmSync(previous, { force: true });
+        renameSync(file, previous);
+        movedPrevious = true;
+      }
+      try {
+        renameSync(temporary, file);
+        installed = true;
+      } catch (replacementError) {
+        if (movedPrevious && !existsSync(file)) {
+          try {
+            renameSync(previous, file);
+            movedPrevious = false;
+            syncParentDirectory(file);
+          } catch (recoveryError) {
+            throw new AggregateError(
+              [replacementError, recoveryError],
+              "credential storage replacement and recovery both failed",
+            );
+          }
+        }
+        throw replacementError;
+      }
+    }
+
+    syncParentDirectory(file);
+    if (movedPrevious) {
+      // Cleanup failure is non-fatal: the next read recognizes target+backup
+      // as a committed replacement and removes the stale backup.
+      try {
+        rmSync(previous, { force: true });
+      } catch {}
+    }
+    try {
+      chmodSync(file, 0o600);
+    } catch {}
+  } finally {
+    if (descriptor !== null) {
+      try {
+        closeSync(descriptor);
+      } catch {}
+    }
+    if (!installed) {
+      try {
+        rmSync(temporary, { force: true });
+      } catch {}
+    }
+  }
 }
 
 function readConfigDocument(file) {
   try {
+    recoverInterruptedReplacement(file);
     const value = JSON.parse(readFileSync(file, "utf8"));
     return isRecord(value) ? value : {};
   } catch (error) {
     if (error?.code === "ENOENT") return null;
+    if (error instanceof Error && error.message.startsWith("credential storage recovery failed")) {
+      throw error;
+    }
     throw new Error("could not read the existing Cumea configuration");
   }
 }
@@ -193,9 +312,12 @@ export function createCredentialVault({ file, safeStorage, platform = process.pl
 
   const replaceRaw = async (credentials) => {
     await requireAvailability();
+    recoverInterruptedReplacement(file);
     const normalized = normalizeCredentials(credentials);
     if (Object.keys(normalized).length === 0) {
       rmSync(file, { force: true });
+      rmSync(previousFile(file), { force: true });
+      syncParentDirectory(file);
       return normalized;
     }
     const encrypted = await safeStorage.encryptStringAsync(serializeVaultDocument(normalized));
@@ -205,6 +327,7 @@ export function createCredentialVault({ file, safeStorage, platform = process.pl
 
   const readRaw = async () => {
     await requireAvailability();
+    recoverInterruptedReplacement(file);
     let encrypted;
     try {
       encrypted = readFileSync(file);
