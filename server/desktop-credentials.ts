@@ -51,14 +51,17 @@ function ownRecord(value: unknown): Record<string, unknown> {
 }
 
 /** Windows environment names are case-insensitive, but an env object passed
- * through JavaScript can contain differently-cased aliases. Consume and
- * delete every alias before another child process can inherit it. */
+ * through JavaScript can contain differently-cased aliases. Prefer the exact
+ * canonical field Electron appended, then delete every alias before another
+ * child process can inherit it. */
 function takeEnvironmentValue(
   environment: NodeJS.ProcessEnv,
   expectedName: string,
 ): string | undefined {
   const expected = expectedName.toUpperCase();
-  let selected: string | undefined;
+  let selected = Object.hasOwn(environment, expectedName)
+    ? environment[expectedName]
+    : undefined;
   for (const name of Object.keys(environment)) {
     if (name.toUpperCase() !== expected) continue;
     if (selected === undefined) selected = environment[name];
