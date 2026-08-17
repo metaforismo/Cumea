@@ -77,9 +77,16 @@ should not bypass the release, security, persistence, or measurement foundations
     keep remote/mobile listener port semantics independent of the local ephemeral port.
   - [ ] P0.03c — Re-run matching packaged performance scenarios on the fixed-machine evidence gate and
     record startup trade-offs without attributing hosted-runner variance to the code change.
-- [ ] **P0.04 — Atomic bootstrap.** Add one bounded bootstrap response for the agent index, selected
-  conversation page, engine capabilities, configuration status, Needs You count, routine summary,
-  computer status, and event cursor. Remove duplicate initial reloads.
+- [~] **P0.04 — Atomic bootstrap.** Add one bounded bootstrap response for the agent index, selected
+  conversation page, engine capabilities, configuration status, Needs You count, bounded work/routine
+  state, computer status, and event cursor. Remove duplicate initial reloads.
+  - [x] P0.04a — Add the local-only bounded snapshot contract, strip provider resume cursors, and put
+    one monotonic cursor on the local SSE stream with a real-harness ordering test.
+  - [x] P0.04b — Replace the renderer startup/reconnect fetch cascade with one reducer hydration, a
+    bounded in-flight SSE buffer, cursor-based de-duplication, overflow re-snapshot, and lazy full Work
+    reload only when the startup projection was truncated.
+  - [ ] P0.04c — Close the exact-head cross-platform CI/package gate, update public docs/release notes,
+    and squash merge only after review threads are clear.
 - [ ] **P0.05 — Renderer update isolation.** Split the global state subscription into selectors,
   isolate the composer and transcript, batch streaming deltas, lazy-load noncritical panels, and
   defer expensive Markdown / syntax work until messages settle.
