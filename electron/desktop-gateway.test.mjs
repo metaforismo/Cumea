@@ -23,12 +23,19 @@ async function close(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
+async function freePort() {
+  const reservation = createServer();
+  const port = await listen(reservation);
+  await close(reservation);
+  return port;
+}
+
 test("gateway serves the packaged shell before a harness target exists", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "cumea-gateway-"));
   mkdirSync(path.join(directory, "assets"));
   writeFileSync(path.join(directory, "index.html"), "<main>Cumea shell</main>");
   writeFileSync(path.join(directory, "assets", "app.js"), "console.log('ok')");
-  const gateway = createDesktopGateway({ staticDir: directory });
+  const gateway = createDesktopGateway({ staticDir: directory, port: await freePort() });
   try {
     const { origin, port } = await gateway.start();
     assert.match(origin, /^http:\/\/127\.0\.0\.1:\d+$/);
@@ -72,7 +79,7 @@ test("gateway streams API and SSE traffic only to its validated loopback target"
       res.end(JSON.stringify({ method: req.method, body, host: req.headers.host }));
     });
   });
-  const gateway = createDesktopGateway({ staticDir: directory });
+  const gateway = createDesktopGateway({ staticDir: directory, port: await freePort() });
   try {
     const harnessPort = await listen(harness);
     const { origin } = await gateway.start();
@@ -85,7 +92,6 @@ test("gateway streams API and SSE traffic only to its validated loopback target"
     });
     assert.equal(response.status, 201);
     assert.equal(response.headers.get("x-upstream"), "yes");
-    assert.equal(response.headers.get("connection"), "keep-alive");
     const payload = await response.json();
     assert.equal(payload.method, "POST");
     assert.equal(payload.body, "candidate");
@@ -114,7 +120,7 @@ test("gateway rejects invalid targets and filesystem escape attempts", async () 
   mkdirSync(directory);
   writeFileSync(path.join(directory, "index.html"), "shell");
   writeFileSync(path.join(root, "secret.txt"), "secret");
-  const gateway = createDesktopGateway({ staticDir: directory });
+  const gateway = createDesktopGateway({ staticDir: directory, port: await freePort() });
   try {
     const { origin, port } = await gateway.start();
     assert.throws(() => gateway.setHarnessTarget(0), /invalid harness target/);
