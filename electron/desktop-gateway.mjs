@@ -3,6 +3,7 @@ import { createServer, request as httpRequest } from "node:http";
 import path from "node:path";
 
 const LOOPBACK_HOST = "127.0.0.1";
+export const DEFAULT_DESKTOP_GATEWAY_PORT = 8799;
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "keep-alive",
@@ -190,11 +191,18 @@ function proxyApi(req, res, targetPort) {
   req.pipe(upstream);
 }
 
-export function createDesktopGateway({ staticDir, host = LOOPBACK_HOST } = {}) {
+export function createDesktopGateway({
+  staticDir,
+  host = LOOPBACK_HOST,
+  port = DEFAULT_DESKTOP_GATEWAY_PORT,
+} = {}) {
   if (!staticDir || typeof staticDir !== "string") {
     throw new Error("desktop gateway requires a static UI directory");
   }
   if (host !== LOOPBACK_HOST) throw new Error("desktop gateway must bind IPv4 loopback");
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("desktop gateway requires a stable TCP port");
+  }
 
   let targetPort = null;
   let started = null;
@@ -232,19 +240,19 @@ export function createDesktopGateway({ staticDir, host = LOOPBACK_HOST } = {}) {
         };
         server.once("error", onError);
         server.once("listening", onListening);
-        server.listen(0, host);
+        server.listen(port, host);
       });
       return started;
     },
     address() {
       return started;
     },
-    setHarnessTarget(port) {
-      if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    setHarnessTarget(nextPort) {
+      if (!Number.isInteger(nextPort) || nextPort < 1 || nextPort > 65_535) {
         throw new Error("invalid harness target port");
       }
-      if (started?.port === port) throw new Error("desktop gateway cannot proxy to itself");
-      targetPort = port;
+      if (started?.port === nextPort) throw new Error("desktop gateway cannot proxy to itself");
+      targetPort = nextPort;
     },
     clearHarnessTarget() {
       targetPort = null;
