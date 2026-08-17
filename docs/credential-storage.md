@@ -21,9 +21,9 @@ Cumea rejects Electron's Linux `basic_text` backend instead of silently claiming
 plaintext encryption is secure. If a secure backend is unavailable, the packaged app enters
 `blocked` mode and refuses new credential writes.
 
-The vault document is versioned, validated against an exact credential allowlist, bounded to 8 KiB
-per value, written atomically, and kept owner-only where the platform supports POSIX modes. The file
-is removed when the final stored credential is cleared.
+The vault document is versioned, validated against an exact credential allowlist, bounded to 8,192
+characters per value, written atomically, and kept owner-only where the platform supports POSIX
+modes. The file is removed when the final stored credential is cleared.
 
 ## Migration from `~/.cumea/config.json`
 
@@ -46,7 +46,7 @@ After the OS credential service is repaired, restart Cumea. A successful migrati
 legacy plaintext automatically. Do not delete `config.json` manually before that point unless the
 credentials have been recovered elsewhere.
 
-## Write-only renderer contract
+## Write-only renderer and API contract
 
 The renderer never receives credential values. It can read only:
 
@@ -59,30 +59,59 @@ A packaged credential replacement or clear operation crosses a narrow IPC method
 allowlisted section identifier and a string-or-null value. The preload reconstructs that payload,
 and Electron validates it again before persistence.
 
-The normal loopback configuration API remains write-only and returns booleans, but packaged UI code
-does not use it for credential persistence.
+In packaged managed mode, credential-shaped writes to the ordinary loopback `/api/config` endpoint
+are rejected, including empty/null values intended as clears. Electron IPC is the only valid
+credential transport. The loopback endpoint remains a write-only credential path only for explicit
+source/browser hosting, where there is no Electron main process to own an OS vault.
 
-## Harness bootstrap and restart
+## Harness bootstrap and provider scope
 
 The harness has no runtime endpoint for fetching credentials from Electron. At harness startup,
 Electron decrypts the vault and passes the current allowlisted values through dedicated bootstrap
-environment fields to the new child process. The harness validates and copies them into memory, then
-deletes those bootstrap fields from `process.env` before provider instances or provider child
-processes are created.
+environment fields to the new child process. Explicit empty values overwrite any ambient
+`CUMEA_DESKTOP_*` fields, so the controller's current vault state is authoritative.
+
+The harness validates and copies the bootstrap into memory, then deletes those dedicated fields from
+`process.env` before provider instances or provider child processes are created. In packaged managed
+mode it also ignores credential aliases embedded in plaintext advanced instance environments.
+Non-secret instance environment values remain supported.
+
+Credentials are scoped by owner:
+
+- the xAI API key is mounted only into the key-billed `grok` API driver;
+- the Box token is mounted only into the `boxAgent` driver;
+- Composio credentials stay inside the harness because connector calls are server-side;
+- Claude, Codex, Gemini, Grok Build CLI, and unrelated custom drivers do not receive these values.
+
+A provider process that legitimately owns a credential can still read that credential; this design
+prevents unrelated inheritance, not access by the intended consumer.
+
+## Credential update and harness restart
 
 When a packaged credential changes, Electron:
 
 1. writes the candidate encrypted vault;
 2. stops the local harness;
 3. starts a fresh harness on the existing loopback port with the new bootstrap;
-4. verifies its identity and reads the new configured-status response;
-5. lets the renderer's existing SSE connection reconnect and resynchronize.
+4. verifies the new child by PID and health response;
+5. reads `/api/config` and requires the exact credential's configured flag to match the candidate;
+6. lets the renderer's existing SSE connection reconnect and resynchronize.
 
-This can interrupt in-flight provider turns, just as the previous provider-fleet reload did. The UI
-must not describe a credential update as background-safe.
+A successful process restart without the expected configured flag is treated as a failed update.
+This catches malformed or lost bootstraps instead of reporting a credential as saved merely because
+a child process answered HTTP.
 
-If the new harness cannot start, Electron restores the previous vault and in-memory credential set,
-then makes a best-effort restart with the previous bootstrap. The update is reported as failed.
+This restart can interrupt in-flight provider turns, just as the previous provider-fleet reload did.
+The UI must not describe a credential update as background-safe.
+
+If candidate startup or confirmation fails, Electron first restores the previous encrypted vault,
+then restores the in-memory set and starts a second harness with the previous bootstrap. The update
+is reported as failed even when automatic recovery succeeds.
+
+If encrypted rollback itself cannot be verified, the controller enters `blocked` mode, clears its
+public configured flags, refuses further writes, and requires a full Cumea restart before retrying.
+If the vault is restored but the harness cannot recover and confirm the previous state, the error
+states that the user must restart Cumea instead of pretending service was restored.
 
 ## Source and browser mode
 
@@ -102,14 +131,15 @@ silently override or repopulate the OS-backed vault.
 
 The deterministic packaged performance fixture uses `performance-fixture` mode. It starts the
 harness with managed credentials enabled but with an empty credential set. It neither reads nor
-writes the OS vault and removes known external credential variables from the child environment.
-Performance evidence is therefore not provider-authentication evidence.
+writes the OS vault, overrides dedicated bootstrap fields with empty values, and removes known
+external credential variables from the child environment. Performance evidence is therefore not
+provider-authentication evidence.
 
 ## Threat boundary
 
 This design protects against accidental plaintext-at-rest persistence, renderer/API secret reads,
-stale plaintext reuse in a blocked packaged app, and unintentional inheritance of bootstrap fields
-by provider processes.
+stale plaintext reuse in a blocked packaged app, direct managed-API bypasses, ambient/bootstrap
+overrides, and unintentional inheritance by unrelated provider processes.
 
 It does not protect credentials from:
 
@@ -123,4 +153,5 @@ It does not protect credentials from:
 On Windows, DPAPI protects against other users but not necessarily other applications running as the
 same user. On macOS, stable code signing is required for consistent Keychain identity across app
 updates. The current unsigned package-layout smoke verifies files only; it is not proof of Keychain,
-DPAPI, Linux secret-service, signing, notarization, or physical-machine acceptance.
+DPAPI, Linux secret-service, signing, notarization, migration on a real prior profile, or
+physical-machine acceptance.
