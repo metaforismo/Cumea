@@ -5,6 +5,7 @@ import {
   consumeDesktopCredentialEnvironment,
   hasCredentialFields,
   overlayDesktopCredentials,
+  providerCredentialEnvironment,
   stripCredentialFields,
 } from "./desktop-credentials.ts";
 
@@ -45,6 +46,19 @@ describe("desktop credential boundary", () => {
     expect(hasCredentialFields({ box: { token: undefined } })).toBe(true);
     expect(hasCredentialFields({ xai: { url: "https://example.test" } })).toBe(false);
     expect(hasCredentialFields({ profile: { name: "Francesco" } })).toBe(false);
+  });
+
+  it("mounts credentials only into the owning provider driver", () => {
+    const credentials = { xai: "xai-secret", box: "box-secret" };
+    expect(providerCredentialEnvironment("grok", credentials)).toEqual({
+      XAI_API_KEY: "xai-secret",
+    });
+    expect(providerCredentialEnvironment("boxAgent", credentials)).toEqual({
+      BOX_TOKEN: "box-secret",
+    });
+    for (const driver of ["grokAgent", "geminiAgent", "claudeAgent", "codex", "fake"]) {
+      expect(providerCredentialEnvironment(driver, credentials)).toEqual({});
+    }
   });
 
   it("applies replacement and clear operations without mutating the current state", () => {
