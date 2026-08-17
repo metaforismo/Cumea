@@ -12,6 +12,7 @@ import {
   consumeDesktopCredentialEnvironment,
   hasCredentialFields,
   overlayDesktopCredentials,
+  providerCredentialEnvironment,
   stripCredentialFields,
 } from "./desktop-credentials.ts";
 import { writeFileAtomic } from "./atomic.ts";
@@ -111,8 +112,8 @@ export function saveConfig(patch: Partial<AppConfig>): void {
 
 // Default fleet: one instance per built-in driver (upstream
 // defaultInstanceIdForDriver — instanceId defaults to the driver kind).
-// Config-file or secure desktop keys are injected as per-instance environment
-// so drivers receive only credentials they actually need.
+// Credentials are mounted only into their owning provider driver. Composio
+// values remain in the harness because connector calls are server-side.
 export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // The deterministic performance fixture is allowed only when the Electron
   // process also has an explicit local report target. It keeps startup data
@@ -137,8 +138,10 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
         };
   for (const entry of Object.values(map)) {
     entry.environment = {
-      ...(cfg.xai?.key ? { XAI_API_KEY: cfg.xai.key } : {}),
-      ...(cfg.box?.token ? { BOX_TOKEN: cfg.box.token } : {}),
+      ...providerCredentialEnvironment(entry.driver, {
+        xai: cfg.xai?.key,
+        box: cfg.box?.token,
+      }),
       ...entry.environment,
     };
   }
