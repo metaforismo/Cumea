@@ -190,7 +190,6 @@ function serverEnvironment() {
   return {
     ...environment,
     ...desktopCredentials?.serverEnvironment(),
-    CUMEA_STATIC_DIR: path.join(process.resourcesPath, "ui"),
     CUMEA_PORT: String(SERVER_PORT),
     CUMEA_CUA_CONNECTION: path.join(app.getPath("userData"), "cua-connection.json"),
   };
