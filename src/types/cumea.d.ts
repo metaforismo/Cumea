@@ -10,9 +10,36 @@ declare global {
     driverVersion: string | null;
   };
 
+  type DesktopCredentialSection = "xai" | "composio" | "composioApi" | "box";
+  type DesktopCredentialStorageStatus = {
+    mode: "os" | "blocked" | "file" | "performance-fixture";
+    managed: boolean;
+    available: boolean;
+    secure: boolean;
+    backend: string | null;
+    reason: string | null;
+    migrated: boolean;
+    legacyPresent: boolean;
+    configured: Record<DesktopCredentialSection, boolean>;
+  };
+
   interface Window {
     cumea?: {
       platform: "darwin" | "win32" | "linux" | string;
+      credentialStorageMode: DesktopCredentialStorageStatus["mode"];
+      credentialsStatus(): Promise<DesktopCredentialStorageStatus>;
+      credentialSet(payload: {
+        section: DesktopCredentialSection;
+        value: string | null;
+      }): Promise<{
+        storage: DesktopCredentialStorageStatus;
+        config: {
+          xai?: { configured: boolean };
+          composio: { configured: boolean; apiKeyConfigured?: boolean };
+          box: { configured: boolean };
+          profile?: { name: string; email: string };
+        };
+      }>;
       performanceScenario?: {
         profile: "first-run" | "returning";
         seedOnboarding: boolean;
