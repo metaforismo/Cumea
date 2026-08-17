@@ -38,9 +38,13 @@ should not bypass the release, security, persistence, or measurement foundations
 - [~] **P0.00 — Triage draft PR #9.** Preserve its work, identify conflicts with current `main`, and
   split it into independently mergeable PRs for Quick agents, safe file viewers, dictation, mobile
   paging, lifecycle hardening, and release evidence. Do not merge the 124-file draft as one tranche.
-- [ ] **P0.01 — Desktop performance baseline and regression harness.** Add production-build timing
+- [~] **P0.01 — Desktop performance baseline and regression harness.** Add production-build timing
   marks, deterministic fixtures, JSON/Markdown reports, comparison tooling, documented metric
   definitions, and bundle-size budgets before changing startup behavior.
+  - [x] P0.01a — Add opt-in cross-process timing marks, a versioned local report format,
+    deterministic summary/comparison tests, documented metric semantics, and CI bundle budgets.
+  - [ ] P0.01b — Add a packaged multi-sample runner with isolated first-run/returning profiles,
+    explicit cache treatment, timeout/recovery behavior, and fixed-machine trend artifacts.
 - [ ] **P0.02 — Operating-system secret storage.** Migrate optional desktop credentials from plaintext
   configuration to Electron `safeStorage`, keep the renderer write-only, redact diagnostics, and
   retain a tested recovery path when the OS credential store is unavailable.
@@ -147,3 +151,4 @@ Every implementation PR must include, where applicable:
 | Date | Item | Result |
 |---|---|---|
 | 2026-08-17 | Planning | Created the ordered execution plan and began triage of draft PR #9. |
+| 2026-08-17 | P0.01a | Added opt-in desktop timing evidence, summary/comparison tooling, tests, documentation, and CI bundle budgets without changing startup sequencing. |
