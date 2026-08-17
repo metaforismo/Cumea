@@ -59,7 +59,7 @@ pnpm perf:desktop -- \
   --samples 5
 ```
 
-After P0.03a this mark can occur while the harness is still starting. That is intentional: it measures
+After P0.03 this mark can occur while the harness is still starting. That is intentional: it measures
 the user-visible first-run surface, not full agent-host readiness. `CUMEA_PERFORMANCE_AUTO_QUIT=1`
 may consequently terminate the still-starting harness after the terminal mark is flushed.
 
@@ -120,7 +120,7 @@ pass `--app`, or use `--skip-build` when a compatible package already exists und
 
 `--runtime real` preserves ambient provider/CLI environment and follows production capability paths.
 It may inspect authenticated local CLIs, contact configured third parties, or show operating-system
-permission prompts when the corresponding capability is actually inspected or requested. P0.03a
+permission prompts when the corresponding capability is actually inspected or requested. P0.03
 makes local-computer reconciliation lazy, so merely painting the normal packaged shell is no longer
 supposed to initialize the CUA SDK/TCC/socket path.
 
@@ -241,20 +241,19 @@ can be compared without assuming their `performance.timeOrigin` values are ident
 |---|---|
 | `main.module-to-ready` | Electron main module evaluated → Electron `ready` event |
 | `main.cache-clear` | Chromium HTTP/code cache maintenance start → settle; maintenance reports only |
-| `main.cua-initialization` | local-computer initialization/disable marks where explicitly recorded; normal P0.03a startup no longer performs real CUA reconciliation |
-| `main.server-startup` | asynchronous packaged harness startup request → verified harness readiness |
+| `main.cua-initialization` | local-computer initialization/disable marks where explicitly recorded; normal P0.03 startup no longer performs real CUA reconciliation |
+| `main.server-startup` | packaged UtilityProcess fork/start request → validated exact-PID readiness message carrying the actual bound local port |
 | `main.window-creation` | `BrowserWindow` construction start → constructor returned |
 | `main.navigation` | `loadURL` request → renderer `did-finish-load` |
 | `renderer.entry-to-shell-painted` | renderer entry evaluated → initial packaged shell received two paint opportunities; **does not imply harness readiness** |
 | `renderer.entry-to-shell-usable` | renderer entry evaluated → SSE connected, configuration present, an active agent present, and that committed state received two paint opportunities |
-| `renderer.entry-to-onboarding-painted` | renderer entry evaluated → first-run onboarding received two paint opportunities; can precede harness readiness after P0.03a |
+| `renderer.entry-to-onboarding-painted` | renderer entry evaluated → first-run onboarding received two paint opportunities; can precede harness readiness after P0.03 |
 | `desktop.module-to-shell-usable` | Electron main module evaluated → returning usable-shell paint |
 | `desktop.module-to-onboarding-painted` | Electron main module evaluated → first-run onboarding paint |
 
-The readiness definitions are intentionally explicit and versioned. P0.03a changes sequencing rather
+The readiness definitions are intentionally explicit and versioned. P0.03 changes sequencing rather
 than silently pretending the old first-run paint and new first-run paint contain identical work.
-P0.03b will also change the harness readiness mechanism from HTTP polling/fixed fallback ports to an
-OS-assigned port plus parent/child message. P0.04 may later tighten application-data readiness through
+P0.03b changed the harness readiness mechanism from HTTP polling/fixed fallback ports to an OS-assigned port plus exact-PID parent/child message. P0.04 may later tighten application-data readiness through
 an atomic bootstrap. Each change must be documented before cross-version comparisons are published.
 
 ## Cold, warm, and reopen terminology
