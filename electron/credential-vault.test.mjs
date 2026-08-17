@@ -28,12 +28,15 @@ function fakeSafeStorage({ available = true, backend = "gnome_libsecret", rotate
     },
     async encryptStringAsync(text) {
       encryptions += 1;
-      return Buffer.from(`encrypted:${text}`, "utf8");
+      return Buffer.from(`encrypted:${Buffer.from(text, "utf8").toString("base64")}`, "utf8");
     },
     async decryptStringAsync(buffer) {
       const text = buffer.toString("utf8");
       if (!text.startsWith("encrypted:")) throw new Error("bad ciphertext");
-      return { result: text.slice("encrypted:".length), shouldReEncrypt: rotate };
+      return {
+        result: Buffer.from(text.slice("encrypted:".length), "base64").toString("utf8"),
+        shouldReEncrypt: rotate,
+      };
     },
   };
 }
@@ -189,14 +192,15 @@ test("corrupt encrypted data fails closed without touching legacy config", async
   }
 });
 
-test("server environment uses only bounded dedicated fields", () => {
-  const environment = serverCredentialEnvironment(
-    { xai: "xai", composio: "connect", composioApi: "project", box: "box" },
-    "a".repeat(64),
-  );
+test("server environment uses only bounded dedicated bootstrap fields", () => {
+  const environment = serverCredentialEnvironment({
+    xai: "xai",
+    composio: "connect",
+    composioApi: "project",
+    box: "box",
+  });
   assert.deepEqual(environment, {
     CUMEA_DESKTOP_CREDENTIALS_MANAGED: "1",
-    CUMEA_DESKTOP_CREDENTIAL_TOKEN: "a".repeat(64),
     CUMEA_DESKTOP_XAI_KEY: "xai",
     CUMEA_DESKTOP_COMPOSIO_KEY: "connect",
     CUMEA_DESKTOP_COMPOSIO_API_KEY: "project",
