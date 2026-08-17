@@ -14,6 +14,8 @@ Cumea's desktop renderer starts from one bounded local snapshot instead of indep
 
 The same protocol runs again after every SSE reconnect. A reconnect therefore does not issue the old four-request reload cascade.
 
+Only the selected transcript is included in that startup cut. Other bots remain lightweight in the initial agent index. On the first switch to an unloaded bot, the renderer requests its latest 80 messages and merges that page with any messages or patches already received through SSE. Existing renderer copies win on duplicate IDs, so a late HTTP page cannot overwrite a newer streamed patch. P0.06 will extend this first-page behavior into full prepend paging and scroll-position preservation.
+
 ## Bounds
 
 The startup projection intentionally does not attempt to serialize unlimited history:
@@ -25,7 +27,7 @@ The startup projection intentionally does not attempt to serialize unlimited his
 - workspace sections, attachments, tasks, runs, and routines have independent count and byte budgets;
 - the renderer buffers at most 2,048 SSE frames during a snapshot cut.
 
-Every workspace category reports omitted-record counts. If the startup workspace was truncated, opening Work performs a normal full `/api/work` reload outside the startup critical path.
+Every workspace category reports omitted-record counts. If the startup workspace was truncated, opening Work performs a normal full `/api/work` reload outside the startup critical path. That reload is serialized after the first bootstrap and single-flight, so opening Work during startup cannot cause a full workspace response to be overwritten by the later bounded projection.
 
 ## Event cursor
 
