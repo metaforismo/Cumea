@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowRight, Check, Download, FileText, ListChecks, Loader2, Monitor, Square, X } from "lucide-react";
+import { ArrowDown, ArrowRight, Bug, Check, Download, FileText, ListChecks, Loader2, Monitor, Square, X } from "lucide-react";
 import { api, useStore, formatTime, type Bot, type Message } from "@/state/store";
 import { CumeaAvatar } from "./Avatar";
 import { expressionForBot } from "@/lib/mascot";
@@ -171,7 +171,7 @@ function StreamingBubble({ text }: { text: string }) {
   );
 }
 
-export function ChatView({ bot }: { bot: Bot }) {
+export function ChatView({ bot, inspectorOpen = false, onToggleInspector }: { bot: Bot; inspectorOpen?: boolean; onToggleInspector?: () => void }) {
   const { state, dispatch } = useStore();
   const scrollRef = useRef<HTMLDivElement>(null);
   const focusRef = useRef<HTMLDivElement>(null);
@@ -275,6 +275,19 @@ export function ChatView({ bot }: { bot: Bot }) {
               Stop
             </button>
           )}
+          {onToggleInspector ? (
+            <button
+              onClick={onToggleInspector}
+              className={cn(
+                "rounded-md p-1.5 hover:bg-raised",
+                inspectorOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
+              )}
+              aria-label="Open local runtime inspector"
+              title="Runtime inspector: events and raw provider diagnostics"
+            >
+              <Bug size={18} />
+            </button>
+          ) : null}
           <button
             onClick={() => dispatch({ type: "toggleWork", tab: "activity" })}
             className={cn(

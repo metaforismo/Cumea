@@ -203,7 +203,7 @@ should not bypass the release, security, persistence, or measurement foundations
   progress and approval handling, interruption, and explicit platform capability reporting.
 - [ ] **P1.11 — Unified inspector.** Replace unrelated right-side surfaces with resizable Agent, Work,
   Computer, Apps, Memory and Diagnostics tabs whose state/badges remain scoped to the active agent.
-  - [ ] P1.11a — Add a desktop-local per-thread **Events / Raw** diagnostics lens over existing `events/`
+  - [x] P1.11a — Add a desktop-local per-thread **Events / Raw** diagnostics lens over existing `events/`
     and secret-redacted `native/` NDJSON: bounded tail reads, independent stream caps, torn-line tolerance,
     schema validation, folded delta summaries, expandable JSON, live/settled refresh, and no mobile exposure.
 - [ ] **P1.12 — Pluggable user-owned computer backends.** Put local CUA and the existing cloud-computer
@@ -274,3 +274,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-18 | P0.11b3 | Activated canonical transcript SQLite in the real harness with rollback-capable post-COMMIT deletion, pending-delete restart recovery, canonical/search/metadata/file rollback evidence, immutable legacy migration anchors, canonical-only new threads, and cross-platform CI. |
 | 2026-08-18 | P0.11c | Completed global desktop transcript search/navigation and bounded visible export on the local index, with exact-focus windows, Return to latest, export redaction, paired-remote denial, and cross-platform CI. P0.11 is complete. |
 | 2026-08-18 | Competitive audit refresh | Re-pinned Cumea `4b897646`, Rakazo `9622c388`, and OpenMausBot `e7d71f4b`; promoted raw diagnostics, draft-#9 extraction, app-wide accessibility, session freshness, busy steering, package spawn closure, connector continuation, mobile discovery/notifications, provider onboarding, and bounded subagents into explicit gates without weakening the local/privacy model. |
+| 2026-08-18 | P1.11a | Added a desktop-local bounded Runtime inspector over existing normalized and secret-redacted native thread logs, with Events/Raw lenses, payload clipping, torn-line tolerance, real-harness local/no-store evidence, authenticated mobile denial, and right-slot UI integration. |
