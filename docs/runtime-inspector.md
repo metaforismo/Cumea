@@ -55,7 +55,7 @@ The inspector has two lenses:
 - **Events** — normalized turn/session/tool/request/usage/error records with a human-readable summary and expandable bounded JSON;
 - **Raw** — inbound/outbound native protocol records with source labels and expandable bounded payloads.
 
-Opening the inspector closes the other right-side panels. Changing the selected agent closes the inspector instead of silently showing diagnostics for a different thread.
+Opening the inspector closes the other right-side panels. Changing the selected agent closes the inspector instead of silently showing diagnostics for a different thread. Opening, refreshing, or closing diagnostics never starts, interrupts, retries, or otherwise changes the provider turn lifecycle.
 
 ## Evidence boundary
 
