@@ -9,24 +9,27 @@ import {
   nativeTurnText,
 } from "./turn-context.ts";
 
-function message(
-  id: string,
-  role: "user" | "bot",
-  text: string,
-  at: number,
-): Message {
+function message(id: string, role: "user" | "bot", text: string, at: number): Message {
   return { id, role, kind: "text", text, at };
+}
+
+function decide(
+  patch: Partial<Parameters<typeof decideTurnContext>[0]> = {},
+) {
+  return decideTurnContext({
+    selectedInstanceId: "claude",
+    selectedModel: "claude-sonnet-5",
+    sessionModelSwitch: "in-session",
+    resumeCursors: {},
+    transcript: [{ role: "user", text: "Existing history" }],
+    ...patch,
+  });
 }
 
 describe("turn context freshness", () => {
   it("does not invent a rebuild before the first real user turn", () => {
-    const transcript = [{ role: "assistant" as const, text: "Hello" }];
     expect(
-      decideTurnContext({
-        selectedInstanceId: "claude",
-        resumeCursors: {},
-        transcript,
-      }),
+      decide({ transcript: [{ role: "assistant", text: "Hello" }] }),
     ).toMatchObject({
       resumeCursor: undefined,
       rebuildContext: false,
@@ -35,13 +38,11 @@ describe("turn context freshness", () => {
   });
 
   it("resumes only when the selected native session is still the last dispatched instance", () => {
-    const transcript = [{ role: "user" as const, text: "First" }];
     expect(
-      decideTurnContext({
-        selectedInstanceId: "claude",
+      decide({
         lastDispatchedInstanceId: "claude",
+        lastDispatchedModel: "claude-sonnet-5",
         resumeCursors: { claude: "session-a" },
-        transcript,
       }),
     ).toMatchObject({
       resumeCursor: "session-a",
@@ -51,18 +52,17 @@ describe("turn context freshness", () => {
   });
 
   it("rebuilds A to B to A instead of trusting A's stale cursor", () => {
-    const transcript = [
-      { role: "user" as const, text: "A saw this" },
-      { role: "assistant" as const, text: "A replied" },
-      { role: "user" as const, text: "B then saw this" },
-      { role: "assistant" as const, text: "B replied" },
-    ];
     expect(
-      decideTurnContext({
-        selectedInstanceId: "claude",
+      decide({
         lastDispatchedInstanceId: "gemini",
+        lastDispatchedModel: "gemini-3",
         resumeCursors: { claude: "stale-a", gemini: "session-b" },
-        transcript,
+        transcript: [
+          { role: "user", text: "A saw this" },
+          { role: "assistant", text: "A replied" },
+          { role: "user", text: "B then saw this" },
+          { role: "assistant", text: "B replied" },
+        ],
       }),
     ).toMatchObject({
       resumeCursor: undefined,
@@ -71,33 +71,54 @@ describe("turn context freshness", () => {
     });
   });
 
+  it("rebuilds an unsupported in-session model change", () => {
+    expect(
+      decide({
+        selectedInstanceId: "codex",
+        selectedModel: "gpt-5.6-terra",
+        sessionModelSwitch: "unsupported",
+        lastDispatchedInstanceId: "codex",
+        lastDispatchedModel: "gpt-5.6-sol",
+        resumeCursors: { codex: "thread-a" },
+      }),
+    ).toMatchObject({ resumeCursor: undefined, rebuildContext: true, reason: "model-changed" });
+  });
+
+  it("allows a model change when the adapter supports in-session switching", () => {
+    expect(
+      decide({
+        selectedModel: "claude-opus-5",
+        sessionModelSwitch: "in-session",
+        lastDispatchedInstanceId: "claude",
+        lastDispatchedModel: "claude-sonnet-5",
+        resumeCursors: { claude: "session-a" },
+      }),
+    ).toMatchObject({ resumeCursor: "session-a", rebuildContext: false, reason: "selected-session-fresh" });
+  });
+
   it("rebuilds when the selected instance lost its cursor", () => {
-    const decision = decideTurnContext({
-      selectedInstanceId: "codex",
-      lastDispatchedInstanceId: "codex",
-      resumeCursors: {},
-      transcript: [{ role: "user", text: "Existing history" }],
-    });
-    expect(decision.reason).toBe("selected-session-missing");
-    expect(decision.rebuildContext).toBe(true);
+    expect(
+      decide({
+        selectedInstanceId: "codex",
+        selectedModel: "gpt-5.6-sol",
+        sessionModelSwitch: "unsupported",
+        lastDispatchedInstanceId: "codex",
+        lastDispatchedModel: "gpt-5.6-sol",
+      }),
+    ).toMatchObject({ reason: "selected-session-missing", rebuildContext: true });
   });
 
   it("migrates one unambiguous legacy cursor but rebuilds ambiguous legacy state", () => {
-    const transcript = [{ role: "user" as const, text: "Existing history" }];
-    expect(
-      decideTurnContext({
-        selectedInstanceId: "claude",
-        resumeCursors: { claude: "legacy-a" },
-        transcript,
-      }),
-    ).toMatchObject({ reason: "legacy-selected-session", resumeCursor: "legacy-a", rebuildContext: false });
-    expect(
-      decideTurnContext({
-        selectedInstanceId: "claude",
-        resumeCursors: { claude: "legacy-a", gemini: "legacy-b" },
-        transcript,
-      }),
-    ).toMatchObject({ reason: "legacy-ambiguous", resumeCursor: undefined, rebuildContext: true });
+    expect(decide({ resumeCursors: { claude: "legacy-a" } })).toMatchObject({
+      reason: "legacy-selected-session",
+      resumeCursor: "legacy-a",
+      rebuildContext: false,
+    });
+    expect(decide({ resumeCursors: { claude: "legacy-a", gemini: "legacy-b" } })).toMatchObject({
+      reason: "legacy-ambiguous",
+      resumeCursor: undefined,
+      rebuildContext: true,
+    });
   });
 });
 
@@ -122,6 +143,7 @@ describe("bounded canonical transcript", () => {
     const bytes = transcript.reduce((sum, entry) => sum + Buffer.byteLength(entry.text, "utf8"), 0);
     expect(bytes).toBeLessThanOrEqual(TURN_CONTEXT_MAX_BYTES + 128);
     expect(transcript.at(-1)?.text.startsWith("19:")).toBe(true);
+    expect(transcript.some((entry) => entry.text.includes("�"))).toBe(false);
   });
 });
 
