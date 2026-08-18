@@ -30,7 +30,7 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { appendNative } from "./native.ts";
-import { nativeTurnText } from "../turn-context.ts";
+import { nativeResumeCursor, nativeTurnText } from "../turn-context.ts";
 
 const DRIVER_KIND = "claudeAgent";
 
@@ -229,7 +229,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const { threadId } = turn;
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = newId();
-      const sessionId = !turn.rebuildContext && typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
+      const sessionId = nativeResumeCursor(turn);
       const newSessionId = sessionId ? null : newId();
 
       const args = [

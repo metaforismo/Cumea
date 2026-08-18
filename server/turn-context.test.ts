@@ -6,6 +6,7 @@ import {
   TURN_CONTEXT_MAX_MESSAGES,
   boundedTurnTranscript,
   decideTurnContext,
+  nativeResumeCursor,
   nativeTurnText,
 } from "./turn-context.ts";
 
@@ -155,6 +156,18 @@ describe("bounded canonical transcript", () => {
     expect(bytes).toBeLessThanOrEqual(TURN_CONTEXT_MAX_BYTES + 128);
     expect(transcript.at(-1)?.text.startsWith("19:")).toBe(true);
     expect(transcript.some((entry) => entry.text.includes("�"))).toBe(false);
+  });
+});
+
+describe("native resume guard", () => {
+  it("accepts only a non-empty cursor when the session is still trusted", () => {
+    expect(nativeResumeCursor({ resumeCursor: "session-a" })).toBe("session-a");
+    expect(nativeResumeCursor({ resumeCursor: "   " })).toBeNull();
+    expect(nativeResumeCursor({ resumeCursor: 42 })).toBeNull();
+  });
+
+  it("refuses every cursor when canonical context must be rebuilt", () => {
+    expect(nativeResumeCursor({ resumeCursor: "stale-session", rebuildContext: true })).toBeNull();
   });
 });
 

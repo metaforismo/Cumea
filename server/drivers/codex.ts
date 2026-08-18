@@ -24,7 +24,7 @@ import type {
 import { newEventId, newId } from "../contracts.ts";
 import { augmentedPath } from "../env-path.ts";
 import { appendNative } from "./native.ts";
-import { nativeTurnText } from "../turn-context.ts";
+import { nativeResumeCursor, nativeTurnText } from "../turn-context.ts";
 
 const DRIVER_KIND = "codex";
 
@@ -343,7 +343,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         try {
           await request("initialize", { clientInfo: { name: "cumea", version: "1" } });
           send({ jsonrpc: "2.0", method: "initialized", params: {} });
-          const cursor = !turn.rebuildContext && typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
+          const cursor = nativeResumeCursor(turn);
           let codexThreadId: string | null = null;
           let startedModel: string | null = null;
           if (cursor) {
