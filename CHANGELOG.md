@@ -26,6 +26,10 @@ All notable changes to Cumea are documented here. This project follows
   It incrementally follows visible folded messages, excludes raw/provider-private fields, reconciles
   against canonical transcript fingerprints after crashes, and keeps canonical JSON as the recovery
   source until P0.11b.
+- Added the P0.11b canonical transcript database foundation: owner-local `transcripts.sqlite`,
+  verified all-or-nothing legacy import with SHA-256 provenance, stable message ordering, per-thread
+  revisions, incremental append/patch primitives, reversible pending deletion, crash reconciliation,
+  and independently readable `VACUUM INTO` backups. Production Store cutover remains P0.11b2.
 
 ### Changed
 
@@ -41,6 +45,9 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Canonical transcript import is fail-closed: malformed legacy roots/messages or duplicate message IDs
+  never create a partial thread. `pending_delete` freezes reads and mutations while retaining bytes for
+  rollback, and interrupted pending deletes can be reconciled against the authoritative bot roster.
 - Transcript-index deletion is privacy-sensitive: the derived DB is owner-only, uses SQLite
   `secure_delete`, requires a WAL truncate checkpoint for thread deletion, fails closed if a
   residual index cannot be opened, and restores indexed rows when the surrounding bot deletion
