@@ -8,6 +8,7 @@ export type TurnContextReason =
   | "no-prior-user-turn"
   | "selected-session-fresh"
   | "instance-changed"
+  | "model-changed"
   | "selected-session-missing"
   | "legacy-selected-session"
   | "legacy-ambiguous";
@@ -27,7 +28,7 @@ function clipUtf8(value: string, maxBytes: number): string {
   if (utf8Bytes(value) <= maxBytes) return value;
   const buffer = Buffer.from(value, "utf8");
   let end = Math.min(buffer.length, maxBytes);
-  while (end > 0 && (buffer[end] & 0b1100_0000) === 0b1000_0000) end -= 1;
+  while (end > 0 && buffer.subarray(0, end).toString("utf8").endsWith("�")) end -= 1;
   return `${buffer.subarray(0, Math.max(0, end)).toString("utf8")}\n[… earlier content clipped …]`;
 }
 
@@ -69,7 +70,10 @@ function usableCursor(value: unknown): string | undefined {
 
 export function decideTurnContext(input: {
   selectedInstanceId: string;
+  selectedModel: string;
+  sessionModelSwitch: "in-session" | "unsupported";
   lastDispatchedInstanceId?: string | null;
+  lastDispatchedModel?: string | null;
   resumeCursors: Record<string, unknown>;
   transcript: Array<{ role: "user" | "assistant"; text: string }>;
 }): TurnContextDecision {
@@ -94,6 +98,18 @@ export function decideTurnContext(input: {
         reason: "instance-changed",
       };
     }
+    if (
+      input.sessionModelSwitch === "unsupported" &&
+      input.lastDispatchedModel &&
+      input.lastDispatchedModel !== input.selectedModel
+    ) {
+      return {
+        resumeCursor: undefined,
+        transcript: input.transcript,
+        rebuildContext: true,
+        reason: "model-changed",
+      };
+    }
     if (selectedCursor) {
       return {
         resumeCursor: selectedCursor,
@@ -110,9 +126,9 @@ export function decideTurnContext(input: {
     };
   }
 
-  // Migration compatibility for bots created before lastDispatchedInstanceId
-  // existed: one matching native cursor is unambiguous. Any other legacy
-  // shape rebuilds from canonical transcript instead of guessing.
+  // Migration compatibility for bots created before dispatch freshness existed:
+  // one matching native cursor is unambiguous. Any other legacy shape rebuilds
+  // from canonical transcript instead of guessing.
   const usableEntries = Object.entries(input.resumeCursors).filter(([, cursor]) => usableCursor(cursor));
   if (
     usableEntries.length === 1 &&
@@ -136,7 +152,7 @@ export function decideTurnContext(input: {
 }
 
 /** Native session drivers cannot replay assistant/user roles through every
- * protocol. When a prior native session is stale, quote the canonical history
+ * protocol. When a prior native session is stale, quote canonical history
  * inside the next *user* turn rather than elevating prior user/model content
  * into the system prompt. */
 export function nativeTurnText(input: {
