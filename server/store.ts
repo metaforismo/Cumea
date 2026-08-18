@@ -431,6 +431,19 @@ export class Store {
       try {
         this.messageSearch.deleteThread(bot.threadId);
       } catch (error) {
+        // deleteThread can fail after SQLite committed the logical DELETE
+        // (for example while enforcing the privacy checkpoint). Restore the
+        // derived rows before reporting a failed bot deletion so the visible
+        // bot never survives with a silently missing search transcript.
+        try {
+          this.messageSearch.replaceThread(bot.threadId, searchSnapshot);
+        } catch (restoreError) {
+          this.disableMessageSearch(restoreError);
+          throw Object.assign(
+            new Error("could not remove transcript from local search index and restore the derived index"),
+            { status: 500, cause: new AggregateError([error, restoreError]) },
+          );
+        }
         throw Object.assign(new Error("could not remove transcript from local search index"), {
           status: 500,
           cause: error,

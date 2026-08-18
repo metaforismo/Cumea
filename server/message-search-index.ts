@@ -237,11 +237,10 @@ export class MessageSearchIndex {
   }
 
   seedLegacy(bots: readonly BotRecord[]): void {
-    const marker = this.db.prepare("SELECT value FROM message_search_meta WHERE key = 'legacy_seed_v1'").get() as
-      | { value: string }
-      | undefined;
-    if (marker?.value === "complete") return;
-
+    // Re-check per-thread presence on every start. The global marker avoids
+    // no work by itself: a previous rollback/index failure may have removed
+    // one derived thread while leaving the marker behind. hasThread() is
+    // cheap; canonical JSON is parsed only for missing rows.
     for (const bot of bots) {
       if (this.hasThread(bot.threadId)) continue;
       const path = join(DATA_DIR, `messages-${bot.threadId}.json`);
