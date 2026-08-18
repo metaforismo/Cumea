@@ -17,7 +17,7 @@ describe("SessionFreshnessStore", () => {
       const first = new SessionFreshnessStore(f.root);
       first.mark("thread-1", { instanceId: "claude", model: "claude-sonnet-5" });
       const second = new SessionFreshnessStore(f.root);
-      expect(second.get("thread-1")).toEqual({ instanceId: "claude", model: "claude-sonnet-5" });
+      expect(second.get("thread-1")).toEqual({ state: "dispatched", instanceId: "claude", model: "claude-sonnet-5" });
       const disk = readFileSync(join(f.root, "session-freshness.json"), "utf8");
       expect(disk).toContain("claude-sonnet-5");
       expect(disk).not.toContain("messages");
@@ -35,6 +35,7 @@ describe("SessionFreshnessStore", () => {
       expect(store.get("thread-1")).toBeNull();
       store.mark("thread-1", { instanceId: "codex", model: "gpt-5.6-sol" });
       expect(new SessionFreshnessStore(f.root).get("thread-1")).toEqual({
+        state: "dispatched",
         instanceId: "codex",
         model: "gpt-5.6-sol",
       });
@@ -43,7 +44,7 @@ describe("SessionFreshnessStore", () => {
     }
   });
 
-  it("deletes one thread and invalidates all provider sessions", () => {
+  it("deletes one thread and persists provider-reload invalidation", () => {
     const f = fixture();
     try {
       const store = new SessionFreshnessStore(f.root);
@@ -51,10 +52,11 @@ describe("SessionFreshnessStore", () => {
       store.mark("thread-b", { instanceId: "gemini", model: "b" });
       store.delete("thread-a");
       expect(store.get("thread-a")).toBeNull();
-      expect(store.get("thread-b")).toEqual({ instanceId: "gemini", model: "b" });
-      store.invalidateAll();
-      expect(store.get("thread-b")).toBeNull();
-      expect(new SessionFreshnessStore(f.root).get("thread-b")).toBeNull();
+      expect(store.get("thread-b")).toEqual({ state: "dispatched", instanceId: "gemini", model: "b" });
+      store.invalidate(["thread-b", "thread-c"]);
+      expect(store.get("thread-b")).toEqual({ state: "invalidated" });
+      expect(store.get("thread-c")).toEqual({ state: "invalidated" });
+      expect(new SessionFreshnessStore(f.root).get("thread-b")).toEqual({ state: "invalidated" });
     } finally {
       f.cleanup();
     }
