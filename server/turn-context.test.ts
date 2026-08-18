@@ -14,9 +14,7 @@ function message(id: string, role: "user" | "bot", text: string, at: number): Me
   return { id, role, kind: "text", text, at };
 }
 
-function decide(
-  patch: Partial<Parameters<typeof decideTurnContext>[0]> = {},
-) {
+function decide(patch: Partial<Parameters<typeof decideTurnContext>[0]> = {}) {
   return decideTurnContext({
     selectedInstanceId: "claude",
     selectedModel: "claude-sonnet-5",
@@ -29,9 +27,7 @@ function decide(
 
 describe("turn context freshness", () => {
   it("does not invent a rebuild before the first real user turn", () => {
-    expect(
-      decide({ transcript: [{ role: "assistant", text: "Hello" }] }),
-    ).toMatchObject({
+    expect(decide({ transcript: [{ role: "assistant", text: "Hello" }] })).toMatchObject({
       resumeCursor: undefined,
       rebuildContext: false,
       reason: "no-prior-user-turn",
@@ -39,13 +35,12 @@ describe("turn context freshness", () => {
   });
 
   it("resumes only when the selected native session is still the last dispatched instance", () => {
-    expect(
-      decide({
-        lastDispatchedInstanceId: "claude",
-        lastDispatchedModel: "claude-sonnet-5",
-        resumeCursors: { claude: "session-a" },
-      }),
-    ).toMatchObject({
+    expect(decide({
+      sessionState: "dispatched",
+      lastDispatchedInstanceId: "claude",
+      lastDispatchedModel: "claude-sonnet-5",
+      resumeCursors: { claude: "session-a" },
+    })).toMatchObject({
       resumeCursor: "session-a",
       rebuildContext: false,
       reason: "selected-session-fresh",
@@ -54,7 +49,7 @@ describe("turn context freshness", () => {
 
   it("rebuilds after an explicit provider-fleet invalidation even when one old cursor remains", () => {
     expect(decide({
-      sessionInvalidated: true,
+      sessionState: "invalidated",
       resumeCursors: { claude: "old-session" },
     })).toMatchObject({
       resumeCursor: undefined,
@@ -63,20 +58,32 @@ describe("turn context freshness", () => {
     });
   });
 
+  it("rebuilds a pending dispatch after a crash instead of trusting the old cursor", () => {
+    expect(decide({
+      sessionState: "pending",
+      lastDispatchedInstanceId: "claude",
+      lastDispatchedModel: "claude-sonnet-5",
+      resumeCursors: { claude: "old-session" },
+    })).toMatchObject({
+      resumeCursor: undefined,
+      rebuildContext: true,
+      reason: "dispatch-interrupted",
+    });
+  });
+
   it("rebuilds A to B to A instead of trusting A's stale cursor", () => {
-    expect(
-      decide({
-        lastDispatchedInstanceId: "gemini",
-        lastDispatchedModel: "gemini-3",
-        resumeCursors: { claude: "stale-a", gemini: "session-b" },
-        transcript: [
-          { role: "user", text: "A saw this" },
-          { role: "assistant", text: "A replied" },
-          { role: "user", text: "B then saw this" },
-          { role: "assistant", text: "B replied" },
-        ],
-      }),
-    ).toMatchObject({
+    expect(decide({
+      sessionState: "dispatched",
+      lastDispatchedInstanceId: "gemini",
+      lastDispatchedModel: "gemini-3",
+      resumeCursors: { claude: "stale-a", gemini: "session-b" },
+      transcript: [
+        { role: "user", text: "A saw this" },
+        { role: "assistant", text: "A replied" },
+        { role: "user", text: "B then saw this" },
+        { role: "assistant", text: "B replied" },
+      ],
+    })).toMatchObject({
       resumeCursor: undefined,
       rebuildContext: true,
       reason: "instance-changed",
@@ -84,40 +91,37 @@ describe("turn context freshness", () => {
   });
 
   it("rebuilds an unsupported in-session model change", () => {
-    expect(
-      decide({
-        selectedInstanceId: "codex",
-        selectedModel: "gpt-5.6-terra",
-        sessionModelSwitch: "unsupported",
-        lastDispatchedInstanceId: "codex",
-        lastDispatchedModel: "gpt-5.6-sol",
-        resumeCursors: { codex: "thread-a" },
-      }),
-    ).toMatchObject({ resumeCursor: undefined, rebuildContext: true, reason: "model-changed" });
+    expect(decide({
+      selectedInstanceId: "codex",
+      selectedModel: "gpt-5.6-terra",
+      sessionModelSwitch: "unsupported",
+      sessionState: "dispatched",
+      lastDispatchedInstanceId: "codex",
+      lastDispatchedModel: "gpt-5.6-sol",
+      resumeCursors: { codex: "thread-a" },
+    })).toMatchObject({ resumeCursor: undefined, rebuildContext: true, reason: "model-changed" });
   });
 
   it("allows a model change when the adapter supports in-session switching", () => {
-    expect(
-      decide({
-        selectedModel: "claude-opus-5",
-        sessionModelSwitch: "in-session",
-        lastDispatchedInstanceId: "claude",
-        lastDispatchedModel: "claude-sonnet-5",
-        resumeCursors: { claude: "session-a" },
-      }),
-    ).toMatchObject({ resumeCursor: "session-a", rebuildContext: false, reason: "selected-session-fresh" });
+    expect(decide({
+      selectedModel: "claude-opus-5",
+      sessionModelSwitch: "in-session",
+      sessionState: "dispatched",
+      lastDispatchedInstanceId: "claude",
+      lastDispatchedModel: "claude-sonnet-5",
+      resumeCursors: { claude: "session-a" },
+    })).toMatchObject({ resumeCursor: "session-a", rebuildContext: false, reason: "selected-session-fresh" });
   });
 
   it("rebuilds when the selected instance lost its cursor", () => {
-    expect(
-      decide({
-        selectedInstanceId: "codex",
-        selectedModel: "gpt-5.6-sol",
-        sessionModelSwitch: "unsupported",
-        lastDispatchedInstanceId: "codex",
-        lastDispatchedModel: "gpt-5.6-sol",
-      }),
-    ).toMatchObject({ reason: "selected-session-missing", rebuildContext: true });
+    expect(decide({
+      selectedInstanceId: "codex",
+      selectedModel: "gpt-5.6-sol",
+      sessionModelSwitch: "unsupported",
+      sessionState: "dispatched",
+      lastDispatchedInstanceId: "codex",
+      lastDispatchedModel: "gpt-5.6-sol",
+    })).toMatchObject({ reason: "selected-session-missing", rebuildContext: true });
   });
 
   it("migrates one unambiguous legacy cursor but rebuilds ambiguous legacy state", () => {
