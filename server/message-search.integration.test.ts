@@ -168,8 +168,6 @@ describe("local transcript search integration", () => {
     const threadId = String((created.body as any).bot.threadId);
     await stop(first.child);
 
-    // Restart from the same canonical profile so the in-memory transcript map
-    // is cold when DELETE begins.
     const restarted = await startHarness({ dataDir: first.dataDir });
     const botsFile = path.join(first.dataDir, "bots.json");
     const botsBackup = path.join(first.dataDir, "bots.json.rollback-test");
@@ -195,10 +193,45 @@ describe("local transcript search integration", () => {
     const canonical = new TranscriptStore(path.join(first.dataDir, "transcripts.sqlite"));
     try {
       expect(canonical.threadState(threadId)).toMatchObject({ state: "active" });
-      expect(canonical.messagesFor(threadId).some((message) => message.text?.includes("Nice to meet") || message.text?.includes("nice to meet")))
-        .toBe(true);
+      expect(canonical.messagesFor(threadId).some((message) => message.text?.toLowerCase().includes("nice to meet"))).toBe(true);
     } finally {
       canonical.close();
+    }
+  });
+
+  it("recovers an interrupted pending canonical delete when the bot still exists at restart", async () => {
+    const first = await startHarness();
+    const created = await json(first.port, "/api/bots", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Pending recovery" }),
+    });
+    expect(created.response.status).toBe(201);
+    const botId = String((created.body as any).bot.id);
+    const threadId = String((created.body as any).bot.threadId);
+    await stop(first.child);
+
+    const canonical = new TranscriptStore(path.join(first.dataDir, "transcripts.sqlite"));
+    canonical.stageDelete(threadId); // leave durable pending_delete, simulating process death
+    expect(canonical.threadState(threadId)?.state).toBe("pending_delete");
+    canonical.close();
+
+    const restarted = await startHarness({ dataDir: first.dataDir });
+    const bots = await json(restarted.port, "/api/bots");
+    expect((bots.body as any).bots).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: botId, threadId })]),
+    );
+    const found = await json(restarted.port, "/api/search/messages?q=nice%20to%20meet&limit=20");
+    expect((found.body as any).hits).toEqual(
+      expect.arrayContaining([expect.objectContaining({ botId, botName: "Pending recovery" })]),
+    );
+    await stop(restarted.child);
+
+    const recovered = new TranscriptStore(path.join(first.dataDir, "transcripts.sqlite"));
+    try {
+      expect(recovered.threadState(threadId)?.state).toBe("active");
+    } finally {
+      recovered.close();
     }
   });
 
