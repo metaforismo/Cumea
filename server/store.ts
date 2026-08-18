@@ -2,12 +2,18 @@
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
 // one). messages-<threadId>.json holds the folded transcript.
-import { readFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
 import { stageFilesForDeletion, type DeletionFile } from "./delete-files.ts";
 import { writeFileAtomic } from "./atomic.ts";
+import {
+  MESSAGE_SEARCH_DB_PATH,
+  MessageSearchIndex,
+  canonicalFileFingerprint,
+  type TranscriptSearchResult,
+} from "./message-search-index.ts";
 import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
 
 export type CumeaColor =
@@ -229,8 +235,10 @@ export class Store {
   bots: BotRecord[] = [];
   private messages = new Map<string, Message[]>();
   private defaultSelection: () => ModelSelection;
+  private messageSearch: MessageSearchIndex | null = null;
+  private messageSearchHasResidualData = false;
 
-  constructor(defaultSelection: () => ModelSelection) {
+  constructor(defaultSelection: () => ModelSelection, options: { messageSearch?: boolean } = {}) {
     this.defaultSelection = defaultSelection;
     mkdirSync(DATA_DIR, { recursive: true });
     try {
@@ -254,6 +262,39 @@ export class Store {
       }
     }
     if (migrated) this.saveBots();
+    if (options.messageSearch) {
+      try {
+        this.messageSearch = new MessageSearchIndex();
+        this.messageSearch.seedLegacy(this.bots);
+        this.messageSearchHasResidualData = false;
+      } catch (error) {
+        this.messageSearch = null;
+        this.messageSearchHasResidualData = existsSync(MESSAGE_SEARCH_DB_PATH);
+        console.warn(
+          "[message-search] local transcript search is unavailable:",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+  }
+
+  private disableMessageSearch(error: unknown) {
+    console.warn(
+      "[message-search] disabling derived transcript search:",
+      error instanceof Error ? error.message : String(error),
+    );
+    this.messageSearchHasResidualData = existsSync(MESSAGE_SEARCH_DB_PATH);
+    try { this.messageSearch?.close(); } catch {}
+    this.messageSearch = null;
+  }
+
+  private indexMessage(threadId: string, message: Message) {
+    if (!this.messageSearch) return;
+    try {
+      this.messageSearch.upsert(threadId, message, canonicalFileFingerprint(messagesFile(threadId)));
+    } catch (error) {
+      this.disableMessageSearch(error);
+    }
   }
 
   private saveBots() {
@@ -278,6 +319,7 @@ export class Store {
     const list = this.messagesFor(threadId);
     list.push(full);
     writeFileAtomic(messagesFile(threadId), JSON.stringify(list, null, 2));
+    this.indexMessage(threadId, full);
     return full;
   }
 
@@ -287,6 +329,7 @@ export class Store {
     if (idx === -1) return null;
     list[idx] = { ...list[idx], ...patch, card: patch.card ?? list[idx].card };
     writeFileAtomic(messagesFile(threadId), JSON.stringify(list, null, 2));
+    this.indexMessage(threadId, list[idx]);
     return list[idx];
   }
 
@@ -332,10 +375,14 @@ export class Store {
     const bot = this.bot(id);
     if (!bot) return false;
 
+    // Capture canonical transcript state before the JSON file is moved into
+    // the deletion quarantine. A cold Store cache must still be able to
+    // reconstruct the derived search index if a later metadata commit fails.
+    const transcriptSnapshot = [...this.messagesFor(bot.threadId)];
     const files = stageFilesForDeletion(this.botDeletionFiles(id));
     let transaction: BotRecordDeletionTransaction | null = null;
     try {
-      transaction = this.deleteBotRecordTransaction(id);
+      transaction = this.deleteBotRecordTransaction(id, transcriptSnapshot);
       if (!transaction) throw Object.assign(new Error("bot disappeared during deletion"), { status: 500 });
       files.purge();
       transaction.finalize();
@@ -368,15 +415,59 @@ export class Store {
   }
 
   /** Metadata phase used after the outer transaction quarantines every file. */
-  deleteBotRecordTransaction(id: string): BotRecordDeletionTransaction | null {
+  deleteBotRecordTransaction(
+    id: string,
+    transcriptSnapshot: readonly Message[] = this.messagesFor(this.bot(id)?.threadId ?? ""),
+  ): BotRecordDeletionTransaction | null {
     const bot = this.bot(id);
     if (!bot) return null;
+    if (!this.messageSearch && this.messageSearchHasResidualData) {
+      throw Object.assign(
+        new Error("local transcript search index is unavailable; indexed transcript deletion cannot be guaranteed"),
+        { status: 500 },
+      );
+    }
+    const searchSnapshot = [...transcriptSnapshot];
+    if (this.messageSearch) {
+      try {
+        this.messageSearch.deleteThread(bot.threadId);
+      } catch (error) {
+        // deleteThread can fail after SQLite committed the logical DELETE
+        // (for example while enforcing the privacy checkpoint). Restore the
+        // derived rows before reporting a failed bot deletion so the visible
+        // bot never survives with a silently missing search transcript.
+        try {
+          this.messageSearch.replaceThread(bot.threadId, searchSnapshot);
+        } catch (restoreError) {
+          this.disableMessageSearch(restoreError);
+          throw Object.assign(
+            new Error("could not remove transcript from local search index and restore the derived index"),
+            { status: 500, cause: new AggregateError([error, restoreError]) },
+          );
+        }
+        throw Object.assign(new Error("could not remove transcript from local search index"), {
+          status: 500,
+          cause: error,
+        });
+      }
+    }
+
+    const restoreSearch = () => {
+      if (!this.messageSearch) return;
+      try {
+        this.messageSearch.replaceThread(bot.threadId, searchSnapshot);
+      } catch (error) {
+        this.disableMessageSearch(error);
+      }
+    };
+
     const previousBots = this.bots;
     this.bots = previousBots.filter((candidate) => candidate.id !== id);
     try {
       this.saveBots();
     } catch (error) {
       this.bots = previousBots;
+      restoreSearch();
       throw error;
     }
 
@@ -387,10 +478,12 @@ export class Store {
         this.bots = previousBots;
         try {
           this.saveBots();
+          restoreSearch();
           settled = true;
         } catch (error) {
           // Keep the retry anchor visible in the live store even when the
-          // durable rollback itself is blocked.
+          // durable rollback itself is blocked. The search index is derived;
+          // canonical transcript bytes remain in the quarantined JSON file.
           throw Object.assign(new Error("could not restore bot record after deletion failed"), {
             status: 500,
             cause: error,
@@ -403,6 +496,31 @@ export class Store {
         settled = true;
       },
     };
+  }
+
+  searchMessages(query: string, limit?: number): TranscriptSearchResult & {
+    hits: Array<TranscriptSearchResult["hits"][number] & { botId: string; botName: string }>;
+  } {
+    if (!this.messageSearch) return { available: false, mode: "unavailable", hits: [] };
+    try {
+      const result = this.messageSearch.search(query, limit);
+      return {
+        ...result,
+        hits: result.hits.flatMap((hit) => {
+          const bot = this.botByThread(hit.threadId);
+          return bot && !bot.hidden ? [{ ...hit, botId: bot.id, botName: bot.name }] : [];
+        }),
+      };
+    } catch (error) {
+      if ((error as { status?: unknown })?.status === 400) throw error;
+      this.disableMessageSearch(error);
+      return { available: false, mode: "unavailable", hits: [] };
+    }
+  }
+
+  close(): void {
+    try { this.messageSearch?.close(); } catch {}
+    this.messageSearch = null;
   }
 
   patchBot(id: string, patch: Partial<BotRecord>): BotRecord | null {

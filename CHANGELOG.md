@@ -22,6 +22,10 @@ All notable changes to Cumea are documented here. This project follows
   Startup and reconnect buffer concurrent deltas, hydrate bots/configuration/engines/work state once,
   discard events already represented by the snapshot, and re-snapshot rather than guessing after a
   bounded-buffer overflow.
+- Added an owner-local derived SQLite/WAL transcript search index and local-only bounded search API.
+  It incrementally follows visible folded messages, excludes raw/provider-private fields, reconciles
+  against canonical transcript fingerprints after crashes, and keeps canonical JSON as the recovery
+  source until P0.11b.
 
 ### Changed
 
@@ -37,6 +41,10 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Transcript-index deletion is privacy-sensitive: the derived DB is owner-only, uses SQLite
+  `secure_delete`, requires a WAL truncate checkpoint for thread deletion, fails closed if a
+  residual index cannot be opened, and restores indexed rows when the surrounding bot deletion
+  transaction rolls back. The search endpoint remains desktop-local only.
 - The packaged desktop gateway binds loopback only, requires its exact numeric loopback `Host`,
   constrains decoded static paths, strips static and connection-named hop-by-hop headers, reasserts
   security headers, and translates only its own renderer Origin. The OS-assigned private harness

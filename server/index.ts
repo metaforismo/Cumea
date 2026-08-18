@@ -180,7 +180,7 @@ async function defaultSelection() {
   return { instanceId: pick?.instanceId ?? "claude", model: pick?.models.default || "claude-sonnet-5" };
 }
 let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
-const store = new Store(() => bootSelection);
+const store = new Store(() => bootSelection, { messageSearch: true });
 const workspace = new WorkspaceStore();
 const pairing = new PairingStore();
 bootSelection = await defaultSelection();
@@ -1206,6 +1206,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       return;
     }
 
+    // ── local transcript search ──────────────────────────────────────
+    if (method === "GET" && path === "/api/search/messages") {
+      if (surface !== "local") return json(res, 403, { error: "transcript search is local-only" });
+      const query = url.searchParams.get("q") ?? "";
+      const rawLimit = url.searchParams.get("limit");
+      const limit = rawLimit === null ? undefined : Number(rawLimit);
+      return json(res, 200, store.searchMessages(query, limit));
+    }
+
     // ── atomic desktop startup snapshot ───────────────────────────────
     if (method === "GET" && path === "/api/bootstrap") {
       if (surface !== "local") return json(res, 403, { error: "desktop bootstrap is local-only" });
@@ -1484,6 +1493,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         activeRunByThread.delete(bot.threadId);
       }
       clearThreadEventState(bot.threadId);
+      // Snapshot canonical transcript state while its JSON file is still at
+      // the live path. Existing bots may have a cold in-memory transcript
+      // cache after restart; once stageFilesForDeletion renames that file, a
+      // later metadata failure must still be able to rebuild the search index.
+      const transcriptSnapshot = [...store.messagesFor(bot.threadId)];
       let stagedFiles: StagedFileDeletion | null = null;
       let workspaceTransaction: ReturnType<typeof workspace.removeBotDataTransaction> | null = null;
       let botTransaction: ReturnType<typeof store.deleteBotRecordTransaction> | null = null;
@@ -1498,7 +1512,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
           ...workspace.botDeletionFiles(bot.id),
         ]);
         workspaceTransaction = workspace.removeBotDataTransaction(bot.id);
-        botTransaction = store.deleteBotRecordTransaction(bot.id);
+        botTransaction = store.deleteBotRecordTransaction(bot.id, transcriptSnapshot);
         if (!botTransaction) throw Object.assign(new Error("bot disappeared during deletion"), { status: 500 });
 
         // A purge failure rolls metadata and all remaining quarantined bytes
@@ -1845,6 +1859,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     clearTimeout(initialRoutineTimer);
     remoteServer?.close();
     server.close();
+    store.close();
     void registry.disposeAll().finally(() => process.exit(0));
   });
 }
