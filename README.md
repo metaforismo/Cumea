@@ -232,7 +232,8 @@ Preview.
 | `server/pairing.ts` | expiring one-time pairing sessions, hashed device tokens, and revocation |
 | `server/mobile.ts` | allowlisted mobile bot/message projections and sanitized remote SSE events |
 | `server/workspace.ts` | durable sections, attachments, tasks, runs, artifacts, and schedules |
-| `server/message-search-index.ts` | owner-local derived SQLite/WAL transcript search projection; canonical JSON remains authoritative in P0.11a |
+| `server/message-search-index.ts` | owner-local derived SQLite/WAL transcript search projection |
+| `server/transcript-store.ts` | P0.11b canonical SQLite/WAL transcript database foundation, verified legacy import, revisions, deletion staging, and local backup primitive |
 | `server/contracts.ts` | provider driver and canonical event contracts |
 | `server/drivers/` | Claude, Codex, Grok, Gemini, computer, and peer-agent adapters |
 | `server/harness/` | provider registry and event bus |
@@ -241,9 +242,11 @@ Preview.
 
 The renderer owns no provider transport. Commands cross the local API, providers emit one canonical
 event stream, and the UI folds that stream into visible conversation state. Local transcript search
-uses a separate derived SQLite/WAL projection over user-visible message fields only; the canonical
-transcript is still the rollback-safe JSON record until P0.11b. See
-[local transcript search](docs/transcript-search.md).
+uses a separate derived SQLite/WAL projection over user-visible message fields only. P0.11b1 now
+provides the versioned `transcripts.sqlite` canonical-store contract and verified legacy import, but
+production `Store` reads/writes still remain on the rollback-safe JSON path until P0.11b2 switches
+them. See [local transcript search](docs/transcript-search.md) and
+[canonical transcript persistence](docs/transcript-persistence.md).
 
 Packaged desktop startup keeps the renderer on the stable private origin `http://127.0.0.1:8799`.
 Electron serves the built UI from its own loopback gateway, starts the API-only harness on an
