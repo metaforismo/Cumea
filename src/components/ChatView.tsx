@@ -213,10 +213,7 @@ export function ChatView({ bot }: { bot: Bot }) {
     setExporting(true);
     try {
       const response = await fetch(`/api/bots/${encodeURIComponent(bot.id)}/export?format=markdown`);
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error("Export failed (" + response.status + ")");
-      }
+      if (!response.ok) throw new Error("Export failed (" + response.status + ")");
       const blob = await response.blob();
       const href = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
