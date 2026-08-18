@@ -8,6 +8,7 @@ import {
   Folder,
   FolderPlus,
   Loader2,
+  MessageSquareText,
   Pencil,
   Pin,
   PinOff,
@@ -25,6 +26,17 @@ import { cn } from "@/lib/cn";
 const electronPlatform = window.cumea?.platform;
 const isElectron = Boolean(electronPlatform);
 const isMacElectron = electronPlatform === "darwin";
+
+interface TranscriptSearchHit {
+  threadId: string;
+  messageId: string;
+  at: number;
+  role: "bot" | "user";
+  kind: string;
+  preview: string;
+  botId: string;
+  botName: string;
+}
 
 /** "Ada Lovelace" → "AL", "ada" → "A", "you@x.dev" → "Y", unset → "?" */
 function profileInitials(profile?: { name?: string; email?: string }): string {
@@ -380,6 +392,10 @@ export function Sidebar() {
   const [moveBotId, setMoveBotId] = useState<string | null>(null);
   const [deleteBotId, setDeleteBotId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [messageHits, setMessageHits] = useState<TranscriptSearchHit[]>([]);
+  const [messageSearchLoading, setMessageSearchLoading] = useState(false);
+  const [messageSearchUnavailable, setMessageSearchUnavailable] = useState(false);
+  const [openingMessageId, setOpeningMessageId] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -392,6 +408,62 @@ export function Sidebar() {
     window.addEventListener("keydown", focusSearch);
     return () => window.removeEventListener("keydown", focusSearch);
   }, []);
+
+  useEffect(() => {
+    const needle = query.trim();
+    if (needle.length < 2) {
+      setMessageHits([]);
+      setMessageSearchLoading(false);
+      setMessageSearchUnavailable(false);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setMessageSearchLoading(true);
+      setMessageSearchUnavailable(false);
+      void api(`/api/search/messages?q=${encodeURIComponent(needle)}&limit=16`, { signal: controller.signal })
+        .then((body) => {
+          if (!controller.signal.aborted) {
+            setMessageHits(Array.isArray(body.hits) ? body.hits : []);
+            setMessageSearchUnavailable(body.available === false);
+          }
+        })
+        .catch((error) => {
+          if (!controller.signal.aborted) {
+            console.warn("Transcript search failed", error);
+            setMessageHits([]);
+            setMessageSearchUnavailable(true);
+          }
+        })
+        .finally(() => { if (!controller.signal.aborted) setMessageSearchLoading(false); });
+    }, 180);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [query]);
+
+  const openTranscriptHit = async (hit: TranscriptSearchHit) => {
+    setOpeningMessageId(hit.messageId);
+    try {
+      const window = await api(
+        `/api/bots/${encodeURIComponent(hit.botId)}/messages?around=${encodeURIComponent(hit.messageId)}&limit=120`,
+      );
+      dispatch({
+        type: "focusMessage",
+        botId: hit.botId,
+        threadId: hit.threadId,
+        messageId: hit.messageId,
+        messages: window.messages ?? [],
+        hasMoreAfter: Boolean(window.hasMoreAfter),
+        latestMessageId: window.latestMessageId ?? null,
+      });
+    } catch (error) {
+      dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setOpeningMessageId(null);
+    }
+  };
 
   const visibleBots = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -467,17 +539,47 @@ export function Sidebar() {
             ref={searchRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search"
-            aria-label="Search bots"
+            placeholder="Search bots and messages"
+            aria-label="Search bots and messages"
             className="w-full bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
           />
           <span className="text-[10px] text-ink-secondary">⌘K</span>
         </div>
       </div>
 
-      {/* Bot list */}
+      {/* Bots + transcript search results */}
       <div className="flex-1 overflow-y-auto px-2">
         <div className="flex flex-col gap-0.5">
+          {query.trim().length >= 2 && (messageHits.length > 0 || messageSearchLoading || messageSearchUnavailable) && (
+            <div className="mb-2">
+              <div className="flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-secondary">
+                <MessageSquareText size={12} /> Messages
+                {messageSearchLoading && <Loader2 size={11} className="ml-auto animate-spin" />}
+              </div>
+              {messageHits.map((hit) => (
+                <button
+                  key={`${hit.threadId}:${hit.messageId}`}
+                  onClick={() => void openTranscriptHit(hit)}
+                  disabled={openingMessageId === hit.messageId}
+                  className="group flex w-full items-start gap-2.5 rounded-xl px-3 py-2 text-left hover:bg-raised/65 disabled:opacity-60"
+                  title={`Open message in ${hit.botName}`}
+                >
+                  <MessageSquareText size={15} className="mt-0.5 shrink-0 text-accent" />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2">
+                      <span className="truncate text-[12px] font-semibold text-ink">{hit.botName}</span>
+                      <span className="shrink-0 text-[10px] text-ink-secondary">{formatTime(hit.at)}</span>
+                    </span>
+                    <span className="mt-0.5 block line-clamp-2 text-[12px] leading-4 text-ink-secondary">{hit.preview || "Visible transcript message"}</span>
+                  </span>
+                  {openingMessageId === hit.messageId && <Loader2 size={12} className="mt-1 animate-spin text-ink-secondary" />}
+                </button>
+              ))}
+              {!messageHits.length && !messageSearchLoading && messageSearchUnavailable && (
+                <div className="px-3 py-2 text-[12px] text-ink-secondary">Local transcript search is unavailable.</div>
+              )}
+            </div>
+          )}
           {groups.map((group) => (
             <div key={group.id} className="mb-2">
               {group.name && (

@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "react";
-import { ArrowRight, Check, FileText, ListChecks, Loader2, Monitor, Square, X } from "lucide-react";
-import { useStore, formatTime, type Bot, type Message } from "@/state/store";
+import { useEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowRight, Check, Download, FileText, ListChecks, Loader2, Monitor, Square, X } from "lucide-react";
+import { api, useStore, formatTime, type Bot, type Message } from "@/state/store";
 import { CumeaAvatar } from "./Avatar";
 import { expressionForBot } from "@/lib/mascot";
 import { avatarForBot, avatarStateForBot } from "@/lib/mote";
@@ -174,14 +174,62 @@ function StreamingBubble({ text }: { text: string }) {
 export function ChatView({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const focusRef = useRef<HTMLDivElement>(null);
+  const [returningLatest, setReturningLatest] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
+  const focus = state.searchFocus?.botId === bot.id ? state.searchFocus : null;
   const streaming = state.streaming[bot.threadId];
   const provisioning = state.provisioning[bot.id];
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
 
   useEffect(() => {
+    if (focus) return;
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [bot.id, bot.messages.length, streaming, bot.busy]);
+  }, [bot.id, bot.messages.length, streaming, bot.busy, focus]);
+
+  useEffect(() => {
+    if (!focus) return;
+    const frame = requestAnimationFrame(() => {
+      const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      focusRef.current?.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focus?.messageId, bot.messages.length]);
+
+  const returnToLatest = async () => {
+    setReturningLatest(true);
+    try {
+      const page = await api(`/api/bots/${encodeURIComponent(bot.id)}/messages?limit=80`);
+      dispatch({ type: "latestMessages", threadId: bot.threadId, messages: page.messages ?? [] });
+    } catch (error) {
+      dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setReturningLatest(false);
+    }
+  };
+
+  const exportTranscript = async () => {
+    setExporting(true);
+    try {
+      const response = await fetch(`/api/bots/${encodeURIComponent(bot.id)}/export?format=markdown`);
+      if (!response.ok) throw new Error("Export failed (" + response.status + ")");
+      const blob = await response.blob();
+      const href = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      const safeName = (bot.name || "transcript").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "transcript";
+      anchor.href = href;
+      anchor.download = safeName + ".md";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(href);
+    } catch (error) {
+      dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const first = bot.messages[0];
 
@@ -208,6 +256,15 @@ export function ChatView({ bot }: { bot: Bot }) {
           {bot.busy && <Loader2 size={14} className="animate-spin text-ink-secondary" />}
         </button>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => void exportTranscript()}
+            disabled={exporting}
+            className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50"
+            aria-label="Export visible transcript as Markdown"
+            title="Export visible transcript as Markdown"
+          >
+            {exporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+          </button>
           {bot.busy && (
             <button
               onClick={() => dispatch({ type: "interrupt", botId: bot.id })}
@@ -259,19 +316,51 @@ export function ChatView({ bot }: { bot: Bot }) {
               Today {formatTime(first.at)}
             </div>
           )}
+          {focus?.hasMoreAfter && (
+            <div className="sticky top-2 z-10 flex justify-center py-1">
+              <button
+                onClick={() => void returnToLatest()}
+                disabled={returningLatest}
+                className="flex items-center gap-1.5 rounded-full border border-hairline/50 bg-panel/95 px-3 py-1.5 text-[12px] font-medium text-ink shadow-sm backdrop-blur hover:bg-raised disabled:opacity-60"
+              >
+                {returningLatest ? <Loader2 size={13} className="animate-spin" /> : <ArrowDown size={13} />}
+                Return to latest
+              </button>
+            </div>
+          )}
           {bot.messages.map((m) => {
+            let content: React.ReactNode = null;
             switch (m.kind) {
               case "options":
-                return <OptionCard key={m.id} botId={bot.id} message={m} />;
+                content = <OptionCard botId={bot.id} message={m} />;
+                break;
               case "activity":
-                return <ActivityChip key={m.id} message={m} />;
+                content = <ActivityChip message={m} />;
+                break;
               case "screen":
-                return m.png ? <ScreenFrame key={m.id} png={m.png} mime={m.mime} /> : null;
+                content = m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
+                break;
               case "handoff":
-                return <HandoffCard key={m.id} message={m} />;
+                content = <HandoffCard message={m} />;
+                break;
               default:
-                return <Bubble key={m.id} message={m} />;
+                content = <Bubble message={m} />;
             }
+            if (!content) return null;
+            const focused = focus?.messageId === m.id;
+            return (
+              <div
+                key={m.id}
+                ref={focused ? focusRef : undefined}
+                data-message-id={m.id}
+                className={cn(
+                  "scroll-my-20 rounded-2xl transition-shadow",
+                  focused && "ring-2 ring-accent/55 ring-offset-2 ring-offset-app",
+                )}
+              >
+                {content}
+              </div>
+            );
           })}
           {provisioning && (
             <div className="flex justify-start">

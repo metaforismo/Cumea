@@ -241,6 +241,13 @@ interface AppState {
   provisioning: Record<string, boolean>;
   connected: boolean;
   error: string | null;
+  /** Historical window opened from the desktop transcript-search surface. */
+  searchFocus: {
+    botId: string;
+    messageId: string;
+    hasMoreAfter: boolean;
+    latestMessageId: string | null;
+  } | null;
   mascotMotion: {
     botId: string;
     nonce: number;
@@ -272,6 +279,16 @@ type Action =
   | { type: "botPatched"; bot: Partial<Bot> & { id: string } }
   | { type: "messageAdded"; threadId: string; message: Message }
   | { type: "messagesHydrated"; threadId: string; messages: Message[] }
+  | {
+      type: "focusMessage";
+      botId: string;
+      threadId: string;
+      messageId: string;
+      messages: Message[];
+      hasMoreAfter: boolean;
+      latestMessageId: string | null;
+    }
+  | { type: "latestMessages"; threadId: string; messages: Message[] }
   | { type: "messagePatched"; threadId: string; message: Message }
   | { type: "streamDelta"; threadId: string; delta: string }
   | { type: "streamClear"; threadId: string }
@@ -365,7 +382,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, workspace: action.workspace };
     case "select":
       return updateBot(
-        withMascotMotion({ ...state, selectedId: action.id }, action.id, "switch"),
+        withMascotMotion({ ...state, selectedId: action.id, searchFocus: null }, action.id, "switch"),
         action.id,
         (b) => ({ ...b, unread: false }),
       );
@@ -409,6 +426,7 @@ function reducer(state: AppState, action: Action): AppState {
           routines: state.workspace.routines.filter((routine) => routine.botId !== action.botId),
         },
         mascotMotion: state.mascotMotion?.botId === action.botId ? null : state.mascotMotion,
+        searchFocus: state.searchFocus?.botId === action.botId ? null : state.searchFocus,
       };
     }
     case "markUnread":
@@ -432,6 +450,33 @@ function reducer(state: AppState, action: Action): AppState {
       return updateBot(state, bot.id, (candidate) => ({
         ...candidate,
         messages: mergeThreadMessages(candidate.messages, action.messages),
+      }));
+    }
+    case "focusMessage": {
+      const bot = state.bots.find((candidate) => candidate.id === action.botId && candidate.threadId === action.threadId);
+      if (!bot) return state;
+      const next = withMascotMotion(
+        {
+          ...state,
+          selectedId: bot.id,
+          searchFocus: {
+            botId: bot.id,
+            messageId: action.messageId,
+            hasMoreAfter: action.hasMoreAfter,
+            latestMessageId: action.latestMessageId,
+          },
+        },
+        bot.id,
+        "switch",
+      );
+      return updateBot(next, bot.id, (candidate) => ({ ...candidate, unread: false, messages: action.messages }));
+    }
+    case "latestMessages": {
+      const bot = state.bots.find((candidate) => candidate.threadId === action.threadId);
+      if (!bot) return state;
+      return updateBot({ ...state, searchFocus: null }, bot.id, (candidate) => ({
+        ...candidate,
+        messages: action.messages,
       }));
     }
     case "messageAdded": {
@@ -594,6 +639,7 @@ const initialState: AppState = {
   provisioning: {},
   connected: false,
   error: null,
+  searchFocus: null,
   mascotMotion: null,
 };
 
@@ -837,20 +883,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           );
           break;
         case "select": {
-          const bot = stateRef.current.bots.find((b) => b.id === action.id);
+          const current = stateRef.current;
+          const bot = current.bots.find((b) => b.id === action.id);
+          const returningFromSearch = current.searchFocus?.botId === action.id;
           if (bot?.unread) {
             api(`/api/bots/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
           }
           if (
             bot &&
-            !loadedThreadsRef.current.has(bot.threadId) &&
+            (returningFromSearch || !loadedThreadsRef.current.has(bot.threadId)) &&
             !loadingThreadsRef.current.has(bot.threadId)
           ) {
             loadingThreadsRef.current.add(bot.threadId);
             api(`/api/bots/${bot.id}/messages?limit=80`)
               .then(({ messages }) => {
                 loadedThreadsRef.current.add(bot.threadId);
-                rawDispatch({ type: "messagesHydrated", threadId: bot.threadId, messages });
+                rawDispatch(returningFromSearch
+                  ? { type: "latestMessages", threadId: bot.threadId, messages }
+                  : { type: "messagesHydrated", threadId: bot.threadId, messages });
               })
               .catch(showError)
               .finally(() => loadingThreadsRef.current.delete(bot.threadId));

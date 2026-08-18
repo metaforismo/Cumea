@@ -30,8 +30,8 @@ visible team:
 - explicit per-action approval cards, with remembered Ask / Always / Never policies per bot;
 - optional local or cloud computer use;
 - optional connected-app tools through Composio;
-- sections, sidebar search, an owner-local bounded transcript search index, file attachments,
-  reusable routines, and a “Needs you” inbox;
+- sections, one desktop search surface across agents and visible transcript messages, exact-message
+  navigation, bounded local transcript export, file attachments, reusable routines, and a “Needs you” inbox;
 - persistent Mote-based bot avatars with shape, palette, upload, semantic activity states, and
   reduced-motion behavior;
 - an agent-first Expo companion for pairing, search, chat, stop, approvals, and routine status;
@@ -241,7 +241,11 @@ Preview.
 | `apps/mobile/` | Expo Router companion, agent-list home, pairing, chat, approvals, and routines |
 
 The renderer owns no provider transport. Commands cross the local API, providers emit one canonical
-event stream, and the UI folds that stream into visible conversation state. The production harness
+event stream, and the UI folds that stream into visible conversation state. The desktop sidebar search
+now combines agent metadata with the owner-local transcript index; a message hit opens a bounded window
+around the exact message, highlights it, and offers Return to latest without loading the whole thread.
+Chat headers can export a bounded Markdown transcript, while JSON remains an API primitive. Both exact
+navigation and export are local-only and never added to the paired mobile surface. The production harness
 now stores folded conversation history incrementally in owner-local `transcripts.sqlite`; legacy
 `messages-<threadId>.json` files are verified migration/recovery anchors only, are never rewritten,
 and are removed with their migrated bot. New threads create no whole-thread JSON file. The separate

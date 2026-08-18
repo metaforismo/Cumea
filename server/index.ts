@@ -40,6 +40,12 @@ import {
 } from "./mobile.ts";
 import { PairingStore } from "./pairing.ts";
 import { mentionedBots, parseBotAvatar, Store, type Message } from "./store.ts";
+import {
+  TRANSCRIPT_WINDOW_DEFAULT_LIMIT,
+  transcriptExportJson,
+  transcriptExportMarkdown,
+  transcriptMessageWindow,
+} from "./transcript-navigation.ts";
 import { WorkspaceStore, type AttachmentRecord, type RoutineSchedule, type TaskSource } from "./workspace.ts";
 
 const REQUESTED_LOCAL_PORT = requestedLocalPort();
@@ -1567,6 +1573,29 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       return await uploadAttachment(req, res, m[1]);
     }
 
+    m = path.match(/^\/api\/bots\/([\w-]+)\/export$/);
+    if (m && method === "GET") {
+      if (surface !== "local") return json(res, 403, { error: "transcript export is local-only" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const format = url.searchParams.get("format") ?? "markdown";
+      if (format !== "markdown" && format !== "json") return json(res, 400, { error: "format must be markdown or json" });
+      const data = format === "json"
+        ? transcriptExportJson(bot, store.messagesFor(bot.threadId))
+        : transcriptExportMarkdown(bot, store.messagesFor(bot.threadId));
+      const safeName = (bot.name || "transcript")
+        .replace(/[^a-zA-Z0-9._-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "transcript";
+      res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        "cache-control": "no-store",
+        "content-type": format === "json" ? "application/json; charset=utf-8" : "text/markdown; charset=utf-8",
+        "content-disposition": `attachment; filename="${safeName}.${format === "json" ? "json" : "md"}"`,
+      });
+      return res.end(data);
+    }
+
     // onboarding/ask cards persist their answered/dismissed state
     m = path.match(/^\/api\/bots\/([\w-]+)\/cards\/([\w-]+)$/);
     if (m && method === "PATCH") {
@@ -1595,8 +1624,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       const requestedLimit = url.searchParams.get("limit");
       const parsedLimit = requestedLimit === null ? MOBILE_MESSAGE_PAGE_LIMIT : Number(requestedLimit);
       if (!Number.isInteger(parsedLimit) || parsedLimit < 1) return json(res, 400, { error: "limit must be a positive integer" });
-      const limit = Math.min(parsedLimit, MOBILE_MESSAGE_PAGE_LIMIT_MAX);
       const all = store.messagesFor(bot.threadId);
+      const around = url.searchParams.get("around");
+      if (around !== null) {
+        if (surface !== "local") return json(res, 403, { error: "exact transcript navigation is local-only" });
+        const windowLimit = requestedLimit === null ? TRANSCRIPT_WINDOW_DEFAULT_LIMIT : parsedLimit;
+        return json(res, 200, transcriptMessageWindow(all, around, windowLimit));
+      }
+      const limit = Math.min(parsedLimit, MOBILE_MESSAGE_PAGE_LIMIT_MAX);
       const before = url.searchParams.get("before") ?? url.searchParams.get("cursor");
       const end = before ? all.findIndex((message) => message.id === before) : all.length;
       if (before && end < 0) return json(res, 400, { error: "unknown before message" });

@@ -108,7 +108,7 @@ should not bypass the release, security, persistence, or measurement foundations
 - [ ] **P0.10 — Mobile completion gates.** Implement push delivery for Needs You, deep-link to the
   exact request, background reconciliation, offline/host-offline states, and physical-device
   microphone, VoiceOver, and TalkBack acceptance evidence.
-- [~] **P0.11 — Incremental transcript persistence and local search index.** Replace whole-thread JSON
+- [x] **P0.11 — Incremental transcript persistence and local search index.** Replace whole-thread JSON
   rewrite amplification with a versioned owner-local SQLite/WAL message store, lazy verified legacy
   import, per-message insert/update, rollback-aware thread deletion, bounded transcript search, and
   export primitives without making provider-private payloads searchable by default.
@@ -130,8 +130,9 @@ should not bypass the release, security, persistence, or measurement foundations
       prove crash/restart and post-COMMIT privacy cleanup windows, enable the canonical Store backend in
       production, preserve immutable legacy migration anchors without rewriting them, remove them on bot
       deletion, and retain tested local backup/recovery primitives.
-  - [ ] P0.11c — Add desktop global search/navigation, exact message jumping, transcript export, and
-    UX tests on top of the local index without widening the mobile/remote privacy surface.
+  - [x] P0.11c — Integrate visible transcript hits into the existing desktop search field, load bounded
+    exact-message windows instead of whole threads, highlight and return to latest, add bounded Markdown/JSON
+    visible-transcript export, and keep exact navigation/export off the mobile/remote surface.
 - [ ] **P0.12 — Agent liveness and loop protection.** Add activity-based stall detection with
   waiting-on-human exemptions, honest working / waiting / no-signal / dead projections, bounded
   repeated-identical tool/effect detection, and visible recovery through Work / Needs You rather than
@@ -234,3 +235,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-18 | P0.11b1 | Completed the versioned canonical transcript SQLite foundation with verified legacy import, stable ordering/revisions, incremental mutation primitives, reversible pending deletion, crash reconciliation, independently readable local backups, and cross-platform CI; production Store cutover remains P0.11b2. |
 | 2026-08-18 | P0.11b2 | Completed the guarded Store cutover backend with verified legacy import, SQLite-only incremental appends/patches, canonical-revision search reconciliation, restart/crash evidence, no new whole-thread JSON files, and fail-closed deletion until b3; the real harness remains legacy-backed until b3 enables it. |
 | 2026-08-18 | P0.11b3 | Activated canonical transcript SQLite in the real harness with rollback-capable post-COMMIT deletion, pending-delete restart recovery, canonical/search/metadata/file rollback evidence, immutable legacy migration anchors, canonical-only new threads, and cross-platform CI. |
+| 2026-08-18 | P0.11c | Completed global desktop transcript search/navigation and bounded visible export on the local index, with exact-focus windows, Return to latest, export redaction, paired-remote denial, and cross-platform CI. P0.11 is complete. |

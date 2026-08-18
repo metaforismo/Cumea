@@ -4,7 +4,7 @@ Cumea keeps transcript search in a separate owner-local SQLite/WAL database. It 
 
 ## Current persistence boundary
 
-Canonical conversation history now lives in `transcripts.sqlite`. `message-search.sqlite` contains only the bounded visible-text projection needed for local search.
+Canonical conversation history lives in `transcripts.sqlite`. `message-search.sqlite` contains only the bounded visible-text projection needed for local search.
 
 Existing `messages-<threadId>.json` files from older installs are immutable migration/recovery anchors; new canonical threads create no JSON transcript and migrated anchors are removed with their bot.
 
@@ -22,15 +22,33 @@ The index does **not** ingest raw screen pixels, provider-native resume cursors,
 
 Each indexed message is capped to 64 KiB of UTF-8 search text. Queries are capped at 200 characters and results at 50 rows. FTS5 is used when Node's SQLite build provides it; only a missing FTS5 module activates the bounded `LIKE` fallback. Other SQLite initialization/write failures make the derived index unavailable instead of being mistaken for a feature fallback.
 
-## API
+## Desktop search and exact navigation
 
-Desktop-local only:
+The existing desktop sidebar search is the single search surface for both agent metadata and visible transcript messages. Message search is debounced and local-only. Selecting a transcript hit requests a bounded window around that exact message instead of loading an entire long conversation, highlights the focused message, and exposes **Return to latest** when newer history exists outside the window.
+
+The local APIs are:
 
 ```text
 GET /api/search/messages?q=<query>&limit=<1..50>
+GET /api/bots/<botId>/messages?around=<messageId>&limit=<1..240>
 ```
 
-The remote/mobile allowlist does not expose this endpoint. A response reports whether local search is available and whether it is running in `fts5`, `like`, or `unavailable` mode.
+Exact navigation defaults to 120 messages and is capped at 240. The window keeps slightly more context before the hit than after it, always retains the hit, and reports whether older or newer history exists outside the window.
+
+The paired remote/mobile surface does not expose global transcript search or exact-message navigation.
+
+## Visible transcript export
+
+Desktop-local export is available in Markdown from the chat header; JSON is also exposed as an API primitive:
+
+```text
+GET /api/bots/<botId>/export?format=markdown
+GET /api/bots/<botId>/export?format=json
+```
+
+Exports are bounded to 20,000 messages and 10 MiB of projected visible data. They contain only folded fields already visible in the transcript. Raw screen bytes, provider request/session identifiers, resume cursors, attachment IDs, connector secrets, and filesystem paths are not exported. Screenshot messages become an explicit omission marker. The JSON form uses schema `cumea.visible-transcript.v1`.
+
+Export and exact navigation return `403` on the authenticated paired-device surface; neither capability widens the mobile privacy boundary.
 
 ## Revision-based self-healing
 
@@ -70,6 +88,6 @@ message-search.sqlite-shm
 
 On the next start, Cumea creates a fresh owner-local index and rebuilds current bot threads from `transcripts.sqlite` using canonical revisions. Do **not** remove `transcripts.sqlite` as part of search-index recovery.
 
-## What remains in P0.11
+## P0.11 status
 
-The persistence/search foundation is complete. P0.11c adds global desktop search/navigation, exact-message jumping, and bounded visible-transcript export on top of this local index without widening the remote surface.
+P0.11 is complete: canonical folded transcripts use incremental SQLite, local search self-heals by canonical revision, desktop search can jump to exact bounded message windows, and visible transcript export remains local and privacy-bounded.
