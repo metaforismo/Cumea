@@ -181,7 +181,9 @@ export class MessageSearchIndex {
           );
         `);
         this.fts5 = true;
-      } catch {
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/no such module:\s*fts5/i.test(message)) throw error;
         this.fts5 = false;
       }
     } catch (error) {
@@ -328,14 +330,16 @@ export class MessageSearchIndex {
       if (!existsSync(path)) continue;
       const fingerprint = canonicalFileFingerprint(path);
       if (fingerprint && this.fingerprintMatches(bot.threadId, fingerprint)) continue;
+      let parsed: unknown;
       try {
-        const parsed = JSON.parse(readFileSync(path, "utf8"));
-        if (Array.isArray(parsed)) this.replaceThread(bot.threadId, parsed as Message[], fingerprint);
+        parsed = JSON.parse(readFileSync(path, "utf8"));
       } catch {
         // Match Store's existing recovery behavior: an unreadable/corrupt
-        // legacy transcript is not allowed to prevent the rest of Cumea from
-        // starting or indexing healthy threads.
+        // canonical transcript is isolated to this thread. SQLite failures
+        // are deliberately outside this catch and must disable the index.
+        continue;
       }
+      if (Array.isArray(parsed)) this.replaceThread(bot.threadId, parsed as Message[], fingerprint);
     }
     this.db.prepare(`
       INSERT INTO message_search_meta(key, value) VALUES('legacy_seed_v1', 'complete')
