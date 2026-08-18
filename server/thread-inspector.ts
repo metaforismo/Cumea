@@ -87,10 +87,6 @@ function tailText(file: string): { text: string; truncatedAtStart: boolean } {
   }
 }
 
-function boundedString(value: unknown): string | undefined {
-  return typeof value === "string" ? value.slice(0, MAX_STRING) : undefined;
-}
-
 function boundedPayload(value: unknown): { value: unknown; truncated: boolean } {
   let serialized: string;
   try {
