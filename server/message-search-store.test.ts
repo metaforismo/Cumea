@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { MESSAGE_SEARCH_DB_PATH } from "./message-search-index.ts";
-import { Store } from "./store.ts";
+import { Store, type Message } from "./store.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 const stores = new Set<Store>();
@@ -32,6 +32,37 @@ afterEach(() => {
 });
 
 describe("Store + derived transcript search deletion", () => {
+  it("rebuilds a stale thread when canonical JSON changed before the derived upsert", () => {
+    const first = searchStore();
+    const bot = first.createBot();
+    first.appendMessage(bot.threadId, {
+      role: "user",
+      kind: "text",
+      text: "before simulated crash",
+    });
+    close(first);
+
+    // Simulate the canonical-write → SQLite-upsert crash window: the JSON
+    // source advances while the derived DB still carries the prior file
+    // fingerprint. Startup must stat the file, detect the mismatch, and
+    // rebuild only this thread from canonical bytes.
+    const transcript = join(DATA_DIR, `messages-${bot.threadId}.json`);
+    const messages = JSON.parse(readFileSync(transcript, "utf8")) as Message[];
+    messages.push({
+      id: "crash-window-message",
+      role: "user",
+      kind: "text",
+      text: "fingerprint recovery sentinel c8a15d",
+      at: Date.now() + 1,
+    });
+    writeFileSync(transcript, JSON.stringify(messages, null, 2));
+
+    const recovered = searchStore();
+    expect(recovered.searchMessages("c8a15d").hits).toEqual([
+      expect.objectContaining({ botId: bot.id, messageId: "crash-window-message" }),
+    ]);
+  });
+
   it("restores the indexed transcript from a cold cache when metadata commit fails", () => {
     const first = searchStore();
     const bot = first.createBot();
