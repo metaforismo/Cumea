@@ -42,6 +42,9 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Changed
 
+- Native provider continuation is now dispatch-fresh rather than cursor-presence based. A→B→A routing,
+  provider reloads, interrupted dispatches and unsupported in-session model changes rebuild bounded canonical
+  conversation context in a fresh native session instead of trusting stale provider state.
 - Re-audited Cumea `4b897646` against Rakazo `9622c388` and OpenMausBot `e7d71f4b`. With transcript
   persistence/search now complete, the explicit next gates are local Runtime/Raw diagnostics, focused
   draft-#9 extraction, steady-state renderer/thread scale, app-wide focus/reduced-motion behavior,
@@ -55,6 +58,9 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Session freshness metadata is owner-local and contains only thread/instance/model lifecycle state. Rebuilt
+  conversation history is size-bounded and quoted inside the next user turn, never promoted into the system
+  prompt; native drivers independently refuse any supplied resume cursor while rebuild is required.
 - Runtime/Raw diagnostics remain desktop-local and `no-store`; they are excluded from bootstrap,
   transcript search/export and paired mobile routes. Normalized events drop `RuntimeEvent.raw`, while
   native payloads are bounded before entering renderer state and large records become omission previews.

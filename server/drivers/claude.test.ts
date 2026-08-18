@@ -154,6 +154,33 @@ posixOnly("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv).not.toContain("--session-id");
   });
 
+  it("starts a fresh native session and quotes canonical history when the prior cursor is stale", async () => {
+    await create();
+    const dump = join(scratch, "rebuild.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-rebuild",
+      text: "current request",
+      resumeCursor: "stale-session",
+      rebuildContext: true,
+      transcript: [
+        { role: "user", text: "previous request" },
+        { role: "assistant", text: "previous answer" },
+      ],
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).not.toContain("--resume");
+    expect(seen.argv).toContain("--session-id");
+    const content = seen.prompt?.message?.content ?? "";
+    expect(content).toContain("USER:\nprevious request");
+    expect(content).toContain("ASSISTANT:\nprevious answer");
+    expect(content).toContain("<current_user_message>\ncurrent request\n</current_user_message>");
+    expect(content.match(/current request/g)).toHaveLength(1);
+  });
+
   it("rejects a second turn while one is in flight", async () => {
     await create("hang");
     await instance.adapter.sendTurn({ threadId: "t-busy", text: "one" });

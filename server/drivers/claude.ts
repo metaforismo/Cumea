@@ -30,6 +30,7 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { appendNative } from "./native.ts";
+import { nativeResumeCursor, nativeTurnText } from "../turn-context.ts";
 
 const DRIVER_KIND = "claudeAgent";
 
@@ -228,7 +229,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const { threadId } = turn;
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = newId();
-      const sessionId = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
+      const sessionId = nativeResumeCursor(turn);
       const newSessionId = sessionId ? null : newId();
 
       const args = [
@@ -440,7 +441,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       emit({ ...base(threadId, turnId), type: "turn.started" });
 
       // prompt over stdin as a stream-json message — never argv (ARG_MAX)
-      const promptMsg = { type: "user", message: { role: "user", content: turn.text } };
+      const promptMsg = { type: "user", message: { role: "user", content: nativeTurnText(turn) } };
       child.stdin.write(JSON.stringify(promptMsg) + "\n");
       child.stdin.end();
       appendNative(threadId, { dir: "out", source: "claude.sdk.message", msg: promptMsg });

@@ -20,7 +20,7 @@ import {
 } from "./local-listener.ts";
 import * as box from "./box.ts";
 import * as composio from "./composio.ts";
-import { ATTACHMENTS_DIR, ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
+import { ATTACHMENTS_DIR, DATA_DIR, ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { stageFilesForDeletion, type StagedFileDeletion } from "./delete-files.ts";
 
@@ -39,6 +39,7 @@ import {
   sanitizeRemoteSsePayload,
 } from "./mobile.ts";
 import { PairingStore } from "./pairing.ts";
+import { SessionFreshnessStore } from "./session-freshness.ts";
 import { mentionedBots, parseBotAvatar, Store, type Message } from "./store.ts";
 import {
   TRANSCRIPT_WINDOW_DEFAULT_LIMIT,
@@ -46,6 +47,7 @@ import {
   transcriptExportMarkdown,
   transcriptMessageWindow,
 } from "./transcript-navigation.ts";
+import { boundedTurnTranscript, decideTurnContext } from "./turn-context.ts";
 import { readThreadInspector } from "./thread-inspector.ts";
 import { WorkspaceStore, type AttachmentRecord, type RoutineSchedule, type TaskSource } from "./workspace.ts";
 
@@ -188,6 +190,7 @@ async function defaultSelection() {
 }
 let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
 const store = new Store(() => bootSelection, { messageSearch: true, transcripts: true });
+const sessionFreshness = new SessionFreshnessStore(DATA_DIR);
 const workspace = new WorkspaceStore();
 const pairing = new PairingStore();
 bootSelection = await defaultSelection();
@@ -335,6 +338,10 @@ bus.subscribe((event: RuntimeEvent) => {
   switch (event.type) {
     case "session.started":
       if (event.sessionId && event.providerInstanceId) {
+        // Cursor receipt alone is not enough to declare the session fresh: a
+        // native runtime can announce its session before it has incorporated
+        // the current user turn. Confirmation happens only on successful
+        // turn.completed below.
         store.setResumeCursor(bot.id, event.providerInstanceId, event.sessionId);
       }
       break;
@@ -462,6 +469,16 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     }
     case "turn.completed": {
+      if (event.ok && event.providerInstanceId) {
+        try {
+          sessionFreshness.confirm(event.threadId, event.providerInstanceId);
+        } catch (error) {
+          // Leaving the private state pending is conservative: the next turn
+          // rebuilds canonical history instead of trusting a cursor whose
+          // completion could not be durably confirmed.
+          console.error("session freshness completion could not be persisted", error);
+        }
+      }
       // the last live frame becomes a settled inline screen message —
       // the screenshot-in-chat moment
       const frame = stopScreenPoller(bot.id);
@@ -575,6 +592,7 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
   if (bot.busy) throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
   const commsDepth = opts.commsDepth ?? 0;
   const attachments = opts.attachments ?? [];
+  const selection = { ...bot.modelSelection };
 
   const task = opts.track === false
     ? null
@@ -594,6 +612,12 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
     throw Object.assign(new Error("task belongs to another bot"), { status: 409 });
   }
 
+  // Capture prior trust before changing it, then persist pending before the
+  // new user message itself becomes canonical. If anything fails after this
+  // point, a later turn rebuilds rather than trusting an older native cursor.
+  const previousSelection = sessionFreshness.get(bot.threadId);
+  sessionFreshness.begin(bot.threadId, selection);
+
   const userMessage = store.appendMessage(bot.threadId, {
     role: "user",
     kind: "text",
@@ -609,21 +633,26 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
     broadcastWorkspace();
   }
 
-  const instance = registry.get(bot.modelSelection.instanceId);
+  const instance = registry.get(selection.instanceId);
   if (!instance) {
-    const message = `provider instance "${bot.modelSelection.instanceId}" is unavailable — pick another model in settings`;
+    const message = `provider instance "${selection.instanceId}" is unavailable — pick another model in settings`;
     if (runId) workspace.completeRun(runId, false, message);
     broadcastWorkspace();
     throw Object.assign(new Error(message), { status: 409 });
   }
   if (runId) activeRunByThread.set(bot.threadId, runId);
 
-  // transcript for API-backed drivers: settled text turns only
-  const transcript = store
-    .messagesFor(bot.threadId)
-    .filter((m) => m.kind === "text" && m.text && m.id !== userMessage.id)
-    .slice(-40)
-    .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! }));
+  const transcript = boundedTurnTranscript(store.messagesFor(bot.threadId), userMessage.id);
+  const turnContext = decideTurnContext({
+    selectedInstanceId: selection.instanceId,
+    selectedModel: selection.model,
+    sessionModelSwitch: instance.adapter.capabilities.sessionModelSwitch,
+    sessionState: previousSelection?.state ?? null,
+    lastDispatchedInstanceId: previousSelection?.state === "dispatched" ? previousSelection.instanceId : undefined,
+    lastDispatchedModel: previousSelection?.state === "dispatched" ? previousSelection.model : undefined,
+    resumeCursors: bot.resumeCursors,
+    transcript,
+  });
 
   const persona = [
     `You are ${bot.name}, a personal bot in Cumea.`,
@@ -696,9 +725,10 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
       const started = await instance.adapter.sendTurn({
         threadId: bot.threadId,
         text: providerText,
-        model: bot.modelSelection.model,
-        resumeCursor: bot.resumeCursors[bot.modelSelection.instanceId],
-        transcript,
+        model: selection.model,
+        resumeCursor: turnContext.resumeCursor,
+        transcript: turnContext.transcript,
+        rebuildContext: turnContext.rebuildContext,
         system:
           persona +
           (integrations.computer && instance.driverKind !== "boxAgent"
@@ -757,6 +787,10 @@ function configStatus() {
 /** Rebuild the provider fleet after a config change so new keys take
  * effect without a server restart (kills any in-flight turns). */
 async function reloadProviders() {
+  // Persist the distrust marker before touching the current fleet. If this
+  // owner-local write fails, leave the live providers intact rather than
+  // creating a restart window where an old cursor could be trusted again.
+  sessionFreshness.invalidate(store.bots.map((bot) => bot.threadId));
   bus.detachAll();
   await registry.disposeAll();
   await registry.load(instanceConfigs(cfg));
@@ -1579,6 +1613,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         }
         throw error;
       }
+      try { sessionFreshness.delete(bot.threadId); } catch (error) { console.error("could not remove session freshness metadata", error); }
       broadcast(
         { kind: "bot.deleted", botId: bot.id, ...(operationId ? { operationId } : {}) },
         { remoteDeletedBotWasVisible: !bot.hidden },
