@@ -24,6 +24,7 @@ import type {
 import { newEventId, newId } from "../contracts.ts";
 import { augmentedPath } from "../env-path.ts";
 import { appendNative } from "./native.ts";
+import { nativeTurnText } from "../turn-context.ts";
 
 const DRIVER_KIND = "codex";
 
@@ -342,7 +343,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         try {
           await request("initialize", { clientInfo: { name: "cumea", version: "1" } });
           send({ jsonrpc: "2.0", method: "initialized", params: {} });
-          const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
+          const cursor = !turn.rebuildContext && typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
           let codexThreadId: string | null = null;
           let startedModel: string | null = null;
           if (cursor) {
@@ -365,9 +366,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             startedModel = started?.model ?? null;
           }
           emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: startedModel ?? turn.model ?? null });
+          const userText = nativeTurnText(turn);
           await request("turn/start", {
             threadId: codexThreadId,
-            input: [{ type: "text", text: turn.system ? `${turn.system}\n\n${turn.text}` : turn.text }],
+            input: [{ type: "text", text: turn.system ? `${turn.system}\n\n${userText}` : userText }],
           });
         } catch (e) {
           if (!state.settled) {

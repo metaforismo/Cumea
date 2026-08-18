@@ -28,6 +28,7 @@ import type {
 import { newEventId, newId } from "../../contracts.ts";
 import { augmentedPath } from "../../env-path.ts";
 import { appendNative } from "../native.ts";
+import { nativeTurnText } from "../../turn-context.ts";
 
 export interface AcpConfig {
   cli: string;
@@ -421,7 +422,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               throw new Error(support.loginNote);
             }
 
-            const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
+            const cursor = !turn.rebuildContext && typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
             if (cursor) {
               try {
                 await request("session/load", { sessionId: cursor, cwd, mcpServers }, LOAD_SESSION_TIMEOUT);
@@ -442,11 +443,13 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               model: init?._meta?.modelState?.currentModelId ?? turn.model ?? null,
             });
             state.promptSent = true;
+            const rebuiltText = nativeTurnText(turn);
+            const promptTurn = rebuiltText === turn.text ? turn : { ...turn, text: rebuiltText };
             const text = support.buildPromptText
-              ? support.buildPromptText(turn)
+              ? support.buildPromptText(promptTurn)
               : turn.system
-                ? `${turn.system}\n\n${turn.text}`
-                : turn.text;
+                ? `${turn.system}\n\n${rebuiltText}`
+                : rebuiltText;
             const result = await request("session/prompt", {
               sessionId,
               prompt: [{ type: "text", text }],
