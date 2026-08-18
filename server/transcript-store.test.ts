@@ -82,7 +82,7 @@ describe("TranscriptStore", () => {
     }
   });
 
-  it("keeps phase-one deletion reversible and finalizes only on explicit commit", () => {
+  it("keeps phase-one deletion reversible, freezes mutations, and finalizes only on explicit commit", () => {
     const paths = temp();
     const store = new TranscriptStore(paths.db);
     try {
@@ -90,6 +90,8 @@ describe("TranscriptStore", () => {
       const first = store.stageDelete("thread-a");
       expect(store.threadState("thread-a")?.state).toBe("pending_delete");
       expect(() => store.messagesFor("thread-a", paths.legacy)).toThrow(/pending deletion/);
+      expect(() => store.append("thread-a", message("m2"), paths.legacy)).toThrow(/pending deletion/);
+      expect(() => store.replaceMessage("thread-a", message("m1", "mutated"))).toThrow(/pending deletion/);
       first.rollback();
       expect(store.messagesFor("thread-a", paths.legacy)).toHaveLength(1);
 
