@@ -11,6 +11,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import {
   MESSAGE_SEARCH_DB_PATH,
   MessageSearchIndex,
+  canonicalFileFingerprint,
   type TranscriptSearchResult,
 } from "./message-search-index.ts";
 import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
@@ -290,7 +291,7 @@ export class Store {
   private indexMessage(threadId: string, message: Message) {
     if (!this.messageSearch) return;
     try {
-      this.messageSearch.upsert(threadId, message);
+      this.messageSearch.upsert(threadId, message, canonicalFileFingerprint(messagesFile(threadId)));
     } catch (error) {
       this.disableMessageSearch(error);
     }

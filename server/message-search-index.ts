@@ -1,11 +1,11 @@
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { DATA_DIR } from "./config.ts";
 import type { BotRecord, Message } from "./store.ts";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_QUERY_CHARS = 200;
 const MAX_LIMIT = 50;
 const MAX_SEARCH_TEXT_BYTES = 64 * 1024;
@@ -33,6 +33,28 @@ interface IndexRow {
   role: Message["role"];
   kind: Message["kind"];
   search_text: string;
+}
+
+export interface CanonicalFileFingerprint {
+  size: string;
+  inode: string;
+  mtimeNs: string;
+  ctimeNs: string;
+}
+
+export function canonicalFileFingerprint(path: string): CanonicalFileFingerprint | null {
+  try {
+    const stat = statSync(path, { bigint: true });
+    if (!stat.isFile()) return null;
+    return {
+      size: stat.size.toString(),
+      inode: stat.ino.toString(),
+      mtimeNs: stat.mtimeNs.toString(),
+      ctimeNs: stat.ctimeNs.toString(),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function normalizeVisibleText(value: unknown): string {
@@ -134,6 +156,13 @@ export class MessageSearchIndex {
       );
       CREATE INDEX IF NOT EXISTS message_search_thread_at
         ON message_search(thread_id, at DESC);
+      CREATE TABLE IF NOT EXISTS message_search_thread_state (
+        thread_id TEXT PRIMARY KEY,
+        canonical_size TEXT NOT NULL,
+        canonical_inode TEXT NOT NULL,
+        canonical_mtime_ns TEXT NOT NULL,
+        canonical_ctime_ns TEXT NOT NULL
+      );
     `);
     this.db.prepare(`
       INSERT INTO message_search_meta(key, value) VALUES('schema_version', ?)
@@ -162,14 +191,49 @@ export class MessageSearchIndex {
     return this.fts5 ? "fts5" : "like";
   }
 
-  hasThread(threadId: string): boolean {
-    const row = this.db.prepare("SELECT 1 AS present FROM message_search WHERE thread_id = ? LIMIT 1").get(threadId) as
-      | { present: number }
+  private fingerprintMatches(threadId: string, fingerprint: CanonicalFileFingerprint): boolean {
+    const row = this.db.prepare(
+      "SELECT canonical_size, canonical_inode, canonical_mtime_ns, canonical_ctime_ns " +
+        "FROM message_search_thread_state WHERE thread_id = ?",
+    ).get(threadId) as
+      | {
+          canonical_size: string;
+          canonical_inode: string;
+          canonical_mtime_ns: string;
+          canonical_ctime_ns: string;
+        }
       | undefined;
-    return row?.present === 1;
+    return Boolean(
+      row &&
+      row.canonical_size === fingerprint.size &&
+      row.canonical_inode === fingerprint.inode &&
+      row.canonical_mtime_ns === fingerprint.mtimeNs &&
+      row.canonical_ctime_ns === fingerprint.ctimeNs
+    );
   }
 
-  upsert(threadId: string, message: Message): void {
+  private setFingerprint(threadId: string, fingerprint?: CanonicalFileFingerprint | null): void {
+    if (!fingerprint) {
+      this.db.prepare("DELETE FROM message_search_thread_state WHERE thread_id = ?").run(threadId);
+      return;
+    }
+    this.db.prepare(
+      "INSERT INTO message_search_thread_state(" +
+        "thread_id, canonical_size, canonical_inode, canonical_mtime_ns, canonical_ctime_ns" +
+      ") VALUES(?, ?, ?, ?, ?) " +
+      "ON CONFLICT(thread_id) DO UPDATE SET " +
+        "canonical_size = excluded.canonical_size, " +
+        "canonical_inode = excluded.canonical_inode, " +
+        "canonical_mtime_ns = excluded.canonical_mtime_ns, " +
+        "canonical_ctime_ns = excluded.canonical_ctime_ns",
+    ).run(threadId, fingerprint.size, fingerprint.inode, fingerprint.mtimeNs, fingerprint.ctimeNs);
+  }
+
+  upsert(
+    threadId: string,
+    message: Message,
+    fingerprint?: CanonicalFileFingerprint | null,
+  ): void {
     const text = searchableMessageText(message);
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -188,6 +252,7 @@ export class MessageSearchIndex {
           "INSERT INTO message_search_fts(thread_id, message_id, search_text) VALUES(?, ?, ?)",
         ).run(threadId, message.id, text);
       }
+      this.setFingerprint(threadId, fingerprint);
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch {}
@@ -195,7 +260,11 @@ export class MessageSearchIndex {
     }
   }
 
-  replaceThread(threadId: string, messages: readonly Message[]): void {
+  replaceThread(
+    threadId: string,
+    messages: readonly Message[],
+    fingerprint?: CanonicalFileFingerprint | null,
+  ): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.prepare("DELETE FROM message_search WHERE thread_id = ?").run(threadId);
@@ -212,6 +281,7 @@ export class MessageSearchIndex {
         insert.run(threadId, message.id, message.at, message.role, message.kind, text);
         insertFts?.run(threadId, message.id, text);
       }
+      this.setFingerprint(threadId, fingerprint);
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch {}
@@ -224,6 +294,7 @@ export class MessageSearchIndex {
     try {
       this.db.prepare("DELETE FROM message_search WHERE thread_id = ?").run(threadId);
       if (this.fts5) this.db.prepare("DELETE FROM message_search_fts WHERE thread_id = ?").run(threadId);
+      this.db.prepare("DELETE FROM message_search_thread_state WHERE thread_id = ?").run(threadId);
       this.db.exec("COMMIT");
       // secure_delete scrubs deleted cells in the database. Truncating the
       // WAL after a privacy-sensitive thread deletion also removes older WAL
@@ -237,17 +308,18 @@ export class MessageSearchIndex {
   }
 
   seedLegacy(bots: readonly BotRecord[]): void {
-    // Re-check per-thread presence on every start. The global marker avoids
-    // no work by itself: a previous rollback/index failure may have removed
-    // one derived thread while leaving the marker behind. hasThread() is
-    // cheap; canonical JSON is parsed only for missing rows.
+    // A cheap stat fingerprint closes the canonical-write → derived-index
+    // crash window without parsing every transcript on every start. Atomic
+    // canonical writes replace the file, so inode/ctime/mtime/size together
+    // distinguish a newer JSON source even when message count is unchanged.
     for (const bot of bots) {
-      if (this.hasThread(bot.threadId)) continue;
       const path = join(DATA_DIR, `messages-${bot.threadId}.json`);
       if (!existsSync(path)) continue;
+      const fingerprint = canonicalFileFingerprint(path);
+      if (fingerprint && this.fingerprintMatches(bot.threadId, fingerprint)) continue;
       try {
         const parsed = JSON.parse(readFileSync(path, "utf8"));
-        if (Array.isArray(parsed)) this.replaceThread(bot.threadId, parsed as Message[]);
+        if (Array.isArray(parsed)) this.replaceThread(bot.threadId, parsed as Message[], fingerprint);
       } catch {
         // Match Store's existing recovery behavior: an unreadable/corrupt
         // legacy transcript is not allowed to prevent the rest of Cumea from
