@@ -41,8 +41,8 @@ replaceOnce(
 );
 replaceOnce(
   "CHANGELOG.md",
-  '### Security\n\n',
-  '### Security\n\n- Session freshness metadata is owner-local and contains only thread/instance/model lifecycle state. Rebuilt\n  conversation history is size-bounded and quoted inside the next user turn, never promoted into the system\n  prompt; native drivers independently refuse any supplied resume cursor while rebuild is required.\n',
+  '- Runtime/Raw diagnostics remain desktop-local and `no-store`; they are excluded from bootstrap,\n',
+  '- Session freshness metadata is owner-local and contains only thread/instance/model lifecycle state. Rebuilt\n  conversation history is size-bounded and quoted inside the next user turn, never promoted into the system\n  prompt; native drivers independently refuse any supplied resume cursor while rebuild is required.\n- Runtime/Raw diagnostics remain desktop-local and `no-store`; they are excluded from bootstrap,\n',
   "CHANGELOG freshness security",
 );
 
