@@ -1,120 +1,211 @@
-# Competitive engineering audit — 2026-08-18
+# Competitive engineering audit — 2026-08-18 refresh
 
-This audit compares Cumea with two actively developed open-source agent products at fixed commits so the conclusions remain reproducible:
+This audit compares Cumea with two actively developed open-source agent products at fixed commits so every conclusion can be reproduced later.
 
 | Project | Audited commit | Role in this audit |
 |---|---|---|
-| Cumea | `286099aa5ee45bb89036005545a5524e6e4ab894` | Baseline after P0.04 atomic bootstrap |
-| Rakazo | `2718b1f75a61971d104d08bda75f1f1c388851bd` | Multi-surface agent platform, sandbox/computer architecture, desktop performance evidence |
-| OpenMausBot | `4a9d6540e8d621904d66718e548eee2df347ec10` | Local-first desktop product, transcript UX/persistence, memory, liveness and consumer packaging |
+| Cumea | `4b897646797caa59f47459910c9a2482a5d2c194` | Baseline after P0.11 canonical transcript persistence, local search, exact navigation, and bounded export |
+| Rakazo | `9622c38825decd1bb41390c8176491efb030c0a1` | Multi-surface agent platform, sandbox/provider abstraction, subagents, provider onboarding, visual E2E, desktop performance work |
+| OpenMausBot | `e7d71f4b7030904156337f511c31bab2115d9e5b` | Local-first desktop/mobile product, raw-event inspector, connector continuation, busy steering, engine freshness, voice and consumer release work |
 
-The goal is not feature-count parity. A competitor idea is adopted only when it improves Cumea without weakening the project's privacy defaults, local-first ownership, evidence discipline, or product identity.
+The goal is not feature-count parity. A competitor idea is adopted only when it improves Cumea without weakening local ownership, privacy defaults, least-privilege remote access, evidence discipline, or Cumea's own product identity.
 
 ## Executive result
 
-Cumea is already stronger in several foundations that should not be traded away:
+The largest change since the previous audit is that transcript persistence/search is no longer a Cumea gap. Cumea now has a stronger local persistence/privacy boundary than either comparison requires for its own architecture:
 
-- no mandatory account, hosted control plane, telemetry, or Cumea-operated cloud;
-- OS-backed packaged credential storage with write-only renderer access and rollback-aware migration;
-- a stable Electron-owned loopback renderer origin in front of an API-only OS-assigned private harness;
-- exact-child UtilityProcess readiness rather than port discovery polling;
-- bounded cursor-consistent desktop bootstrap and narrowed authenticated mobile projection;
-- transactional bot deletion that coordinates metadata and filesystem cleanup instead of treating deletion as a UI-only operation;
-- a central durable Work / Needs You model rather than only transient chat state.
+- `transcripts.sqlite` is the canonical folded transcript source with incremental append/patch and verified legacy import;
+- `message-search.sqlite` is a separate derived index reconciled by canonical revisions;
+- exact search navigation loads a bounded window around one message instead of an entire long thread;
+- local Markdown/JSON export projects visible transcript data only;
+- bot deletion remains rollback-capable even after canonical SQLite DELETE has committed and privacy-checkpointed;
+- packaged optional secrets are OS-backed and write-only to the renderer;
+- desktop bootstrap is one cursor-consistent bounded snapshot behind a stable Electron-owned loopback origin;
+- the paired mobile surface remains an explicitly narrower projection rather than a second full-trust desktop API.
 
-The largest remaining gaps are not "more agents". They are long-lived product quality and scale boundaries: incremental transcript persistence/search, long-thread rendering, renderer update isolation, explicit user-inspectable memory, liveness/loop detection, consumer distribution, and a pluggable computer backend contract.
+The highest-value gaps have therefore moved upward into **observability, steady-state performance, interaction semantics, mobile completion, provider lifecycle, and consumer release maturity**.
 
-## Decision matrix
+## Current decision matrix
 
-| Area | Cumea today | Rakazo | OpenMausBot | Decision |
+| Area | Cumea at audited commit | Rakazo | OpenMausBot | Decision |
 |---|---|---|---|---|
-| Privacy / account model | Local/self-hosted by default; no account required | Web/server architecture uses auth and database services | Local-first desktop, optional network surfaces | **Keep Cumea model.** Do not introduce mandatory auth or a hosted coordinator. |
-| Desktop startup | Stable gateway, OS-assigned API child, exact-PID readiness, atomic bootstrap | Bundled renderer, warm-window experiments, packaged Playwright benchmark | Local desktop packaging and smoke gates | **Adapt.** Keep Cumea startup boundary; add warm-window evidence and interaction benchmarks. |
-| Performance evidence | Fixed-machine gate planned; bundle/startup tooling exists | Strong packaged benchmark: cold/warm samples, interactions, bundle compression, environment fingerprint | Practical local performance work across chat/runtime | **Adopt measurement ideas.** Never import benchmark numbers across machines. |
-| Renderer updates | Global store still causes broad rerenders; P0.05 queued | Mature web component separation | `memo`, deferred work, stable transcript rendering patterns | **Adopt.** Isolate selectors, composer/transcript updates, and defer settled-only Markdown/syntax work. |
-| Long transcript UX | Startup/page bounds now exist; prepend/scroll windowing still queued | Thread UI built around server-backed history | Explicit transcript windowing and "earlier" expansion patterns | **Adopt.** Complete P0.06 with windowing, anchored prepend and jump-to-latest. |
-| Transcript persistence | Thread arrays cached in memory and persisted as whole JSON files | Database-backed server architecture | `node:sqlite`, WAL, incremental message insert/update, lazy legacy import | **Adopt locally.** Add SQLite/WAL without sacrificing Cumea's rollback-aware delete semantics. |
-| Transcript search / navigation | Sidebar search filters bots only; `⌘K` focuses that field | Rich web navigation | Global command palette + transcript search | **Adopt after local index.** `⌘K` should become global navigation/search, not only a bot filter. |
-| Message editing / branches | Not shipped; P1.04 queued | Conversation/thread model supports richer server history | Edit/rerun, versions, reactions, copy controls | **Keep P1.04, raise UX bar.** Include keyboard/IME correctness and stable links. |
-| Explicit memory | Not shipped; P1.06 queued | Durable memory/context systems | User-visible editable `MEMORY.md` plus bounded topic files | **Adapt, not copy.** Cumea needs inspectable scoped memory with provenance/revisions, not one opaque file. |
-| Working directory / project context | No first-class per-agent cwd contract | Computer/workspace abstraction | Per-bot working folder; live tasks pin their cwd | **Adopt concept.** Add conversation/project working context without leaking host paths through portable manifests. |
-| Computer backends | Local macOS CUA + optional Box cloud computer | Docker, E2B, Daytona, desktop and fake providers behind a provider contract; team/private computers | Local/cloud computer modes | **Adapt.** Add a conformance-tested backend interface while keeping local/user-owned execution the default. |
-| Human takeover | P2.10 queued | Team computer / takeover work validates shared-computer use cases | Desktop/local control surfaces | **Keep P2.10.** Require lease heartbeat, expiry, audit and clipboard/file boundaries. |
-| Liveness | Busy/unread plus durable task/run status | Durable worker/runtime architecture | Activity watchdog and richer no-signal/dead/waiting states | **Adopt.** Add activity-based watchdog with waiting-on-human exemption and visible recovery state. |
-| Repeated tool loops | Recursion capped for peer handoffs | Durable child/subagent lifecycle and idempotent spawn work | Repeat-call detection patterns | **Adopt bounded protection.** Detect repeated identical effects/tool calls without silently killing legitimate long work. |
-| Short-lived subagents | Persistent peers + one-hop handoff today; DAG queued | Persistent bots plus short-lived subagents | Multi-agent collaboration | **Adapt into P2.03.** Child agents must have parent ownership, idempotency, budgets and completion evidence. |
-| Needs You | Central Work attention tab already exists | Approval/workflow surfaces | Waiting-on-user states | **Cumea is ahead structurally.** Expand P2.04 instead of replacing it. |
-| Routines / triggers | Durable routines; more triggers queued | Worker/scheduler architecture | Routines + webhook work | **Keep P1.07.** Authenticated idempotent webhooks remain a priority. |
-| Voice / calls | Dictation exists; calls/reply playback queued | Mobile/desktop surfaces | Reply playback and calls | **Keep P1.10.** Preserve explicit platform capability reporting. |
-| Usage / budgets | P2.08 queued | Server-side model/runtime accounting direction | Per-task token usage work | **Raise P2.08 priority.** Track provider/model/run usage before adding autonomous child-agent depth. |
-| Consumer distribution | Strong evidence boundaries, unsigned package smoke; signing queued | Electron packaging and desktop testkit | Signed/notarized macOS and Windows consumer packaging work | **Adopt release maturity, not claims.** Complete P0.08 only with real signing/notarization evidence. |
-| Real UI tests | Source/integration coverage; P0.09 queued | Playwright e2e and visual-history workflows | Desktop product tests | **Adopt.** Add retained screenshots/visual history for real journeys and packaged shell. |
-| Storage topology | Local JSON default today; optional Postgres planned for later team mode | Postgres/Prisma central architecture | Local SQLite | **Use both where appropriate.** SQLite should become the local transcript index; Postgres stays optional team/server work, never a local prerequisite. |
+| Privacy / identity | No mandatory account, telemetry, hosted coordinator, or Cumea cloud | Better Auth + Postgres/server architecture supports hosted/multi-user use | Local-first desktop, optional companion/network surfaces | **Keep Cumea model.** Hosted identity remains optional future server work, never a local prerequisite. |
+| Secret storage | Packaged credentials use OS-backed Electron vault and renderer sees status only | Deployment/user credential model appropriate to server topology | Local settings and provider credentials | **Keep Cumea boundary.** Do not trade it for easier browser-readable keys. |
+| Canonical transcripts | Incremental owner-local SQLite/WAL, verified import, revisions, rollback-safe delete | Postgres-backed server persistence | Local persistence and long-lived thread work | **Cumea foundation is now strong.** Optimize/UI-build on top; do not reopen format churn without evidence. |
+| Search / navigation | Local derived index, global desktop message search, exact bounded jump, redacted export | Server navigation/search patterns | Rich conversation navigation patterns | **Keep and extend.** P1.01 can reuse this foundation for multiple conversations per agent. |
+| Startup | Stable packaged renderer gateway, OS-assigned private harness, exact-child readiness, atomic bootstrap | Bundled renderer, aggregated bootstrap, warm-window reuse, timing instrumentation | Embedded harness and released desktop builds | **Adapt Rakazo measurement/warm reuse only after fixed-machine evidence.** Preserve Cumea's trust boundary. |
+| Steady-state renderer | Global reducer/store still causes broad subscriptions and streaming work | Mature web separation and interaction-performance work | Memo/deferred/render-isolation improvements | **Adopt.** P0.05 remains one of the highest performance priorities. |
+| Long threads | Server paging/search windows exist; normal desktop transcript still lacks full anchored windowing contract | Server-backed history | Mature long-thread UX patterns | **Adopt.** Complete P0.06: anchored prepend, near-bottom follow, windowing, cheap long-message rendering. |
+| Busy-agent steering | `startTurn` returns 409 when `bot.busy` | Durable worker model | Persists user steering messages and drains them into one attended follow-up turn | **Adopt carefully.** Queue only explicit user steering, make state visible, bound it, and define restart semantics. |
+| Engine switching | Per-instance resume cursors are durable, but a previously used instance can be resumed after another engine ran | Model/runtime management is workspace-aware | Tracks last dispatched instance and rebuilds context when an engine is stale | **Adopt.** Add dispatch-based session freshness; never trust an old cursor across A→B→A. |
+| Runtime inspector | Durable `events/` and redacted `native/` logs exist, but require manual inspection | Operational/server observability | Per-thread Events + Raw inspector reads existing logs, bounded and expandable | **Adopt first.** This is a high-value, low-architecture-change P1.11a tranche. |
+| Error diagnosis | Activity chips + Work runs expose failures but not the wire-level cause | Server/runtime diagnostics | Inspector distinguishes normalized events from provider-native traffic | **Adapt.** Keep raw/native material local-only and redacted; never send it to companion/mobile. |
+| Connected apps | Composio marketplace and browser auth links exist; agent-requested missing auth is not a first-class continuation | Composio catalog with deterministic E2E emulation | MCP proxy converts connection requests into secure chat cards and resumes work after auth | **Adopt flow, not implementation.** Cumea should own auth URLs/cards and continuation; model output must never author trusted auth links. |
+| Provider onboarding | Engine/model picker and configured-state surfaces; CLI install/login remains manual | Device-code/subscription flows for ChatGPT, Copilot, xAI plus model management | Local CLI discovery/auth model | **Adapt.** Add guided install/login and device-code subscription paths where providers officially support them. |
+| Explicit memory | P1.06 queued | Durable memory/context architecture | User-visible local memory work | **Adapt.** Cumea should use scoped, revisioned, provenance-bearing memory rather than one opaque markdown file. |
+| Persistent peers | Agent-to-agent handoff with recursion cap | Bots can spawn durable peers | Rooms/collaboration paths | **Keep and extend.** Do not collapse durable peers and ephemeral subagents into one concept. |
+| Short-lived subagents | Not shipped; P2.03 describes durable delegation ownership/budgets | Short-lived subagents inside a turn | Multi-agent/collaboration work | **Adopt with hard bounds.** Concurrency, depth, output, token/cost and cancellation budgets are mandatory before autonomy depth. |
+| Rooms/shared work | Rooms queued; no shared room working-folder contract yet | Shared Team Computer + private computer concepts | Rooms can pin a shared working folder | **Adapt later.** Shared folder/computer ownership belongs with P1.02/P1.12 and must not leak host paths into portable definitions. |
+| Routines | Durable schedules, manual run, Work audit | Full edit/delete/run UI and worker stack | Routines + webhook triggers | **Improve UX and triggers.** Editing/deleting/running should be obvious and stale-editor state must reset on agent changes. |
+| Webhooks | P1.07 queued | Worker-oriented trigger architecture | Dedicated authenticated webhook receiver | **Keep P1.07.** Use a narrow receiver/capability boundary and idempotent effects. |
+| Computer backends | Local macOS CUA + optional Box cloud | Docker, E2B, Daytona, desktop and fake providers; Team/Private computers | Local/cloud computer paths | **Adapt Rakazo architecture.** P1.12 should define one conformance-tested backend contract without a required Cumea cloud. |
+| Human takeover | Read-only paired preview; leased takeover queued | Interactive shared computer use | Secure mobile cloud desktop access | **Do not jump straight to remote control.** P2.10 lease/heartbeat/audit boundaries must land before broad mobile takeover. |
+| File/document UX | Basic attachments on current main; richer safe viewers live in draft #9 | Computer/files are first-class runtime concepts | Desktop file/task work | **Extract draft #9.** Re-port safe Markdown/PDF/DOCX viewers as a focused P0.00a PR instead of merging the old tranche wholesale. |
+| Dictation | Current main does not contain the full draft #9 editable native tranche | Multi-surface product | Native dictation + voice/calls | **Extract draft #9 first**, then build P1.10 playback/calls on explicit platform capabilities. |
+| Voice / calls | P1.10 queued | Mobile/desktop surface | Reply TTS and calls | **Adopt later.** Bring-your-own provider, interruption, approvals and privacy indicators are required. |
+| Mobile pairing | Cryptographic one-time pairing + SecureStore token + revocation already exist | Mobile client of server API | QR onboarding plus Bonjour discovery/recovery | **Adapt discovery only as convenience.** mDNS/Bonjour may discover a host, but never establishes trust. |
+| Mobile notifications | P0.10 queued | Mobile product stack | Native companion notifications | **Adopt under P0.10.** Needs You should deep-link to the exact current request and reconcile before action. |
+| Mobile computer | Optional authenticated read-only screenshot preview | Remote computers are first-class | Secure live cloud desktop companion access | **Keep current read-only default.** Expand only alongside leased takeover and explicit capability authorization. |
+| Accessibility / focus | Mote-specific reduced motion exists; no app-wide focus-visible/selection/reduced-motion baseline in `styles.css` | Visual E2E/product UI work | Added app-wide keyboard focus, selection styling and reduced-motion handling | **Adopt immediately.** This is a small, measurable desktop UX/accessibility gap. |
+| Visual E2E | Integration coverage is strong; browser journey/screenshot history still queued | Playwright screenshots/traces/video + persistent gallery | Product UI tests | **Adopt Rakazo evidence discipline.** P0.09 should keep visual-history artifacts rather than one-off screenshots. |
+| Packaging closure | Package smoke verifies core server/UI/native runtimes | Desktop packaging/testkit | Recently caught missing spawned proxy paths with explicit package-closure smoke | **Adopt.** Verify every bundled process/proxy Cumea can spawn, not only `server/index.js`. |
+| Distribution | Unsigned package/layout evidence, signing/notarization queued | Desktop installers | Signed/notarized macOS, Windows installer, App Store preparation | **Adopt maturity, never claims.** P0.08 remains blocked on real signing/update/rollback evidence. |
+| Mobile store readiness | Expo export/CI, no store claim | Mobile surface | iOS App Store materials | **Keep evidence boundary.** Physical-device and distribution gates precede any store-readiness claim. |
+| Local dev multi-instance | CUMEA data/ports can be configured, packaged child is ephemeral | Dev/server topology | Explicit UI/API env ports for parallel instances | **Small improvement.** Document/test parallel isolated dev profiles if contributor friction justifies it. |
 
-## Immediate engineering priorities
+## Findings that changed the roadmap
 
-### 1. Incremental transcript persistence and local search
+### 1. Per-thread Runtime / Raw Event Inspector is now the first P1 observability tranche
 
-This is the clearest current backend performance gap.
+Cumea already writes the two data sources an inspector needs: normalized runtime events and secret-redacted provider-native records. The missing piece is safe readback and presentation.
 
-Today a message append or patch eventually rewrites a thread JSON document. That is simple and inspectable, but write amplification grows with conversation length and it makes global local search expensive. OpenMausBot demonstrates that Node's built-in SQLite can provide an owner-local WAL-backed message index without introducing a service dependency.
+The implementation should:
 
-Cumea should implement this differently from a direct copy:
+- remain desktop-local;
+- validate thread IDs before filesystem access;
+- tail recent data rather than reading entire long-lived logs into memory;
+- cap runtime and native streams independently so chatty native traffic cannot starve normalized events;
+- tolerate a torn final NDJSON record;
+- validate records at the boundary;
+- present an **Events** lens that folds streaming deltas and summarizes turns/tools/requests/usage/errors;
+- present a **Raw** lens with direction/source and expandable bounded JSON;
+- reread on turn settlement and optionally follow local live events;
+- never add raw/native material to mobile bootstrap/SSE/search/telemetry.
 
-- keep the data directory user-owned and local;
-- use a versioned SQLite schema and WAL;
-- insert/update individual messages rather than rewriting full transcripts;
-- migrate legacy JSON lazily and idempotently;
-- preserve a recovery source until migration is verified;
-- integrate thread deletion with Cumea's current prepare/rollback/finalize deletion model;
-- expose bounded local search and export primitives without making raw provider payloads searchable by default.
+Tracked as **P1.11a**.
 
-Tracked as **P0.11**.
+### 2. Session freshness is a correctness bug class, not a model-picker nicety
 
-### 2. Liveness and repeated-effect protection
+Cumea currently sends a per-instance `resumeCursor` whenever one exists. For Claude, that becomes `--resume`; the driver then sends only the new user text over stdin. The folded transcript argument does not repair a resumed stale provider session.
 
-A durable agent UI needs to distinguish "working" from "nothing has happened for a suspiciously long time" and from "waiting for the user". A wall-clock timeout alone is wrong because a healthy long task may legitimately run for hours.
+Therefore the sequence:
 
-Cumea should add an activity watchdog that is reset by meaningful provider/runtime events, explicitly pauses while a pending human request exists, and surfaces recovery through Work / Needs You rather than silently terminating work. A separate repeated-effect detector should identify identical tool/effect attempts under bounded thresholds.
+```text
+Claude A → another engine B → Claude A
+```
 
-Tracked as **P0.12**.
+can resume A from the point before B's work. Cumea needs an explicit dispatch record such as `lastInstanceId` (or an equivalent monotonically versioned session-owner marker) and must rebuild from bounded canonical context whenever the chosen engine is not fresh for the current thread/task. Returning to an older engine must not trust its old cursor.
 
-### 3. Renderer and transcript scale
+Tracked under **P0.12** because it is agent lifecycle correctness and recovery.
 
-P0.04 removed startup overfetch; it intentionally did not solve steady-state rendering. OpenMausBot's transcript windowing and component isolation reinforce the next two existing items:
+### 3. Busy-message steering should preserve user intent instead of returning only 409
 
-- **P0.05**: selector-based subscriptions, batching of streaming deltas, memoized transcript/composer boundaries, deferred Markdown and syntax highlighting;
-- **P0.06**: bounded pages, transcript windowing, anchored prepend, near-bottom auto-follow, jump-to-latest, and inexpensive collapsed rendering for very long user messages.
+Today Cumea rejects a second user message while a bot is working. A better contract is:
 
-### 4. Explicit memory that the user can inspect
+1. persist the user's words immediately as an ordinary transcript message;
+2. visibly mark them queued while the current turn is live;
+3. bound queued message count/bytes;
+4. when the current turn settles, coalesce the queued steering into one attended follow-up turn;
+5. define stop/interruption semantics explicitly;
+6. never pretend an in-memory auto-drain intent survived a process restart unless that intent is durable.
 
-OpenMausBot's memory editor is useful because it makes hidden durable context visible. Cumea should go further: memory must have scope, provenance, revision history, confirmation state, priority/expiry and deletion. Topic-style views can be an ergonomic projection, but the canonical model should not be a single unversioned markdown file.
+This must apply only to explicit user steering first. Routines, peer fan-out and unattended work require their own scheduling/idempotency semantics.
 
-This remains **P1.06**.
+Tracked as **P0.12b**.
 
-### 5. Pluggable user-owned computer backends
+### 4. Packaging must prove the closure of spawned helpers/proxies
 
-Rakazo's strongest architectural idea for Cumea is the sandbox-provider contract, not any specific hosted vendor. Cumea should define one conformance-tested computer backend interface spanning the existing local and Box paths and later optional Docker/E2B/Daytona-compatible implementations.
+Cumea's current package smoke verifies `server/index.js`, speech/CUA binaries and native runtime slices. Drivers can also spawn helper/proxy JavaScript files at runtime. A build can therefore boot and pass `/health` while a later permission/computer action fails because a sibling proxy was not packaged.
 
-Requirements:
+P0.08 should enumerate the spawn graph and assert every runtime-resolved helper exists in the staged package. This complements, rather than replaces, the existing Electron module-graph and native-runtime checks.
 
-- no Cumea-managed cloud dependency;
-- capability/degradation reporting per backend;
-- per-agent private and explicitly shared/team computer semantics;
-- bounded lifecycle, cleanup and recovery tests;
-- credentials remain in the owning backend/integration boundary.
+### 5. App-wide focus and reduced motion are still incomplete
 
-Tracked as **P1.12**.
+Cumea correctly disables Mote animation under `prefers-reduced-motion`, but panel/pop/hover transitions and keyboard focus are not governed by an app-wide baseline. Add:
+
+- a consistent `:focus-visible` treatment that survives component `outline-none` utilities;
+- no focus ring for pointer-only clicks;
+- a brand-consistent `::selection` state;
+- reduced-motion treatment for panel/pop/scroll transitions without freezing semantic busy indicators into misleading static frames;
+- keyboard acceptance in P0.09 journeys.
+
+This is tracked as **P0.09a** and can be completed in a small focused PR.
+
+### 6. Connector authorization belongs in the conversation when the task discovers it
+
+Cumea already has a connector marketplace and can mint Composio authorization URLs. The missing loop is when an agent discovers during work that a toolkit is not connected.
+
+Cumea should intercept that condition at the integration boundary, create a trusted Cumea-owned card, open only a validated HTTPS authorization URL, and resume the original work after connection reconciliation. The model must never supply the trusted auth URL or credential material.
+
+Tracked as **P1.07a**.
+
+### 7. Mobile discovery improves UX but does not change the pairing trust model
+
+OpenMausBot's Bonjour work demonstrates a useful convenience for same-LAN enrollment. Cumea can adopt this only as host discovery before the existing one-time cryptographic pairing flow. A discovered service is untrusted metadata until the pairing secret is validated. Manual URL/QR entry must remain available.
+
+Tracked as **P0.10a**.
+
+## Rakazo-specific lessons
+
+Rakazo's strongest lessons for Cumea are architectural and evidence-related rather than visual copying:
+
+- **Computer provider abstraction:** Docker/E2B/Daytona/desktop/fake validate the value of a backend conformance contract. Cumea should preserve local/Box behavior while moving them behind P1.12.
+- **Team vs Private computer semantics:** shared execution should be explicit rather than an accidental consequence of sharing one host.
+- **Short-lived subagents:** useful for turn-local parallelism, but Cumea should require ownership, cancellation, depth, concurrency, output and budget limits before exposing them.
+- **Provider onboarding:** device-code/subscription flows lower setup friction substantially where providers officially support them.
+- **Visual E2E discipline:** retained traces/videos/screenshots and a browsable history make regressions visible in a way unit tests cannot.
+- **Routine editor correctness:** edit/delete/run are part of the product contract; editor state must reset when the active agent changes.
+- **Warm window:** worthwhile only after Cumea has fixed-machine before/after evidence and has defined how hidden windows stop sensitive streams/previews.
+
+Cumea should **not** copy Rakazo's mandatory hosted-style identity/database topology into the local default.
+
+## OpenMausBot-specific lessons
+
+The current OpenMausBot delta surfaces several mature consumer loops that Cumea can adapt:
+
+- per-thread normalized/raw event inspector;
+- secure connector authorization triggered from chat/tool execution;
+- secure QR companion enrollment with optional Bonjour discovery;
+- native companion notifications;
+- secure mobile access to cloud desktops;
+- persisted user steering while a bot is busy;
+- engine-switch freshness/context replay;
+- room shared working folder;
+- app-wide keyboard focus and reduced-motion treatment;
+- package smoke that verifies spawned runtime proxies;
+- signed/notarized consumer desktop and active iOS distribution work;
+- reply voice/calls and native dictation.
+
+Cumea should **not** broaden its remote surface simply to match these features. Raw inspector data remains local; mobile computer control waits for the leased takeover model; auth links remain Cumea-owned and allowlisted.
+
+## Updated execution order
+
+This audit changes implementation order as follows:
+
+1. **P1.11a — local Runtime/Raw Event Inspector.** Existing logs make this the highest-value small tranche.
+2. **P0.00a — extract safe file/document viewers from draft #9.** Re-port onto current main, never merge the historical tranche wholesale.
+3. **P0.05 + P0.06 — steady-state render isolation and long-thread windowing.** P0.11 removed backend write/search scaling as the blocker; renderer scale is now exposed.
+4. **P0.09a — keyboard focus / selection / app-wide reduced motion.** Small UX/accessibility gap with easy visual evidence.
+5. **P0.12a/b/c — liveness, busy steering, and engine-session freshness.** Treat these as lifecycle correctness, not polish.
+6. **P0.00b/c — extract native editable dictation and mobile paging from draft #9.** Rebase concepts onto the current mobile/bootstrap contracts.
+7. **P0.10a/b — discovery/pairing convenience and native Needs You notifications.** Keep cryptographic pairing authoritative.
+8. **P0.08a — package spawn-closure smoke** before consumer signing work advances.
+9. **P1.07a — trusted in-chat connector authorization/continuation.** No model-authored auth URLs.
+10. **P1.08a — guided provider install/login/device-code flows.** Only official supported auth mechanisms.
+11. **P1.06 — inspectable revisioned memory.** Build on canonical local persistence and explicit budgets.
+12. **P1.12 + P2.03 — computer backend contract and bounded subagents/delegation.** These unlock larger autonomous workflows without losing ownership/budget controls.
 
 ## Smaller UI/UX improvements to fold into existing work
 
-- promote `⌘K` from "focus bot filter" to a real command/navigation/search surface once P0.11 provides local transcript search;
 - make the bot context menu a true keyboard/focus menu and expose both Mark Read and Mark Unread;
-- add copy affordances, real date separators and long-user-message collapse without loading more history;
-- error rows should distinguish provider setup/auth problems from retriable runtime errors;
-- message-level rendering errors should degrade to bounded plain text rather than blanking the transcript;
-- P1.04 edit/branch UX should be IME-safe and should never allow a stale page fetch to overwrite newer SSE state;
-- P0.09 should retain screenshot/visual-history evidence for critical desktop journeys.
+- add real date separators, copy affordances and cheap collapse/expand for very long user messages;
+- distinguish provider setup/auth failures from retriable runtime failures in visible error rows;
+- preserve composer drafts per conversation and make edit/branch work IME-safe;
+- do not let a stale pagination response overwrite newer SSE state;
+- reset routine/editor panels when the active agent changes;
+- expose queued steering clearly instead of making a second send look lost;
+- show model/engine freshness or context-rebuild transitions only when they affect user expectations, not as internal jargon;
+- retain screenshot/visual-history evidence for keyboard focus, long-thread anchors, pairing, approvals and degraded computer states.
 
 ## Explicit non-goals from the comparison
 
@@ -122,11 +213,14 @@ The audit does **not** recommend:
 
 - mandatory Better Auth / Postgres / hosted identity for local Cumea;
 - a Cumea-operated managed VM or required hosted sandbox;
-- weakening the OS credential boundary so browser code can read provider keys;
-- replacing the stable packaged renderer origin with a random per-launch renderer port;
-- copying a competitor's UI identity, terminology, assets, prompts or private implementation details;
-- treating a warm-window benchmark from another project or machine as evidence that Cumea is faster.
+- readable provider secrets in browser/renderer state;
+- treating Bonjour/mDNS discovery as authentication;
+- exposing raw provider/native inspector events to the paired mobile surface;
+- letting a model author a trusted connector authorization URL;
+- enabling remote computer control before lease, heartbeat, expiry and audit semantics exist;
+- copying competitor branding, terminology, assets, prompts, layouts or private implementation details;
+- importing benchmark numbers from a competitor's machine as evidence about Cumea.
 
 ## Review cadence
 
-Competitive audits should be repeated only when they can change engineering decisions. Record exact source commits, merge the backlog changes through a normal PR, and require the same protected-branch gates as product code. The audit is an input to Cumea's roadmap, not an alternative roadmap.
+Competitive audits should be repeated only when they can change engineering decisions. Record exact source commits, merge backlog changes through a normal PR, and require the same protected-branch gates as product code. The audit is an input to Cumea's roadmap, not an alternative roadmap.
