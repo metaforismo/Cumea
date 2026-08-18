@@ -1,5 +1,7 @@
 # Busy-user steering
 
+> **Verification boundary:** the P0.12b implementation is covered by the root test/typecheck matrix on macOS, Ubuntu and Windows, the production build/SBOM gate, mobile typecheck/export, landing build and unsigned macOS arm64 package-layout smoke. Those gates do not establish signed-release or physical-device acceptance.
+
 Cumea keeps one provider turn active per conversation, but an attended user does not have to wait for that turn to finish before giving the agent more direction.
 
 P0.12b adds a bounded, durable steering queue for **explicit user messages only**. Routines, task retries and peer-agent fan-out do not bypass the existing one-turn-per-thread guard.
