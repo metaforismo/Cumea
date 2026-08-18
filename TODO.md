@@ -37,7 +37,17 @@ should not bypass the release, security, persistence, or measurement foundations
 
 - [~] **P0.00 — Triage draft PR #9.** Preserve its work, identify conflicts with current `main`, and
   split it into independently mergeable PRs for Quick agents, safe file viewers, dictation, mobile
-  paging, lifecycle hardening, and release evidence. Do not merge the 124-file draft as one tranche.
+  paging, lifecycle hardening, and release evidence. Do not merge the historical draft as one tranche.
+  - [ ] P0.00a — Re-port the safe file capability boundary and Markdown/PDF/DOCX viewers from #9 onto
+    current `main`, keeping attachment IDs/path resolution host-owned, MIME/size bounds explicit, and
+    renderer output inert rather than executing document content.
+  - [ ] P0.00b — Re-port editable native dictation from #9 as an explicit platform capability with
+    permission/error states, user-editable interim text, and no silent cloud speech fallback.
+  - [ ] P0.00c — Re-port the useful mobile paging/anchored-scroll/new-message work from #9 only after
+    reconciling it with the current atomic bootstrap, narrowed SSE projection, and canonical SQLite.
+  - [ ] P0.00d — Extract any still-useful Quick-agent, lifecycle and release-evidence work into separate
+    current-main PRs; close the historical draft once every retained concern has a replacement or an
+    explicit reject decision.
 - [~] **P0.01 — Desktop performance baseline and regression harness.** Add production-build timing
   marks, deterministic fixtures, JSON/Markdown reports, comparison tooling, documented metric
   definitions, and bundle-size budgets before changing startup behavior.
@@ -101,13 +111,24 @@ should not bypass the release, security, persistence, or measurement foundations
 - [ ] **P0.08 — Consumer desktop distribution.** Produce signed and notarized macOS artifacts, signed
   update metadata, stable / beta / nightly channels, rollback guidance, release notes in-app, and a
   Windows installer whose unsupported native capabilities fail closed.
+  - [ ] P0.08a — Extend package verification from top-level server/native artifacts to the complete
+    runtime spawn closure: every helper/proxy a packaged driver can resolve and execute must exist in
+    the staged package, with mutation tests that fail if one is omitted.
 - [ ] **P0.09 — Real journey and packaged-shell tests.** Add browser journeys for onboarding, chat,
   approvals, attachments, Needs You, routines, pairing, and computer degradation, plus packaged
   Electron isolation/launch smoke tests and retained screenshot or visual-history evidence for the
   critical journeys.
+  - [ ] P0.09a — Add an app-wide keyboard/focus/selection/reduced-motion baseline and acceptance journey:
+    visible `:focus-visible` state without pointer-only rings, brand selection styling, and reduced-motion
+    handling for panel/pop/scroll transitions while semantic busy indicators remain truthful.
 - [ ] **P0.10 — Mobile completion gates.** Implement push delivery for Needs You, deep-link to the
   exact request, background reconciliation, offline/host-offline states, and physical-device
   microphone, VoiceOver, and TalkBack acceptance evidence.
+  - [ ] P0.10a — Add optional same-LAN Bonjour/mDNS host discovery and QR onboarding convenience **before**
+    the existing one-time cryptographic pairing; discovery metadata is never authentication and manual
+    URL/QR entry remains supported.
+  - [ ] P0.10b — Add native Needs You notifications that open the exact request, reconcile current host
+    state before showing actions, and never let a stale notification approve an already-resolved ask.
 - [x] **P0.11 — Incremental transcript persistence and local search index.** Replace whole-thread JSON
   rewrite amplification with a versioned owner-local SQLite/WAL message store, lazy verified legacy
   import, per-message insert/update, rollback-aware thread deletion, bounded transcript search, and
@@ -133,10 +154,17 @@ should not bypass the release, security, persistence, or measurement foundations
   - [x] P0.11c — Integrate visible transcript hits into the existing desktop search field, load bounded
     exact-message windows instead of whole threads, highlight and return to latest, add bounded Markdown/JSON
     visible-transcript export, and keep exact navigation/export off the mobile/remote surface.
-- [ ] **P0.12 — Agent liveness and loop protection.** Add activity-based stall detection with
-  waiting-on-human exemptions, honest working / waiting / no-signal / dead projections, bounded
-  repeated-identical tool/effect detection, and visible recovery through Work / Needs You rather than
-  silently killing legitimate long tasks.
+- [ ] **P0.12 — Agent lifecycle correctness, liveness and loop protection.** Make long-running work
+  observable and recoverable without losing explicit user steering or trusting stale provider sessions.
+  - [ ] P0.12a — Add activity-based stall detection with waiting-on-human exemptions, honest working /
+    waiting / no-signal / dead projections, bounded repeated-identical tool/effect detection, and visible
+    recovery through Work / Needs You rather than silently killing legitimate long tasks.
+  - [ ] P0.12b — Persist explicit user messages sent while a bot is busy, mark them visibly queued, bound
+    count/bytes, and drain/coalesce them into one attended follow-up turn on settlement with explicit
+    stop/restart semantics. Do not apply this queue implicitly to routines or peer fan-out.
+  - [ ] P0.12c — Add dispatch-based engine/session freshness. Record which provider instance last ran the
+    thread/task, rebuild bounded canonical context whenever the selected instance is stale, and never
+    trust an old resume cursor across A→B→A or provider-reload transitions.
 
 ### P1 — Open-source Grok Bot product parity
 
@@ -144,8 +172,8 @@ should not bypass the release, security, persistence, or measurement foundations
   archivable conversations with fresh-context creation, search, export, durable identity, and a global
   keyboard navigation/search surface once P0.11 provides the local transcript index.
 - [ ] **P1.02 — Rooms.** Add multi-agent conversations with mentions, a default responder, everyone /
-  mentions-only routing, sender attribution, a shared bulletin, reactions, approvals, and clear
-  busy/waiting states.
+  mentions-only routing, sender attribution, a shared bulletin, reactions, approvals, clear busy/waiting
+  states, and an optional explicitly shared working folder/computer distinct from private agent state.
 - [ ] **P1.03 — Chief of Staff.** Allow one optional workspace coordinator to plan, delegate to the
   current roster, report real progress, consolidate disagreements, collect approvals, and return one
   final answer without inventing teammate work.
@@ -160,16 +188,24 @@ should not bypass the release, security, persistence, or measurement foundations
 - [ ] **P1.07 — Triggers and proactive work.** Extend routines with schedule, authenticated webhook,
   email, calendar, file-change, host-started, and previous-run-completed triggers. Keep external
   payloads visibly untrusted and effects idempotent.
+  - [ ] P1.07a — Add trusted in-chat connector authorization/continuation: when a tool discovers a missing
+    connection, Cumea—not model output—creates the bounded auth card/validated HTTPS URL, reconciles
+    completion, and resumes the original task without exposing credentials in the transcript.
 - [ ] **P1.08 — Engine manager and local models.** Detect CLI candidates and versions, guide install /
   login, test overrides, display a capability matrix, and discover local model servers such as
   Ollama, LM Studio, oMLX, EXO, and compatible endpoints without pretending unsupported tools work.
+  - [ ] P1.08a — Add guided provider install/login and official device-code/subscription authentication
+    where supported, with clear distinction between CLI subscription auth and API-key billing.
 - [ ] **P1.09 — User-owned always-on host.** Package an optional OCI/VPS deployment with pairing,
   HTTPS guidance, health, backup, controlled updates, device revocation, and no mandatory Cumea
   control plane.
 - [ ] **P1.10 — Voice and calls.** Add safe reply playback, per-agent voices, individual calls, spoken
   progress and approval handling, interruption, and explicit platform capability reporting.
 - [ ] **P1.11 — Unified inspector.** Replace unrelated right-side surfaces with resizable Agent, Work,
-  Computer, Apps, and Memory tabs whose state and badges remain scoped to the active agent.
+  Computer, Apps, Memory and Diagnostics tabs whose state/badges remain scoped to the active agent.
+  - [ ] P1.11a — Add a desktop-local per-thread **Events / Raw** diagnostics lens over existing `events/`
+    and secret-redacted `native/` NDJSON: bounded tail reads, independent stream caps, torn-line tolerance,
+    schema validation, folded delta summaries, expandable JSON, live/settled refresh, and no mobile exposure.
 - [ ] **P1.12 — Pluggable user-owned computer backends.** Put local CUA and the existing cloud-computer
   path behind one conformance-tested backend contract, then allow optional Docker / E2B / Daytona-
   compatible implementations without making a Cumea-managed sandbox or cloud service mandatory.
@@ -184,7 +220,7 @@ should not bypass the release, security, persistence, or measurement foundations
   context without silently blending every agent's private memory.
 - [ ] **P2.03 — Durable delegation DAG.** Persist dependencies, retries, checkpoints, cancellation,
   recursion limits, child-agent ownership, idempotent short-lived child/subagent spawn keys, per-child
-  budgets, and real completion evidence.
+  concurrency/depth/token/cost/output budgets, and real completion evidence.
 - [ ] **P2.04 — Central Needs You inbox.** Aggregate approvals, questions, conflicts, expired leases,
   failed automations, and recovery actions across agents, rooms, councils, desktop, and mobile.
 - [ ] **P2.05 — Review and disagreement stage.** Let agents challenge claims, attach evidence, record
@@ -201,7 +237,8 @@ should not bypass the release, security, persistence, or measurement foundations
   manifests, and artifacts.
 - [ ] **P2.10 — Leased computer takeover.** Pause agent input, grant a bounded human lease, audit user
   and agent actions separately, protect clipboard/file channels, heartbeat and expire the lease, and
-  recover safely after disconnect or owner/session loss.
+  recover safely after disconnect or owner/session loss. Keep paired mobile computer access read-only
+  until this lease boundary is implemented and tested.
 - [ ] **P2.11 — Optional team/server storage.** Keep SQLite as the local default and add a separately
   tested Postgres mode only where multi-user or server operation requires it.
 
@@ -236,3 +273,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-18 | P0.11b2 | Completed the guarded Store cutover backend with verified legacy import, SQLite-only incremental appends/patches, canonical-revision search reconciliation, restart/crash evidence, no new whole-thread JSON files, and fail-closed deletion until b3; the real harness remains legacy-backed until b3 enables it. |
 | 2026-08-18 | P0.11b3 | Activated canonical transcript SQLite in the real harness with rollback-capable post-COMMIT deletion, pending-delete restart recovery, canonical/search/metadata/file rollback evidence, immutable legacy migration anchors, canonical-only new threads, and cross-platform CI. |
 | 2026-08-18 | P0.11c | Completed global desktop transcript search/navigation and bounded visible export on the local index, with exact-focus windows, Return to latest, export redaction, paired-remote denial, and cross-platform CI. P0.11 is complete. |
+| 2026-08-18 | Competitive audit refresh | Re-pinned Cumea `4b897646`, Rakazo `9622c388`, and OpenMausBot `e7d71f4b`; promoted raw diagnostics, draft-#9 extraction, app-wide accessibility, session freshness, busy steering, package spawn closure, connector continuation, mobile discovery/notifications, provider onboarding, and bounded subagents into explicit gates without weakening the local/privacy model. |
