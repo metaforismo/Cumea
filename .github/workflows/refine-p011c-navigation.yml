@@ -1,0 +1,36 @@
+name: Refine P0.11c navigation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/refine-p011c-navigation.mjs
+      - .github/workflows/refine-p011c-navigation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/global-transcript-search
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: node scripts/refine-p011c-navigation.mjs
+      - name: Verify and commit
+        shell: bash
+        run: |
+          grep -F 'returningFromSearch' src/state/store.tsx
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/state/store.tsx
+          git commit -m "fix: return to latest from transcript search"
+          git push origin HEAD:feat/global-transcript-search
