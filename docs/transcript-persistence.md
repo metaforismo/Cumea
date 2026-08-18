@@ -1,78 +1,99 @@
 # Canonical transcript persistence
 
-P0.11b migrates folded conversation history from whole-thread JSON rewrites to an owner-local SQLite/WAL source of truth. The migration is intentionally split into independently reviewable gates.
+P0.11b moves folded conversation history from whole-thread JSON rewrites to an owner-local SQLite/WAL source of truth. The migration was split into three gates so performance work never weakened deletion or recovery semantics.
 
-## P0.11b1: database foundation
+## Current production boundary
 
-`server/transcript-store.ts` introduces `transcripts.sqlite` without changing the production harness yet.
+The real harness now opens `Store({ messageSearch: true, transcripts: true })`.
 
-The database uses:
+Canonical folded conversation history lives in `transcripts.sqlite` and uses:
 
 - owner-only storage inside Cumea's data directory;
 - SQLite WAL;
-- `synchronous=FULL` because this database becomes canonical;
+- `synchronous=FULL` because this database is authoritative;
 - foreign keys;
 - `secure_delete=ON`;
 - a versioned schema with one ordered row per folded transcript message;
 - a per-thread revision counter;
 - explicit `active` and `pending_delete` states.
 
-### Verified legacy import
+New bots create no `messages-<threadId>.json` transcript. Existing JSON files from older Cumea versions are verified migration/recovery anchors only: they are imported once, never rewritten by the canonical backend, and removed when their migrated bot is successfully deleted.
+
+## Verified legacy import
 
 A legacy `messages-<threadId>.json` file is never partially imported. Cumea first reads and parses the complete source, validates the root and required message identity/order fields, rejects duplicate IDs, and calculates the SHA-256 of the original bytes. Only then does one `BEGIN IMMEDIATE` transaction create the thread and all message rows.
 
 The transaction verifies its inserted row count before `COMMIT`. A crash or exception before commit leaves no canonical thread marker, so a later attempt starts from the untouched JSON source rather than guessing whether a partial migration is valid.
 
-The source JSON remains byte-identical as a migration/recovery anchor until the final cutover gate retires the active legacy path.
+A malformed legacy source blocks canonical startup for that owned thread. Cumea does not silently choose an incomplete SQLite view over the recovery source.
 
-## P0.11b2: guarded Store cutover
+## Incremental reads and writes
 
-`Store` now accepts an explicit `transcripts: true` option. That backend is real and covered by the cross-platform suite, but the production harness deliberately does not enable it until P0.11b3 proves canonical deletion through the complete HTTP/workspace/filesystem transaction.
+For the production Store:
 
-When the option is enabled:
+1. transcript reads come from canonical SQLite;
+2. appends insert one message row and advance the thread revision;
+3. patches update one existing row and advance the revision;
+4. in-memory folded state is changed only after the canonical SQLite mutation succeeds;
+5. the legacy JSON source, when one exists, is not rewritten.
 
-1. every currently owned bot thread is established in `transcripts.sqlite` using the verified import contract;
-2. transcript reads come from canonical SQLite;
-3. appends insert one new message row and advance the thread revision;
-4. patches update one existing row and advance the revision;
-5. the in-memory folded transcript is mutated only after the canonical SQLite operation succeeds;
-6. existing legacy JSON is no longer rewritten and new cutover threads create no whole-thread JSON file.
+This removes the old O(thread size) write amplification from every streamed transcript mutation.
 
-A malformed legacy source therefore blocks the cutover instead of silently falling back to an incomplete canonical view.
+## Derived search reconciliation
 
-### Derived search reconciliation
+`message-search.sqlite` is still derived and is not part of the canonical durability contract.
 
-P0.11a originally reconciled `message-search.sqlite` against a canonical JSON file fingerprint. That remains supported for the legacy backend.
-
-The cutover backend instead stores a per-thread `canonical_revision` in the derived search database. Every successful canonical append/patch updates the search row and revision together. On restart, Cumea compares the canonical transcript revision with the derived revision:
+P0.11a originally reconciled it against JSON file fingerprints. That path remains only for legacy/test compatibility. The production canonical backend stores a per-thread `canonical_revision` in the search database. Every successful append or patch updates the visible search row and revision; on restart Cumea compares search and canonical revisions:
 
 - equal revisions avoid a rebuild;
 - a mismatch rebuilds only that thread from canonical SQLite.
 
-This closes the crash window where the canonical SQLite transaction commits but the process exits before the derived search upsert. Search remains derived and can fail independently without weakening the canonical transcript.
+This closes the crash window where canonical SQLite committed but the process exited before the derived search upsert.
 
-### Deliberate deletion gate
+## Rollback-capable deletion
 
-`Store({ transcripts: true })` currently rejects bot deletion with a fail-closed 409-style error. This is intentional: enabling incremental writes before connecting canonical pending-delete to the real bot/workspace/filesystem transaction could leave transcript residue after a user-visible delete.
+Deletion is a privacy boundary, not cache invalidation. The canonical transaction therefore remains reversible even after its SQLite `DELETE` has committed.
 
-P0.11b3 replaces that guard with the reversible canonical deletion protocol, adds crash/restart and privacy cleanup evidence, and only then enables `transcripts: true` in the real harness.
+For each bot deletion:
 
-## Deletion protocol foundation
+1. the outer HTTP transaction stops in-flight work and quarantines bot-owned external files, including attachments, event/native logs, and any legacy transcript anchor;
+2. the canonical thread enters `pending_delete`, freezing reads/appends/patches while preserving its rows;
+3. derived search rows are removed and bot/workspace metadata is prepared;
+4. canonical SQLite deletes the thread, commits, and performs the WAL truncate privacy checkpoint, while retaining an exact private snapshot of the thread state and ordered message rows;
+5. the outer transaction purges quarantined files;
+6. only after every purge succeeds does `finalize()` release the canonical rollback snapshot and expose the deletion as complete.
 
-Phase-one deletion changes the thread to `pending_delete` but deliberately keeps every message row present. Reads, appends, and patches fail closed while that state is active.
+If the SQLite checkpoint fails after the DELETE already committed, or a later file purge fails, rollback reconstructs the exact canonical thread including its previous revision, SHA-256 import provenance, import timestamp, ordered messages, bot metadata, search rows, and quarantined files where restoration is still possible.
 
-The phase is reversible. If the surrounding transaction fails, rollback returns the thread to `active`. If Cumea crashes while a delete is pending, startup reconciliation compares pending thread IDs with the authoritative bot roster:
+Tests cover metadata failure, search failure boundaries, legacy-anchor purge failure after canonical commit, and an injected post-COMMIT checkpoint failure.
 
-- a still-owned thread is restored to `active`;
-- an orphaned pending thread is finalized and scrubbed.
+## Process-crash recovery
 
-The irreversible finalize step is reserved for the outer transaction's commit path.
+`pending_delete` is durable. On harness startup, Cumea reconciles pending thread IDs against the authoritative bot roster before normal transcript use:
 
-## Backups
+- if the bot still exists, its pending thread returns to `active`;
+- if the bot metadata commit won and no bot owns the thread, the orphaned pending transcript is finalized and privacy-checkpointed.
 
-The canonical database exposes a `VACUUM INTO` backup primitive. Tests require the produced database to open independently and contain the same transcript. This is a local recovery primitive, not the encrypted portable backup format tracked separately in P2.09.
+A real-harness restart test leaves a canonical thread deliberately pending, restarts the same profile, and requires the bot, transcript, and search result to recover.
 
-## Remaining gates
+## Backup and recovery
 
-- **P0.11b3:** integrate pending-delete with the real HTTP bot deletion transaction, prove crash/restart and privacy cleanup windows, enable the canonical backend in production, and retire active JSON writes safely.
-- **P0.11c:** add desktop global transcript search/navigation, exact-message jumps, and export without widening the remote/mobile surface.
+`TranscriptStore.backupTo()` uses SQLite `VACUUM INTO`. Tests require the produced backup database to open independently and contain the same transcript history.
+
+For a local recovery copy, stop every Cumea process first and back up at least:
+
+```text
+transcripts.sqlite
+bots.json
+workspace.json
+```
+
+plus bot-owned attachment/event/native data that you intend to preserve. Do not copy a live WAL database by grabbing only `transcripts.sqlite` while Cumea is running; use the backup primitive or stop the app first.
+
+The `VACUUM INTO` database is a local durability primitive, not the encrypted portable full-workspace backup/import format tracked in P2.09.
+
+## What remains in P0.11
+
+P0.11b is complete: canonical transcript persistence is incremental SQLite in production, with verified migration, revision-aware search reconciliation, rollback-capable deletion, crash recovery, and local backup evidence.
+
+P0.11c adds the desktop user-facing layer: global transcript search/navigation, exact-message jumps, and bounded visible-transcript export without widening the remote/mobile surface.
