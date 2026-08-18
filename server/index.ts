@@ -180,7 +180,7 @@ async function defaultSelection() {
   return { instanceId: pick?.instanceId ?? "claude", model: pick?.models.default || "claude-sonnet-5" };
 }
 let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
-const store = new Store(() => bootSelection);
+const store = new Store(() => bootSelection, { messageSearch: true });
 const workspace = new WorkspaceStore();
 const pairing = new PairingStore();
 bootSelection = await defaultSelection();
@@ -1854,6 +1854,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     clearTimeout(initialRoutineTimer);
     remoteServer?.close();
     server.close();
+    store.close();
     void registry.disposeAll().finally(() => process.exit(0));
   });
 }

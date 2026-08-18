@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -109,9 +109,15 @@ export class MessageSearchIndex {
   constructor(path = MESSAGE_SEARCH_DB_PATH) {
     this.path = path;
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(path);
+    // Create/repair the containing database path as owner-only before SQLite
+    // opens it. DATA_DIR is already 0700, but the file itself should never
+    // spend even a short creation window under a permissive umask.
+    closeSync(openSync(path, "a", 0o600));
     try { chmodSync(path, 0o600); } catch {}
-    this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;");
+    this.db = new DatabaseSync(path);
+    this.db.exec(
+      "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;",
+    );
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS message_search_meta (
         key TEXT PRIMARY KEY,
@@ -219,6 +225,11 @@ export class MessageSearchIndex {
       this.db.prepare("DELETE FROM message_search WHERE thread_id = ?").run(threadId);
       if (this.fts5) this.db.prepare("DELETE FROM message_search_fts WHERE thread_id = ?").run(threadId);
       this.db.exec("COMMIT");
+      // secure_delete scrubs deleted cells in the database. Truncating the
+      // WAL after a privacy-sensitive thread deletion also removes older WAL
+      // frames that could otherwise retain the indexed text until a later
+      // checkpoint. This index is local/derived and has one owning process.
+      this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch {}
       throw error;
