@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { DATA_DIR } from "./config.ts";
 import type { BotRecord, Message } from "./store.ts";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const MAX_QUERY_CHARS = 200;
 const MAX_LIMIT = 50;
 const MAX_SEARCH_TEXT_BYTES = 64 * 1024;
@@ -112,6 +112,13 @@ function boundedLimit(raw: number | undefined): number {
   return Math.min(value, MAX_LIMIT);
 }
 
+function boundedRevision(revision: number): number {
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw Object.assign(new Error("canonical transcript revision must be a non-negative safe integer"), { status: 500 });
+  }
+  return revision;
+}
+
 function ftsQuery(query: string): string {
   const tokens = query.split(/\s+/).filter(Boolean).slice(0, 16);
   return tokens.map((token) => `"${token.replace(/"/g, '""')}"`).join(" AND ");
@@ -131,9 +138,6 @@ export class MessageSearchIndex {
   constructor(path = MESSAGE_SEARCH_DB_PATH) {
     this.path = path;
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    // Create/repair the containing database path as owner-only before SQLite
-    // opens it. DATA_DIR is already 0700, but the file itself should never
-    // spend even a short creation window under a permissive umask.
     closeSync(openSync(path, "a", 0o600));
     try { chmodSync(path, 0o600); } catch {}
 
@@ -166,6 +170,10 @@ export class MessageSearchIndex {
           canonical_mtime_ns TEXT NOT NULL,
           canonical_ctime_ns TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS message_search_thread_revision (
+          thread_id TEXT PRIMARY KEY,
+          canonical_revision INTEGER NOT NULL CHECK(canonical_revision >= 0)
+        );
       `);
       db.prepare(`
         INSERT INTO message_search_meta(key, value) VALUES('schema_version', ?)
@@ -187,10 +195,6 @@ export class MessageSearchIndex {
         this.fts5 = false;
       }
     } catch (error) {
-      // DatabaseSync can successfully open a corrupt/non-database file and
-      // fail only on the first PRAGMA/schema statement. Close that partially
-      // initialized handle before propagating the error; otherwise Windows
-      // keeps the profile directory locked and recovery/deletion cannot run.
       try { db.close(); } catch {}
       throw error;
     }
@@ -225,7 +229,16 @@ export class MessageSearchIndex {
     );
   }
 
+  revisionMatches(threadId: string, revision: number): boolean {
+    const expected = boundedRevision(revision);
+    const row = this.db.prepare(
+      "SELECT canonical_revision FROM message_search_thread_revision WHERE thread_id = ?",
+    ).get(threadId) as { canonical_revision: number } | undefined;
+    return row?.canonical_revision === expected;
+  }
+
   private setFingerprint(threadId: string, fingerprint?: CanonicalFileFingerprint | null): void {
+    this.db.prepare("DELETE FROM message_search_thread_revision WHERE thread_id = ?").run(threadId);
     if (!fingerprint) {
       this.db.prepare("DELETE FROM message_search_thread_state WHERE thread_id = ?").run(threadId);
       return;
@@ -242,34 +255,77 @@ export class MessageSearchIndex {
     ).run(threadId, fingerprint.size, fingerprint.inode, fingerprint.mtimeNs, fingerprint.ctimeNs);
   }
 
+  private setRevision(threadId: string, revision: number): void {
+    const value = boundedRevision(revision);
+    this.db.prepare("DELETE FROM message_search_thread_state WHERE thread_id = ?").run(threadId);
+    this.db.prepare(`
+      INSERT INTO message_search_thread_revision(thread_id, canonical_revision)
+      VALUES(?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET canonical_revision = excluded.canonical_revision
+    `).run(threadId, value);
+  }
+
+  private upsertRow(threadId: string, message: Message): void {
+    const text = searchableMessageText(message);
+    this.db.prepare(`
+      INSERT INTO message_search(thread_id, message_id, at, role, kind, search_text)
+      VALUES(?, ?, ?, ?, ?, ?)
+      ON CONFLICT(thread_id, message_id) DO UPDATE SET
+        at = excluded.at,
+        role = excluded.role,
+        kind = excluded.kind,
+        search_text = excluded.search_text
+    `).run(threadId, message.id, message.at, message.role, message.kind, text);
+    if (this.fts5) {
+      this.db.prepare("DELETE FROM message_search_fts WHERE thread_id = ? AND message_id = ?").run(threadId, message.id);
+      this.db.prepare(
+        "INSERT INTO message_search_fts(thread_id, message_id, search_text) VALUES(?, ?, ?)",
+      ).run(threadId, message.id, text);
+    }
+  }
+
   upsert(
     threadId: string,
     message: Message,
     fingerprint?: CanonicalFileFingerprint | null,
   ): void {
-    const text = searchableMessageText(message);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare(`
-        INSERT INTO message_search(thread_id, message_id, at, role, kind, search_text)
-        VALUES(?, ?, ?, ?, ?, ?)
-        ON CONFLICT(thread_id, message_id) DO UPDATE SET
-          at = excluded.at,
-          role = excluded.role,
-          kind = excluded.kind,
-          search_text = excluded.search_text
-      `).run(threadId, message.id, message.at, message.role, message.kind, text);
-      if (this.fts5) {
-        this.db.prepare("DELETE FROM message_search_fts WHERE thread_id = ? AND message_id = ?").run(threadId, message.id);
-        this.db.prepare(
-          "INSERT INTO message_search_fts(thread_id, message_id, search_text) VALUES(?, ?, ?)",
-        ).run(threadId, message.id, text);
-      }
+      this.upsertRow(threadId, message);
       this.setFingerprint(threadId, fingerprint);
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch {}
       throw error;
+    }
+  }
+
+  upsertRevision(threadId: string, message: Message, revision: number): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.upsertRow(threadId, message);
+      this.setRevision(threadId, revision);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+  }
+
+  private replaceRows(threadId: string, messages: readonly Message[]): void {
+    this.db.prepare("DELETE FROM message_search WHERE thread_id = ?").run(threadId);
+    if (this.fts5) this.db.prepare("DELETE FROM message_search_fts WHERE thread_id = ?").run(threadId);
+    const insert = this.db.prepare(`
+      INSERT INTO message_search(thread_id, message_id, at, role, kind, search_text)
+      VALUES(?, ?, ?, ?, ?, ?)
+    `);
+    const insertFts = this.fts5
+      ? this.db.prepare("INSERT INTO message_search_fts(thread_id, message_id, search_text) VALUES(?, ?, ?)")
+      : null;
+    for (const message of messages) {
+      const text = searchableMessageText(message);
+      insert.run(threadId, message.id, message.at, message.role, message.kind, text);
+      insertFts?.run(threadId, message.id, text);
     }
   }
 
@@ -280,21 +336,20 @@ export class MessageSearchIndex {
   ): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("DELETE FROM message_search WHERE thread_id = ?").run(threadId);
-      if (this.fts5) this.db.prepare("DELETE FROM message_search_fts WHERE thread_id = ?").run(threadId);
-      const insert = this.db.prepare(`
-        INSERT INTO message_search(thread_id, message_id, at, role, kind, search_text)
-        VALUES(?, ?, ?, ?, ?, ?)
-      `);
-      const insertFts = this.fts5
-        ? this.db.prepare("INSERT INTO message_search_fts(thread_id, message_id, search_text) VALUES(?, ?, ?)")
-        : null;
-      for (const message of messages) {
-        const text = searchableMessageText(message);
-        insert.run(threadId, message.id, message.at, message.role, message.kind, text);
-        insertFts?.run(threadId, message.id, text);
-      }
+      this.replaceRows(threadId, messages);
       this.setFingerprint(threadId, fingerprint);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+  }
+
+  replaceThreadRevision(threadId: string, messages: readonly Message[], revision: number): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.replaceRows(threadId, messages);
+      this.setRevision(threadId, revision);
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch {}
@@ -308,11 +363,8 @@ export class MessageSearchIndex {
       this.db.prepare("DELETE FROM message_search WHERE thread_id = ?").run(threadId);
       if (this.fts5) this.db.prepare("DELETE FROM message_search_fts WHERE thread_id = ?").run(threadId);
       this.db.prepare("DELETE FROM message_search_thread_state WHERE thread_id = ?").run(threadId);
+      this.db.prepare("DELETE FROM message_search_thread_revision WHERE thread_id = ?").run(threadId);
       this.db.exec("COMMIT");
-      // secure_delete scrubs deleted cells in the database. Truncating the
-      // WAL after a privacy-sensitive thread deletion also removes older WAL
-      // frames that could otherwise retain the indexed text until a later
-      // checkpoint. This index is local/derived and has one owning process.
       this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch {}
@@ -321,10 +373,6 @@ export class MessageSearchIndex {
   }
 
   seedLegacy(bots: readonly BotRecord[]): void {
-    // A cheap stat fingerprint closes the canonical-write → derived-index
-    // crash window without parsing every transcript on every start. Atomic
-    // canonical writes replace the file, so inode/ctime/mtime/size together
-    // distinguish a newer JSON source even when message count is unchanged.
     for (const bot of bots) {
       const path = join(DATA_DIR, `messages-${bot.threadId}.json`);
       if (!existsSync(path)) continue;
@@ -334,9 +382,6 @@ export class MessageSearchIndex {
       try {
         parsed = JSON.parse(readFileSync(path, "utf8"));
       } catch {
-        // Match Store's existing recovery behavior: an unreadable/corrupt
-        // canonical transcript is isolated to this thread. SQLite failures
-        // are deliberately outside this catch and must disable the index.
         continue;
       }
       if (Array.isArray(parsed)) this.replaceThread(bot.threadId, parsed as Message[], fingerprint);
