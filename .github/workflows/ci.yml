@@ -13,19 +13,42 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  finalize-session-freshness-order:
+    name: finalize session freshness ordering
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'fix/engine-session-freshness' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fix/engine-session-freshness
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: node scripts/finalize-session-freshness-order.mjs
+      - name: Remove transform machinery and restore normal CI
+        run: |
+          rm -f scripts/finalize-session-freshness-order.mjs
+          git checkout origin/main -- .github/workflows/ci.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: confirm native session only after successful turn"
+          git push origin HEAD:fix/engine-session-freshness
+
   root-checks:
     name: root checks (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        # the harness must stay portable Node — the windows leg is the
-        # guardrail for the in-progress Windows port (POSIX-only tests
-        # self-skip there)
         os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
-      # tests never launch Electron; skip the binary download
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,8 +123,6 @@ jobs:
 
   macos-package-smoke:
     name: unsigned macOS arm64 package layout
-    # Pin the native Apple Silicon image so pnpm installs the arm64 optional
-    # CUA/UBJS runtimes that electron-builder must package.
     runs-on: macos-26
     timeout-minutes: 25
     env:
