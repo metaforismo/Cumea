@@ -30,10 +30,10 @@ All notable changes to Cumea are documented here. This project follows
   verified all-or-nothing legacy import with SHA-256 provenance, stable message ordering, per-thread
   revisions, incremental append/patch primitives, reversible pending deletion, crash reconciliation,
   and independently readable `VACUUM INTO` backups.
-- Added a guarded canonical Store backend that reads/appends/patches folded transcripts through
-  SQLite without rewriting the legacy JSON source, plus canonical-revision reconciliation for the
-  derived transcript search index. The real harness remains on the legacy backend until P0.11b3
-  proves canonical deletion and enables the cutover.
+- Activated canonical transcript persistence in the real harness. Folded history now reads, appends
+  and patches through owner-local `transcripts.sqlite` without whole-thread JSON rewrites; existing
+  legacy JSON remains an immutable migration/recovery anchor until its bot is deleted, and new bots
+  create no JSON transcript. The derived search index reconciles against canonical revisions.
 
 ### Changed
 
@@ -49,9 +49,10 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
-- The guarded canonical Store backend refuses bot deletion until P0.11b3 connects `pending_delete`
-  to the complete HTTP/workspace/filesystem deletion transaction. This prevents a user-visible delete
-  from succeeding while canonical SQLite rows could remain behind.
+- Canonical bot deletion is a rollback-capable cross-store transaction: SQLite first enters
+  `pending_delete`, commits and privacy-checkpoints the transcript while retaining an exact private
+  rollback snapshot, then outer bot/workspace/file purges run, and only a successful full purge releases
+  that snapshot. Metadata, search, legacy-anchor, checkpoint and post-commit purge failures are tested.
 - Canonical transcript import is fail-closed: malformed legacy roots/messages or duplicate message IDs
   never create a partial thread. `pending_delete` freezes reads and mutations while retaining bytes for
   rollback, and interrupted pending deletes can be reconciled against the authoritative bot roster.

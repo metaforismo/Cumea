@@ -116,7 +116,7 @@ should not bypass the release, security, persistence, or measurement foundations
     indexing, local-only bounded search API, privacy-safe field projection, canonical-file fingerprint
     reconciliation, secure-delete/WAL cleanup, rollback-aware bot deletion, and cross-platform handle
     lifecycle. Canonical JSON remains authoritative until P0.11b.
-  - [~] P0.11b — Migrate the canonical transcript source of truth from whole-thread JSON rewrites to
+  - [x] P0.11b — Migrate the canonical transcript source of truth from whole-thread JSON rewrites to
     versioned incremental SQLite with atomic verified legacy import, crash recovery, rollback-safe
     deletion, and explicit recovery/backup evidence before retiring canonical JSON writes.
     - [x] P0.11b1 — Add the owner-local `transcripts.sqlite` schema, all-or-nothing validated/hash-
@@ -126,9 +126,10 @@ should not bypass the release, security, persistence, or measurement foundations
       reads/appends/patches canonical SQLite without whole-thread JSON rewrites, reconciles the derived
       search index against canonical revisions, preserves existing legacy JSON as a recovery anchor,
       and fails bot deletion closed until the b3 transaction is available.
-    - [ ] P0.11b3 — Integrate canonical pending-delete recovery with the real HTTP bot deletion path,
-      prove crash/restart and privacy cleanup windows, enable the canonical Store backend in production,
-      document backup/restore operations, and retire active JSON writes without weakening rollback.
+    - [x] P0.11b3 — Integrate canonical pending-delete recovery with the real HTTP bot deletion path,
+      prove crash/restart and post-COMMIT privacy cleanup windows, enable the canonical Store backend in
+      production, preserve immutable legacy migration anchors without rewriting them, remove them on bot
+      deletion, and retain tested local backup/recovery primitives.
   - [ ] P0.11c — Add desktop global search/navigation, exact message jumping, transcript export, and
     UX tests on top of the local index without widening the mobile/remote privacy surface.
 - [ ] **P0.12 — Agent liveness and loop protection.** Add activity-based stall detection with
@@ -232,3 +233,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-18 | P0.11a | Completed the owner-local derived transcript search index with incremental visible-message indexing, local-only bounded search, canonical-file fingerprint reconciliation, cache-cold HTTP rollback evidence, privacy-sensitive SQLite deletion semantics, and cross-platform handle cleanup; canonical JSON remains authoritative until P0.11b. |
 | 2026-08-18 | P0.11b1 | Completed the versioned canonical transcript SQLite foundation with verified legacy import, stable ordering/revisions, incremental mutation primitives, reversible pending deletion, crash reconciliation, independently readable local backups, and cross-platform CI; production Store cutover remains P0.11b2. |
 | 2026-08-18 | P0.11b2 | Completed the guarded Store cutover backend with verified legacy import, SQLite-only incremental appends/patches, canonical-revision search reconciliation, restart/crash evidence, no new whole-thread JSON files, and fail-closed deletion until b3; the real harness remains legacy-backed until b3 enables it. |
+| 2026-08-18 | P0.11b3 | Activated canonical transcript SQLite in the real harness with rollback-capable post-COMMIT deletion, pending-delete restart recovery, canonical/search/metadata/file rollback evidence, immutable legacy migration anchors, canonical-only new threads, and cross-platform CI. |

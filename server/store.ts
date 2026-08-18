@@ -2,8 +2,8 @@
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
 // one). Legacy messages-<threadId>.json remains a migration/recovery anchor;
-// the optional P0.11b cutover backend stores folded transcripts incrementally
-// in owner-local SQLite.
+// folded transcripts are stored incrementally in owner-local SQLite when the
+// canonical backend is enabled.
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -16,7 +16,7 @@ import {
   canonicalFileFingerprint,
   type TranscriptSearchResult,
 } from "./message-search-index.ts";
-import { TranscriptStore } from "./transcript-store.ts";
+import { TranscriptStore, type TranscriptDeleteTransaction } from "./transcript-store.ts";
 import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
 
 export type CumeaColor =
@@ -163,15 +163,17 @@ export interface BotRecord {
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
 
+/** A cross-store deletion has a reversible metadata prepare phase, an
+ * explicit canonical commit, then outer file purge, and only finally releases
+ * its rollback snapshots. */
 export interface BotRecordDeletionTransaction {
+  commit: () => void;
   rollback: () => void;
   finalize: () => void;
 }
 
 export interface StoreOptions {
   messageSearch?: boolean;
-  /** P0.11b2 cutover backend. The real harness enables this only in P0.11b3,
-   * after canonical deletion is proven end-to-end. */
   transcripts?: boolean;
 }
 
@@ -452,12 +454,6 @@ export class Store {
   deleteBot(id: string): boolean {
     const bot = this.bot(id);
     if (!bot) return false;
-    if (this.transcripts) {
-      throw Object.assign(
-        new Error("canonical transcript deletion is not enabled until P0.11b3"),
-        { status: 409 },
-      );
-    }
 
     const transcriptSnapshot = [...this.messagesFor(bot.threadId)];
     const files = stageFilesForDeletion(this.botDeletionFiles(id));
@@ -465,6 +461,7 @@ export class Store {
     try {
       transaction = this.deleteBotRecordTransaction(id, transcriptSnapshot);
       if (!transaction) throw Object.assign(new Error("bot disappeared during deletion"), { status: 500 });
+      transaction.commit();
       files.purge();
       transaction.finalize();
       return true;
@@ -492,41 +489,69 @@ export class Store {
 
   botDeletionFiles(id: string): DeletionFile[] {
     const bot = this.bot(id);
+    // Migrated JSON is now only a recovery anchor, but user-visible deletion
+    // must still remove it when present. The staging helper tolerates ENOENT
+    // for new canonical-only bots.
     return bot ? [{ path: messagesFile(bot.threadId), label: "transcript" }] : [];
   }
 
-  /** Metadata phase used after the outer transaction quarantines every file. */
+  /** Metadata prepare phase used after the outer transaction quarantines files. */
   deleteBotRecordTransaction(
     id: string,
     transcriptSnapshot: readonly Message[] = this.messagesFor(this.bot(id)?.threadId ?? ""),
   ): BotRecordDeletionTransaction | null {
     const bot = this.bot(id);
     if (!bot) return null;
-    if (this.transcripts) {
-      throw Object.assign(
-        new Error("canonical transcript deletion is not enabled until P0.11b3"),
-        { status: 409 },
-      );
-    }
     if (!this.messageSearch && this.messageSearchHasResidualData) {
       throw Object.assign(
         new Error("local transcript search index is unavailable; indexed transcript deletion cannot be guaranteed"),
         { status: 500 },
       );
     }
+
     const searchSnapshot = [...transcriptSnapshot];
+    const canonicalState = this.transcripts?.threadState(bot.threadId) ?? null;
+    let canonicalTransaction: TranscriptDeleteTransaction | null = null;
+    if (this.transcripts) {
+      if (!canonicalState) {
+        throw Object.assign(new Error("canonical transcript is missing during bot deletion"), { status: 500 });
+      }
+      canonicalTransaction = this.transcripts.stageDelete(bot.threadId);
+    }
+
+    const restoreSearch = () => {
+      if (!this.messageSearch) return;
+      try {
+        if (canonicalState) {
+          this.messageSearch.replaceThreadRevision(bot.threadId, searchSnapshot, canonicalState.revision);
+        } else {
+          this.messageSearch.replaceThread(
+            bot.threadId,
+            searchSnapshot,
+            canonicalFileFingerprint(messagesFile(bot.threadId)),
+          );
+        }
+      } catch (error) {
+        this.disableMessageSearch(error);
+        throw Object.assign(new Error("could not restore local transcript search after deletion failed"), {
+          status: 500,
+          cause: error,
+        });
+      }
+    };
+
     if (this.messageSearch) {
       try {
         this.messageSearch.deleteThread(bot.threadId);
       } catch (error) {
-        try {
-          this.messageSearch.replaceThread(bot.threadId, searchSnapshot);
-        } catch (restoreError) {
-          this.disableMessageSearch(restoreError);
-          throw Object.assign(
-            new Error("could not remove transcript from local search index and restore the derived index"),
-            { status: 500, cause: new AggregateError([error, restoreError]) },
-          );
+        const rollbackErrors: unknown[] = [];
+        try { canonicalTransaction?.rollback(); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+        try { restoreSearch(); } catch (restoreError) { rollbackErrors.push(restoreError); }
+        if (rollbackErrors.length) {
+          throw Object.assign(new Error("could not remove transcript from local search index and restore deletion state"), {
+            status: 500,
+            cause: new AggregateError([error, ...rollbackErrors]),
+          });
         }
         throw Object.assign(new Error("could not remove transcript from local search index"), {
           status: 500,
@@ -535,43 +560,79 @@ export class Store {
       }
     }
 
-    const restoreSearch = () => {
-      if (!this.messageSearch) return;
-      try {
-        this.messageSearch.replaceThread(bot.threadId, searchSnapshot);
-      } catch (error) {
-        this.disableMessageSearch(error);
-      }
-    };
-
     const previousBots = this.bots;
     this.bots = previousBots.filter((candidate) => candidate.id !== id);
     try {
       this.saveBots();
     } catch (error) {
       this.bots = previousBots;
-      restoreSearch();
+      const rollbackErrors: unknown[] = [];
+      try { canonicalTransaction?.rollback(); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+      try { restoreSearch(); } catch (restoreError) { rollbackErrors.push(restoreError); }
+      if (rollbackErrors.length) {
+        throw Object.assign(new Error("bot metadata deletion failed and canonical/search rollback was incomplete"), {
+          status: 500,
+          cause: new AggregateError([error, ...rollbackErrors]),
+        });
+      }
       throw error;
     }
 
+    let canonicalCommitted = !canonicalTransaction;
     let settled = false;
-    return {
-      rollback: () => {
-        if (settled) return;
+
+    // The real HTTP delete path already stages all external files before it
+    // asks Store to prepare metadata. Commit canonical SQLite here, before
+    // returning to that outer path. The TranscriptStore transaction retains
+    // its private rollback snapshot until finalize(), so a later attachment /
+    // event-log / legacy-anchor purge failure can still restore every row.
+    if (canonicalTransaction) {
+      try {
+        canonicalTransaction.commit();
+        canonicalCommitted = true;
+      } catch (error) {
+        const rollbackErrors = [];
         this.bots = previousBots;
-        try {
-          this.saveBots();
-          restoreSearch();
-          settled = true;
-        } catch (error) {
-          throw Object.assign(new Error("could not restore bot record after deletion failed"), {
+        try { this.saveBots(); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+        try { canonicalTransaction.rollback(); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+        try { restoreSearch(); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+        if (rollbackErrors.length) {
+          throw Object.assign(new Error("canonical transcript commit failed and deletion rollback was incomplete"), {
             status: 500,
-            cause: error,
+            cause: new AggregateError([error, ...rollbackErrors]),
           });
         }
+        throw error;
+      }
+    }
+
+    return {
+      commit: () => {
+        if (settled || canonicalCommitted) return;
+        canonicalTransaction?.commit();
+        canonicalCommitted = true;
+      },
+      rollback: () => {
+        if (settled) return;
+        const rollbackErrors: unknown[] = [];
+        this.bots = previousBots;
+        try { this.saveBots(); } catch (error) { rollbackErrors.push(error); }
+        try { canonicalTransaction?.rollback(); } catch (error) { rollbackErrors.push(error); }
+        try { restoreSearch(); } catch (error) { rollbackErrors.push(error); }
+        if (rollbackErrors.length) {
+          throw Object.assign(new Error("could not restore bot record after deletion failed"), {
+            status: 500,
+            cause: new AggregateError(rollbackErrors),
+          });
+        }
+        settled = true;
       },
       finalize: () => {
         if (settled) return;
+        if (canonicalTransaction && !canonicalCommitted) {
+          throw new Error("canonical transcript deletion must commit before bot deletion finalizes");
+        }
+        canonicalTransaction?.finalize();
         this.messages.delete(bot.threadId);
         settled = true;
       },

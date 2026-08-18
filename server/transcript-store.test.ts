@@ -82,7 +82,7 @@ describe("TranscriptStore", () => {
     }
   });
 
-  it("keeps phase-one deletion reversible, freezes mutations, and finalizes only on explicit commit", () => {
+  it("keeps phase-one deletion reversible, freezes mutations, and releases rollback only after finalize", () => {
     const paths = temp();
     const store = new TranscriptStore(paths.db);
     try {
@@ -96,7 +96,51 @@ describe("TranscriptStore", () => {
       expect(store.messagesFor("thread-a", paths.legacy)).toHaveLength(1);
 
       const second = store.stageDelete("thread-a");
-      second.finalize();
+      second.commit();
+      expect(store.threadState("thread-a")).toBeNull();
+      // Until outer file/workspace purge succeeds the committed SQLite delete
+      // still has a private rollback snapshot.
+      second.rollback();
+      expect(store.messagesFor("thread-a", paths.legacy)).toHaveLength(1);
+
+      const third = store.stageDelete("thread-a");
+      third.commit();
+      third.finalize();
+      expect(store.threadState("thread-a")).toBeNull();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("reconstructs the exact thread when privacy checkpoint fails after SQLite delete commit", () => {
+    const paths = temp();
+    let failCheckpoint = true;
+    const store = new TranscriptStore(paths.db, {
+      checkpoint(db) {
+        if (failCheckpoint) throw new Error("checkpoint fault");
+        db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      },
+    });
+    try {
+      store.append("thread-a", message("m1", "first", 10), paths.legacy);
+      store.append("thread-a", message("m2", "second", 20), paths.legacy);
+      const before = store.threadState("thread-a")!;
+      const transaction = store.stageDelete("thread-a");
+      expect(() => transaction.commit()).toThrow(/checkpoint fault/);
+      expect(store.threadState("thread-a")).toBeNull();
+
+      transaction.rollback();
+      expect(store.threadState("thread-a")).toMatchObject({
+        state: "active",
+        revision: before.revision,
+        messageCount: 2,
+      });
+      expect(store.messagesFor("thread-a", paths.legacy).map((item) => item.text)).toEqual(["first", "second"]);
+
+      failCheckpoint = false;
+      const retry = store.stageDelete("thread-a");
+      retry.commit();
+      retry.finalize();
       expect(store.threadState("thread-a")).toBeNull();
     } finally {
       store.close();
@@ -141,8 +185,6 @@ describe("TranscriptStore", () => {
     const paths = temp();
     writeFileSync(paths.db, "not a database");
     expect(() => new TranscriptStore(paths.db)).toThrow();
-    // Windows proves the important part: a leaked DatabaseSync handle would
-    // make recursive cleanup fail with EPERM.
     rmSync(paths.directory, { recursive: true, force: true });
     directories.delete(paths.directory);
   });

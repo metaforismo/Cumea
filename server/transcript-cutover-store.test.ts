@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
+import { stageFilesForDeletion } from "./delete-files.ts";
 import { Store, type Message } from "./store.ts";
 import { TranscriptStore } from "./transcript-store.ts";
 
@@ -77,8 +78,6 @@ describe("Store canonical transcript cutover backend", () => {
     });
     close(store);
 
-    // Simulate the exact crash window: the canonical transaction commits but
-    // the process dies before Store can update the derived search database.
     const canonical = new TranscriptStore();
     const direct: Message = {
       id: "direct-after-canonical-commit",
@@ -105,11 +104,82 @@ describe("Store canonical transcript cutover backend", () => {
     expect(store.searchMessages("no json rewrite").hits).toHaveLength(1);
   });
 
-  it("fails closed on bot deletion until canonical deletion is integrated in P0.11b3", () => {
+  it("deletes a canonical-only bot from metadata, canonical SQLite, cache, and derived search", () => {
     const store = tracked({ transcripts: true, messageSearch: true });
     const bot = store.createBot();
-    expect(() => store.deleteBot(bot.id)).toThrow(/not enabled until P0\.11b3/);
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "canonical delete sentinel" });
+    expect(store.searchMessages("canonical delete").hits).toHaveLength(1);
+
+    expect(store.deleteBot(bot.id)).toBe(true);
+    expect(store.bot(bot.id)).toBeNull();
+    expect(store.searchMessages("canonical delete").hits).toEqual([]);
+
+    close(store);
+    const canonical = new TranscriptStore();
+    try {
+      expect(canonical.threadState(bot.threadId)).toBeNull();
+    } finally {
+      canonical.close();
+    }
+  });
+
+  it("removes a migrated legacy JSON recovery anchor with the canonical bot", () => {
+    const legacy = tracked({ messageSearch: true });
+    const bot = legacy.createBot();
+    legacy.appendMessage(bot.threadId, { role: "user", kind: "text", text: "legacy delete sentinel" });
+    const legacyPath = join(DATA_DIR, `messages-${bot.threadId}.json`);
+    expect(existsSync(legacyPath)).toBe(true);
+    close(legacy);
+
+    const cutover = tracked({ transcripts: true, messageSearch: true });
+    expect(cutover.deleteBot(bot.id)).toBe(true);
+    expect(existsSync(legacyPath)).toBe(false);
+  });
+
+  it("rolls canonical/search/bot state back after canonical commit when legacy-anchor purge fails", () => {
+    const legacy = tracked({ messageSearch: true });
+    const bot = legacy.createBot();
+    legacy.appendMessage(bot.threadId, { role: "user", kind: "text", text: "purge rollback sentinel" });
+    close(legacy);
+
+    const store = tracked({ transcripts: true, messageSearch: true });
+    const snapshot = [...store.messagesFor(bot.threadId)];
+    const staged = stageFilesForDeletion(store.botDeletionFiles(bot.id), {
+      unlink() {
+        throw Object.assign(new Error("blocked cleanup"), { code: "EACCES" });
+      },
+    });
+    const transaction = store.deleteBotRecordTransaction(bot.id, snapshot)!;
+    // deleteBotRecordTransaction has already committed the canonical deletion
+    // but retained its private rollback snapshot for this exact outer phase.
+    expect(store.bot(bot.id)).toBeNull();
+    expect(store.searchMessages("purge rollback").hits).toEqual([]);
+    expect(() => staged.purge()).toThrow(/could not finalize bot file deletion/);
+
+    transaction.rollback();
+    staged.rollback();
     expect(store.bot(bot.id)).toEqual(expect.objectContaining({ id: bot.id }));
-    expect(store.messagesFor(bot.threadId)).not.toHaveLength(0);
+    expect(store.messagesFor(bot.threadId).some((message) => message.text?.includes("purge rollback"))).toBe(true);
+    expect(store.searchMessages("purge rollback").hits).toHaveLength(1);
+    expect(existsSync(join(DATA_DIR, `messages-${bot.threadId}.json`))).toBe(true);
+  });
+
+  it("rolls pending canonical and search state back when bots.json metadata commit fails", () => {
+    const store = tracked({ transcripts: true, messageSearch: true });
+    const bot = store.createBot();
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "metadata rollback sentinel" });
+    const botsFile = join(DATA_DIR, "bots.json");
+    const backup = join(DATA_DIR, "bots-backup.json");
+    renameSync(botsFile, backup);
+    mkdirSync(botsFile);
+
+    expect(() => store.deleteBot(bot.id)).toThrow();
+    expect(store.bot(bot.id)).toEqual(expect.objectContaining({ id: bot.id }));
+    expect(store.messagesFor(bot.threadId).some((message) => message.text?.includes("metadata rollback"))).toBe(true);
+    expect(store.searchMessages("metadata rollback").hits).toHaveLength(1);
+
+    rmSync(botsFile, { recursive: true });
+    renameSync(backup, botsFile);
+    expect(store.deleteBot(bot.id)).toBe(true);
   });
 });
