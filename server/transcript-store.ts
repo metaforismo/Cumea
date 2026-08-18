@@ -72,7 +72,7 @@ function validateMessage(value: unknown, position: number): Message {
   if (!Number.isSafeInteger(message.at) || (message.at as number) < 0) {
     throw statusError(500, `legacy transcript message ${position} has an invalid timestamp`);
   }
-  if (message.delivery !== undefined && message.delivery !== "queued" && message.delivery !== "failed") {
+  if (message.delivery !== undefined && message.delivery !== "queued" && message.delivery !== "dispatching" && message.delivery !== "failed") {
     throw statusError(500, `legacy transcript message ${position} has an invalid delivery state`);
   }
   return value as Message;
@@ -288,6 +288,37 @@ export class TranscriptStore {
       if (Number(result.changes) !== 1) throw statusError(404, "no such canonical transcript message");
       this.db.prepare("UPDATE transcript_threads SET revision = revision + 1 WHERE thread_id = ?")
         .run(threadId);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+    return this.threadState(threadId)!.revision;
+  }
+
+  replaceMessages(threadId: string, messages: readonly Message[]): number {
+    validateThreadId(threadId);
+    if (!messages.length) return this.threadState(threadId)?.revision ?? 0;
+    const state = this.threadState(threadId);
+    if (!state) throw statusError(404, "no such canonical transcript");
+    if (state.state !== STATE_ACTIVE) throw statusError(409, "transcript is pending deletion");
+    const ids = new Set<string>();
+    for (const [index, message] of messages.entries()) {
+      validateMessage(message, index);
+      if (ids.has(message.id)) throw statusError(400, "duplicate canonical message in batch replacement");
+      ids.add(message.id);
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const update = this.db.prepare(`
+        UPDATE transcript_messages SET at = ?, payload_json = ?
+        WHERE thread_id = ? AND message_id = ?
+      `);
+      for (const message of messages) {
+        const result = update.run(message.at, JSON.stringify(message), threadId, message.id);
+        if (Number(result.changes) !== 1) throw statusError(404, `no such canonical transcript message ${message.id}`);
+      }
+      this.db.prepare("UPDATE transcript_threads SET revision = revision + 1 WHERE thread_id = ?").run(threadId);
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch {}

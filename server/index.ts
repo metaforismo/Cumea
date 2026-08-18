@@ -494,6 +494,16 @@ bus.subscribe((event: RuntimeEvent) => {
         activeRunByThread.delete(event.threadId);
         broadcastWorkspace();
       }
+      const steeringMessageIds = activeSteeringByThread.get(event.threadId);
+      if (steeringMessageIds?.length) {
+        try {
+          patchSteeringDelivery(event.threadId, steeringMessageIds);
+        } catch (error) {
+          console.error("settled steering delivery state could not be persisted", error);
+        } finally {
+          activeSteeringByThread.delete(event.threadId);
+        }
+      }
       store.patchBot(bot.id, { busy: false, unread: true });
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
       clearThreadEventState(event.threadId);
@@ -588,17 +598,15 @@ interface TurnOptions {
   track?: boolean;
   /** Existing queued user rows consumed by this single attended follow-up. */
   existingUserMessageIds?: string[];
-  onDispatchAccepted?: () => void;
   onDispatchFailed?: (error: unknown) => void;
 }
 
 const steeringDrainInFlight = new Set<string>();
+const activeSteeringByThread = new Map<string, string[]>();
 
-function patchSteeringDelivery(threadId: string, messageIds: readonly string[], delivery?: "queued" | "failed") {
-  for (const messageId of messageIds) {
-    const message = store.patchMessage(threadId, messageId, { delivery });
-    if (message) broadcast({ kind: "message.patch", threadId, message });
-  }
+function patchSteeringDelivery(threadId: string, messageIds: readonly string[], delivery?: "queued" | "dispatching" | "failed") {
+  const messages = store.patchMessageDeliveryBatch(threadId, messageIds, delivery);
+  for (const message of messages) broadcast({ kind: "message.patch", threadId, message });
 }
 
 function markSteeringFailed(
@@ -650,15 +658,20 @@ async function drainBusySteering(botId: string) {
   steeringDrainInFlight.add(botId);
   try {
     const attachments = workspace.attachmentsFor(bot.id, group.attachmentIds);
+    patchSteeringDelivery(bot.threadId, group.messageIds, "dispatching");
+    activeSteeringByThread.set(bot.threadId, [...group.messageIds]);
     await startTurn(bot.id, group.text, {
       attachments,
       existingUserMessageIds: group.messageIds,
       track: true,
-      onDispatchAccepted: () => patchSteeringDelivery(bot.threadId, group.messageIds),
-      onDispatchFailed: (error) => markSteeringFailed(bot, group.messageIds, error, false),
+      onDispatchFailed: (error) => {
+        markSteeringFailed(bot, group.messageIds, error, false);
+        activeSteeringByThread.delete(bot.threadId);
+      },
     });
   } catch (error) {
     markSteeringFailed(bot, group.messageIds, error, true);
+    activeSteeringByThread.delete(bot.threadId);
   } finally {
     steeringDrainInFlight.delete(botId);
   }
@@ -675,7 +688,7 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
     const byId = new Map(store.messagesFor(bot.threadId).map((message) => [message.id, message]));
     for (const messageId of existingUserMessageIds) {
       const message = byId.get(messageId);
-      if (!message || message.role !== "user" || message.kind !== "text" || message.delivery !== "queued") {
+      if (!message || message.role !== "user" || message.kind !== "text" || message.delivery !== "dispatching") {
         throw Object.assign(new Error("queued steering state changed before dispatch"), { status: 409 });
       }
     }
@@ -841,7 +854,6 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
             : ""),
         integrations,
       });
-      try { opts.onDispatchAccepted?.(); } catch (callbackError) { console.error("steering dispatch callback failed", callbackError); }
       if (runId) {
         workspace.bindTurn(runId, started.turnId);
         broadcastWorkspace();
@@ -894,6 +906,12 @@ async function reloadProviders() {
   // disposeAll terminates old turns after the bus is detached, so their
   // completion events cannot clear persisted UI state for us.
   for (const bot of store.bots) {
+    const steeringMessageIds = activeSteeringByThread.get(bot.threadId);
+    if (steeringMessageIds?.length) {
+      try { markSteeringFailed(bot, steeringMessageIds, new Error("provider reload interrupted steering dispatch"), false); }
+      catch (error) { console.error("could not mark interrupted steering after provider reload", error); }
+      activeSteeringByThread.delete(bot.threadId);
+    }
     if (bot.busy) {
       store.patchBot(bot.id, { busy: false });
       const runId = activeRunByThread.get(bot.threadId);
@@ -959,6 +977,21 @@ initialRoutineTimer.unref();
 
 const steeringRecoveryTimer = setTimeout(() => {
   for (const bot of store.bots) {
+    const messages = store.messagesFor(bot.threadId);
+    const interrupted = messages.filter((message) => message.role === "user" && message.delivery === "dispatching");
+    if (interrupted.length) {
+      try {
+        patchSteeringDelivery(bot.threadId, interrupted.map((message) => message.id), "failed");
+        const activity = store.appendMessage(bot.threadId, {
+          role: "bot",
+          kind: "activity",
+          tool: { name: "steering dispatch was interrupted by restart; retry if still needed", ok: false },
+        });
+        broadcast({ kind: "message", threadId: bot.threadId, message: activity });
+      } catch (error) {
+        console.error("could not reconcile interrupted steering after restart", error);
+      }
+    }
     if (!queuedSteering(store.messagesFor(bot.threadId)).length) continue;
     const instance = registry.get(bot.modelSelection.instanceId);
     if (bot.busy && !instance?.adapter.hasSession(bot.threadId)) {
@@ -1666,6 +1699,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         activeRunByThread.delete(bot.threadId);
       }
       clearThreadEventState(bot.threadId);
+      activeSteeringByThread.delete(bot.threadId);
       // Snapshot canonical transcript state while its JSON file is still at
       // the live path. Existing bots may have a cold in-memory transcript
       // cache after restart; once stageFilesForDeletion renames that file, a

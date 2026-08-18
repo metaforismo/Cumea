@@ -68,7 +68,7 @@ export interface PublicTranscriptMessage {
     reply?: string;
   };
   tool?: { name: string; ok?: boolean };
-  delivery?: "queued" | "failed";
+  delivery?: "queued" | "dispatching" | "failed";
   screenOmitted?: true;
 }
 
@@ -108,7 +108,7 @@ export function publicTranscriptMessage(message: Message): PublicTranscriptMessa
         }
       : {}),
     ...(message.tool ? { tool: { name: message.tool.name, ...(message.tool.ok !== undefined ? { ok: message.tool.ok } : {}) } } : {}),
-    ...(message.delivery === "queued" || message.delivery === "failed" ? { delivery: message.delivery } : {}),
+    ...(message.delivery === "queued" || message.delivery === "dispatching" || message.delivery === "failed" ? { delivery: message.delivery } : {}),
     ...(message.kind === "screen" ? { screenOmitted: true } : {}),
   };
 }
@@ -150,6 +150,7 @@ export function transcriptExportMarkdown(bot: BotRecord, messages: readonly Mess
     lines.push(`## ${message.role === "user" ? "You" : bot.name} · ${new Date(message.at).toISOString()}`, "");
     if (message.text) lines.push(markdownText(message.text), "");
     if (message.delivery === "queued") lines.push("_Queued for the next attended turn._", "");
+    if (message.delivery === "dispatching") lines.push("_Steering dispatch was in progress._", "");
     if (message.delivery === "failed") lines.push("_This steering message was not delivered._", "");
     if (message.card) {
       lines.push(`**${markdownText(message.card.title)}**`);

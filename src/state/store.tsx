@@ -68,7 +68,7 @@ export interface Message {
   /** screen messages: a frame of the bot's computer (base64) */
   png?: string;
   mime?: string;
-  delivery?: "queued" | "failed";
+  delivery?: "queued" | "dispatching" | "failed";
   at: number;
 }
 

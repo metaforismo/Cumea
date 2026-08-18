@@ -49,6 +49,7 @@ export function boundedTurnTranscript(
       (message) =>
         !excluded.has(message.id) &&
         message.delivery !== "queued" &&
+        message.delivery !== "dispatching" &&
         message.delivery !== "failed" &&
         message.kind === "text" &&
         typeof message.text === "string" &&

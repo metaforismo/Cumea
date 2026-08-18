@@ -38,7 +38,7 @@ interface RawMessage {
   attachments?: Array<{ id: string; name: string; mime: string; size: number }>;
   handoff?: { prompt?: string; reply?: string; status?: string };
   tool?: { name?: string; ok?: boolean };
-  delivery?: "queued" | "failed";
+  delivery?: "queued" | "dispatching" | "failed";
   at: number;
 }
 
@@ -242,7 +242,7 @@ function mapMessage(agentId: string, message: RawMessage): ChatMessage {
           : "text",
     text: messageText(message),
     createdAt: message.at,
-    status: message.delivery === "queued" ? "queued" : message.delivery === "failed" || message.tool?.ok === false ? "error" : "done",
+    status: message.delivery === "queued" ? "queued" : message.delivery === "dispatching" ? "sending" : message.delivery === "failed" || message.tool?.ok === false ? "error" : "done",
     attachments: message.attachments,
   };
 }
