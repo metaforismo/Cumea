@@ -91,8 +91,12 @@ export interface SendTurnInput {
   text: string;
   model?: string;
   resumeCursor?: unknown;
-  /** Prior turns for transcript-replay providers (API-backed drivers). */
+  /** Prior settled visible turns from canonical Cumea history. */
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
+  /** A previous provider-native session is known stale. Native-session
+   * drivers must start a new session and quote `transcript` into the user
+   * turn rather than trusting `resumeCursor`. */
+  rebuildContext?: boolean;
   /** Bot persona (name/title/description) as a system prompt. */
   system?: string;
   /** Per-bot integrations the driver may hand to the agent as tools. */
