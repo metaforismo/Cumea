@@ -39,6 +39,8 @@ All notable changes to Cumea are documented here. This project follows
   export. Search jumps do not load entire long conversations.
 - Added a desktop-local per-thread Runtime inspector over the existing normalized event stream and
   secret-redacted native protocol tee, with bounded Events/Raw lenses, expandable JSON and periodic refresh.
+- Added attended busy-user steering on desktop and paired mobile. Explicit user messages can be queued while
+  an agent works, with visible delivery state, bounded count/text/attachment budgets and one coalesced follow-up.
 
 ### Changed
 
@@ -58,6 +60,10 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Busy steering uses canonical owner-local transcript state rather than a second queue. The selected batch is
+  atomically claimed as `dispatching` before external provider work; queued, dispatching and failed steering
+  rows are excluded from unrelated provider context. Ambiguous crash/reload state fails closed instead of
+  automatically replaying instructions or effects.
 - Session freshness metadata is owner-local and contains only thread/instance/model lifecycle state. Rebuilt
   conversation history is size-bounded and quoted inside the next user turn, never promoted into the system
   prompt; native drivers independently refuse any supplied resume cursor while rebuild is required.
