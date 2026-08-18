@@ -7,6 +7,7 @@ export const TURN_CONTEXT_MAX_MESSAGE_BYTES = 16 * 1024;
 export type TurnContextReason =
   | "no-prior-user-turn"
   | "selected-session-fresh"
+  | "provider-reloaded"
   | "instance-changed"
   | "model-changed"
   | "selected-session-missing"
@@ -72,6 +73,7 @@ export function decideTurnContext(input: {
   selectedInstanceId: string;
   selectedModel: string;
   sessionModelSwitch: "in-session" | "unsupported";
+  sessionInvalidated?: boolean;
   lastDispatchedInstanceId?: string | null;
   lastDispatchedModel?: string | null;
   resumeCursors: Record<string, unknown>;
@@ -86,6 +88,15 @@ export function decideTurnContext(input: {
       transcript: input.transcript,
       rebuildContext: false,
       reason: "no-prior-user-turn",
+    };
+  }
+
+  if (input.sessionInvalidated) {
+    return {
+      resumeCursor: undefined,
+      transcript: input.transcript,
+      rebuildContext: true,
+      reason: "provider-reloaded",
     };
   }
 
