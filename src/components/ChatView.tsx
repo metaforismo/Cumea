@@ -96,6 +96,12 @@ function Bubble({ message }: { message: Message }) {
             ))}
           </div>
         ) : null}
+        {user && message.delivery === "queued" ? (
+          <div className="mt-1.5 text-right text-[10px] text-ink-secondary">Queued · sends after the current turn</div>
+        ) : null}
+        {user && message.delivery === "failed" ? (
+          <div className="mt-1.5 text-right text-[10px] text-danger">Not sent</div>
+        ) : null}
       </div>
     </div>
   );

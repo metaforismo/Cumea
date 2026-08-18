@@ -72,6 +72,9 @@ function validateMessage(value: unknown, position: number): Message {
   if (!Number.isSafeInteger(message.at) || (message.at as number) < 0) {
     throw statusError(500, `legacy transcript message ${position} has an invalid timestamp`);
   }
+  if (message.delivery !== undefined && message.delivery !== "queued" && message.delivery !== "failed") {
+    throw statusError(500, `legacy transcript message ${position} has an invalid delivery state`);
+  }
   return value as Message;
 }
 

@@ -127,6 +127,8 @@ export interface Message {
   /** screen messages: a frame of the bot's computer (base64 image) */
   png?: string;
   mime?: string;
+  /** Explicit attended user steering persisted while a bot is already busy. */
+  delivery?: "queued" | "failed";
   at: number;
 }
 

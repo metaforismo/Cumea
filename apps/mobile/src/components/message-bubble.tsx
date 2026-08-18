@@ -96,6 +96,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: { message:
           </View>
         ) : null}
       </View>
+      {message.status === "queued" ? <Text style={{ color: theme.textSecondary, fontSize: 11, paddingTop: 4 }}>Queued · sends after the current turn</Text> : null}
       {message.status === "error" ? <Text style={{ color: theme.danger, fontSize: 11, paddingTop: 4 }}>Not delivered</Text> : null}
     </View>
   );

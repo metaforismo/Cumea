@@ -63,6 +63,7 @@ export function publicMobileMessage(
   };
   if (message.text !== undefined) safe.text = message.text;
   if (message.mime !== undefined) safe.mime = message.mime;
+  if (message.delivery === "queued" || message.delivery === "failed") safe.delivery = message.delivery;
   if (message.attachments?.length) {
     safe.attachments = message.attachments.map(publicAttachment).filter((value) => value !== null);
   }
