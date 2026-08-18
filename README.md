@@ -30,7 +30,8 @@ visible team:
 - explicit per-action approval cards, with remembered Ask / Always / Never policies per bot;
 - optional local or cloud computer use;
 - optional connected-app tools through Composio;
-- sections, real sidebar search, file attachments, reusable routines, and a “Needs you” inbox;
+- sections, sidebar search, an owner-local bounded transcript search index, file attachments,
+  reusable routines, and a “Needs you” inbox;
 - persistent Mote-based bot avatars with shape, palette, upload, semantic activity states, and
   reduced-motion behavior;
 - an agent-first Expo companion for pairing, search, chat, stop, approvals, and routine status;
@@ -231,6 +232,7 @@ Preview.
 | `server/pairing.ts` | expiring one-time pairing sessions, hashed device tokens, and revocation |
 | `server/mobile.ts` | allowlisted mobile bot/message projections and sanitized remote SSE events |
 | `server/workspace.ts` | durable sections, attachments, tasks, runs, artifacts, and schedules |
+| `server/message-search-index.ts` | owner-local derived SQLite/WAL transcript search projection; canonical JSON remains authoritative in P0.11a |
 | `server/contracts.ts` | provider driver and canonical event contracts |
 | `server/drivers/` | Claude, Codex, Grok, Gemini, computer, and peer-agent adapters |
 | `server/harness/` | provider registry and event bus |
@@ -238,7 +240,10 @@ Preview.
 | `apps/mobile/` | Expo Router companion, agent-list home, pairing, chat, approvals, and routines |
 
 The renderer owns no provider transport. Commands cross the local API, providers emit one canonical
-event stream, and the UI folds that stream into visible conversation state.
+event stream, and the UI folds that stream into visible conversation state. Local transcript search
+uses a separate derived SQLite/WAL projection over user-visible message fields only; the canonical
+transcript is still the rollback-safe JSON record until P0.11b. See
+[local transcript search](docs/transcript-search.md).
 
 Packaged desktop startup keeps the renderer on the stable private origin `http://127.0.0.1:8799`.
 Electron serves the built UI from its own loopback gateway, starts the API-only harness on an
