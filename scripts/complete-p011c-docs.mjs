@@ -37,8 +37,8 @@ edit("CHANGELOG.md", (input) => {
   );
   source = replaceOnce(
     source,
-    `### Security\n\n`,
-    `### Security\n\n- Exact transcript navigation and export remain desktop-local. Export projects only folded visible fields:\n  raw screen bytes, provider-native/request identifiers, attachment IDs, resume cursors and filesystem paths\n  are excluded; screenshot messages are represented only by an explicit omission marker.\n`,
+    `### Security\n\n- Canonical bot deletion is a rollback-capable cross-store transaction: SQLite first enters\n`,
+    `### Security\n\n- Exact transcript navigation and export remain desktop-local. Export projects only folded visible fields:\n  raw screen bytes, provider-native/request identifiers, attachment IDs, resume cursors and filesystem paths\n  are excluded; screenshot messages are represented only by an explicit omission marker.\n- Canonical bot deletion is a rollback-capable cross-store transaction: SQLite first enters\n`,
     "CHANGELOG P0.11c security",
   );
   return source;
