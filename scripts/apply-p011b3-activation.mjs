@@ -34,3 +34,5 @@ for (const [path, needles] of Object.entries({
   const text = readFileSync(path, "utf8");
   for (const needle of needles) if (!text.includes(needle)) throw new Error(`${path}: missing ${needle}`);
 }
+
+// Triggered after the workflow file exists; remove both helper files once the target commit lands.
