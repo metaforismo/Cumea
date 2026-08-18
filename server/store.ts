@@ -461,8 +461,6 @@ export class Store {
     try {
       transaction = this.deleteBotRecordTransaction(id, transcriptSnapshot);
       if (!transaction) throw Object.assign(new Error("bot disappeared during deletion"), { status: 500 });
-      // Canonical SQLite delete/checkpoint happens before file purge but keeps
-      // a rollback snapshot until the purge has succeeded.
       transaction.commit();
       files.purge();
       transaction.finalize();
@@ -494,7 +492,7 @@ export class Store {
     // Migrated JSON is now only a recovery anchor, but user-visible deletion
     // must still remove it when present. The staging helper tolerates ENOENT
     // for new canonical-only bots.
-    return bot ? [{ path: messagesFile(bot.threadId), label: "legacy transcript recovery anchor" }] : [];
+    return bot ? [{ path: messagesFile(bot.threadId), label: "transcript" }] : [];
   }
 
   /** Metadata prepare phase used after the outer transaction quarantines files. */
@@ -651,7 +649,7 @@ export class Store {
   }
 
   setResumeCursor(botId: string, instanceId: string, cursor: unknown) {
-    const bot = this.bot(id = botId);
+    const bot = this.bot(botId);
     if (!bot) return;
     bot.resumeCursors[instanceId] = cursor;
     this.saveBots();
