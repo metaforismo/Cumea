@@ -578,8 +578,34 @@ export class Store {
       throw error;
     }
 
-    let canonicalCommitted = false;
+    let canonicalCommitted = !canonicalTransaction;
     let settled = false;
+
+    // The real HTTP delete path already stages all external files before it
+    // asks Store to prepare metadata. Commit canonical SQLite here, before
+    // returning to that outer path. The TranscriptStore transaction retains
+    // its private rollback snapshot until finalize(), so a later attachment /
+    // event-log / legacy-anchor purge failure can still restore every row.
+    if (canonicalTransaction) {
+      try {
+        canonicalTransaction.commit();
+        canonicalCommitted = true;
+      } catch (error) {
+        const rollbackErrors = [];
+        this.bots = previousBots;
+        try { this.saveBots(); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+        try { canonicalTransaction.rollback(); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+        try { restoreSearch(); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+        if (rollbackErrors.length) {
+          throw Object.assign(new Error("canonical transcript commit failed and deletion rollback was incomplete"), {
+            status: 500,
+            cause: new AggregateError([error, ...rollbackErrors]),
+          });
+        }
+        throw error;
+      }
+    }
+
     return {
       commit: () => {
         if (settled || canonicalCommitted) return;

@@ -180,7 +180,7 @@ async function defaultSelection() {
   return { instanceId: pick?.instanceId ?? "claude", model: pick?.models.default || "claude-sonnet-5" };
 }
 let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
-const store = new Store(() => bootSelection, { messageSearch: true });
+const store = new Store(() => bootSelection, { messageSearch: true, transcripts: true });
 const workspace = new WorkspaceStore();
 const pairing = new PairingStore();
 bootSelection = await defaultSelection();
