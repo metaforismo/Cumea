@@ -200,6 +200,12 @@ of pretending every provider can do everything. Settings show unsupported switch
 | Codex app-server | yes | not yet | not yet | not yet | not yet |
 | Box cloud agent | yes | not yet | not yet | no | yes |
 
+Switching a conversation between provider instances no longer trusts a cursor merely because it exists.
+Cumea records private per-thread dispatch freshness and resumes a native session only when that instance/model
+still represents the latest successful turn. Provider reloads, A→B→A routing, interrupted dispatches and
+unsupported in-session model changes start a new native session with bounded canonical transcript context.
+See [engine/session freshness](docs/session-freshness.md).
+
 “Teach as routine” currently captures a completed bot task and its prompt; it does not yet record a
 human clicking through an arbitrary desktop workflow. Scheduled routines run while the Cumea
 harness is running. Laptop-off execution therefore works only when that harness and its configured
@@ -234,6 +240,8 @@ Preview.
 | `server/mobile.ts` | allowlisted mobile bot/message projections and sanitized remote SSE events |
 | `server/workspace.ts` | durable sections, attachments, tasks, runs, artifacts, and schedules |
 | `server/message-search-index.ts` | owner-local derived SQLite/WAL transcript search projection with legacy-file fingerprints and canonical-revision reconciliation |
+| `server/turn-context.ts` | bounded canonical context rebuild and native-session resume decision |
+| `server/session-freshness.ts` | private owner-local per-thread pending/dispatched/invalidated provider-session state |
 | `server/transcript-store.ts` | versioned canonical SQLite/WAL transcript database, verified legacy import, revisions, deletion staging, and local backup primitive |
 | `server/contracts.ts` | provider driver and canonical event contracts |
 | `server/drivers/` | Claude, Codex, Grok, Gemini, computer, and peer-agent adapters |

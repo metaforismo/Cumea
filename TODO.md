@@ -162,7 +162,7 @@ should not bypass the release, security, persistence, or measurement foundations
   - [ ] P0.12b — Persist explicit user messages sent while a bot is busy, mark them visibly queued, bound
     count/bytes, and drain/coalesce them into one attended follow-up turn on settlement with explicit
     stop/restart semantics. Do not apply this queue implicitly to routines or peer fan-out.
-  - [ ] P0.12c — Add dispatch-based engine/session freshness. Record which provider instance last ran the
+  - [x] P0.12c — Add dispatch-based engine/session freshness. Record which provider instance last ran the
     thread/task, rebuild bounded canonical context whenever the selected instance is stale, and never
     trust an old resume cursor across A→B→A or provider-reload transitions.
 
@@ -275,3 +275,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-18 | P0.11c | Completed global desktop transcript search/navigation and bounded visible export on the local index, with exact-focus windows, Return to latest, export redaction, paired-remote denial, and cross-platform CI. P0.11 is complete. |
 | 2026-08-18 | Competitive audit refresh | Re-pinned Cumea `4b897646`, Rakazo `9622c388`, and OpenMausBot `e7d71f4b`; promoted raw diagnostics, draft-#9 extraction, app-wide accessibility, session freshness, busy steering, package spawn closure, connector continuation, mobile discovery/notifications, provider onboarding, and bounded subagents into explicit gates without weakening the local/privacy model. |
 | 2026-08-18 | P1.11a | Added a desktop-local bounded Runtime inspector over existing normalized and secret-redacted native thread logs, with Events/Raw lenses, payload clipping, torn-line tolerance, real-harness local/no-store evidence, authenticated mobile denial, and right-slot UI integration. |
+| 2026-08-18 | P0.12c | Added dispatch-based native-session freshness with private per-thread pending/dispatched/invalidated state, A→B→A and unsupported-model rebuilds, provider-reload invalidation, bounded canonical context, shared native cursor refusal, successful-turn confirmation, and fake-Claude rebuild evidence. |
