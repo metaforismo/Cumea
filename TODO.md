@@ -108,10 +108,19 @@ should not bypass the release, security, persistence, or measurement foundations
 - [ ] **P0.10 — Mobile completion gates.** Implement push delivery for Needs You, deep-link to the
   exact request, background reconciliation, offline/host-offline states, and physical-device
   microphone, VoiceOver, and TalkBack acceptance evidence.
-- [ ] **P0.11 — Incremental transcript persistence and local search index.** Replace whole-thread JSON
+- [~] **P0.11 — Incremental transcript persistence and local search index.** Replace whole-thread JSON
   rewrite amplification with a versioned owner-local SQLite/WAL message store, lazy verified legacy
   import, per-message insert/update, rollback-aware thread deletion, bounded transcript search, and
   export primitives without making provider-private payloads searchable by default.
+  - [~] P0.11a — Add the owner-local derived SQLite/WAL search projection, incremental append/patch
+    indexing, local-only bounded search API, privacy-safe field projection, canonical-file fingerprint
+    reconciliation, secure-delete/WAL cleanup, rollback-aware bot deletion, and cross-platform handle
+    lifecycle. Canonical JSON remains authoritative until P0.11b.
+  - [ ] P0.11b — Migrate the canonical transcript source of truth from whole-thread JSON rewrites to
+    versioned incremental SQLite with atomic verified legacy import, crash recovery, rollback-safe
+    deletion, and explicit recovery/backup evidence before retiring canonical JSON writes.
+  - [ ] P0.11c — Add desktop global search/navigation, exact message jumping, transcript export, and
+    UX tests on top of the local index without widening the mobile/remote privacy surface.
 - [ ] **P0.12 — Agent liveness and loop protection.** Add activity-based stall detection with
   waiting-on-human exemptions, honest working / waiting / no-signal / dead projections, bounded
   repeated-identical tool/effect detection, and visible recovery through Work / Needs You rather than
@@ -210,3 +219,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-17 | P0.03b | Replaced packaged harness polling/fallback ports with an OS-assigned private listener and exact-PID UtilityProcess readiness message; hardened the private listener Host/origin boundary and kept remote listener ports independent. |
 | 2026-08-18 | P0.04 | Replaced the desktop startup/reconnect fetch cascade with one bounded cursor-consistent bootstrap, buffered SSE reconciliation, lazy unselected-thread hydration, and deferred full Work loading when startup projections are truncated. |
 | 2026-08-18 | Competitive audit | Re-audited Cumea against Rakazo `2718b1f` and OpenMausBot `4a9d654`; retained Cumea's privacy/security model while promoting transcript SQLite/search, liveness protection, renderer/thread scaling, inspectable memory, visual journey evidence, and pluggable user-owned computer backends into explicit roadmap gates. |
+| 2026-08-18 | P0.11a | Began the owner-local derived transcript search index with incremental visible-message indexing, local-only bounded search, canonical-file fingerprint reconciliation, privacy-sensitive SQLite deletion semantics, and rollback-aware bot lifecycle; canonical JSON remains authoritative until P0.11b. |
