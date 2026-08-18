@@ -46,6 +46,7 @@ import {
   transcriptExportMarkdown,
   transcriptMessageWindow,
 } from "./transcript-navigation.ts";
+import { readThreadInspector } from "./thread-inspector.ts";
 import { WorkspaceStore, type AttachmentRecord, type RoutineSchedule, type TaskSource } from "./workspace.ts";
 
 const REQUESTED_LOCAL_PORT = requestedLocalPort();
@@ -1098,6 +1099,27 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       });
     }
 
+    const inspectorMatch = path.match(/^\/api\/bots\/([\w-]+)\/inspector$/);
+    if (method === "GET" && inspectorMatch) {
+      if (surface !== "local") return json(res, 403, { error: "runtime diagnostics are local-only" });
+      const bot = store.bot(inspectorMatch[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const rawLimit = url.searchParams.get("limit");
+      let limit: number | undefined;
+      if (rawLimit !== null) {
+        const parsed = Number(rawLimit);
+        if (!Number.isInteger(parsed) || parsed < 1) return json(res, 400, { error: "limit must be a positive integer" });
+        limit = parsed;
+      }
+      const inspector = readThreadInspector({
+        eventsDir: EVENTS_DIR,
+        nativeDir: NATIVE_DIR,
+        threadId: bot.threadId,
+        limit,
+      });
+      res.setHeader("cache-control", "no-store");
+      return json(res, 200, { inspector });
+    }
     // ── internal peer-agent comms (localhost + shared token only) ──────
     // The agents-proxy (spawned inside a bot's agent process) calls these to
     // discover peers and hand a message to one. Not part of the public API.
