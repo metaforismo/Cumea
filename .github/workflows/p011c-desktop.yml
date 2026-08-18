@@ -1,0 +1,38 @@
+name: P0.11c global transcript search UI
+
+on:
+  push:
+    branches:
+      - feat/global-transcript-search
+    paths:
+      - scripts/apply-p011c-desktop.mjs
+      - .github/workflows/p011c-desktop.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/global-transcript-search
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: node scripts/apply-p011c-desktop.mjs
+      - name: Verify and commit
+        shell: bash
+        run: |
+          grep -F 'Search bots and messages' src/components/Sidebar.tsx
+          grep -F 'Return to latest' src/components/ChatView.tsx
+          grep -F 'case "focusMessage"' src/state/store.tsx
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/state/store.tsx src/components/Sidebar.tsx src/components/ChatView.tsx
+          git commit -m "feat: add global transcript search navigation"
+          git push origin HEAD:feat/global-transcript-search
