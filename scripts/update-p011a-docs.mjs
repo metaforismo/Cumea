@@ -54,3 +54,6 @@ replaceOnce(
   `### Security\n\n- Transcript-index deletion is privacy-sensitive: the derived DB is owner-only, uses SQLite\n  \`secure_delete\`, requires a WAL truncate checkpoint for thread deletion, fails closed if a\n  residual index cannot be opened, and restores indexed rows when the surrounding bot deletion\n  transaction rolls back. The search endpoint remains desktop-local only.\n`,
   "CHANGELOG P0.11a security",
 );
+
+// One-shot transform. The workflow that consumes this file is removed once
+// the target docs are visible in the branch diff.
