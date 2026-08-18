@@ -13,56 +13,19 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  finalize-p011c:
-    name: finalize P0.11c branch
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feat/global-transcript-search' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: feat/global-transcript-search
-          fetch-depth: 0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-      - name: Apply final navigation and docs changes
-        run: |
-          node scripts/refine-p011c-navigation.mjs
-          node scripts/complete-p011c-docs.mjs
-          grep -F 'Search bots and messages' src/components/Sidebar.tsx
-          grep -F 'Return to latest' src/components/ChatView.tsx
-          grep -F 'returningFromSearch' src/state/store.tsx
-          grep -F -- '- [x] P0.11c' TODO.md
-      - name: Remove one-shot machinery and restore CI
-        shell: bash
-        run: |
-          rm -f \
-            scripts/apply-p011c-desktop.mjs \
-            scripts/refine-p011c-navigation.mjs \
-            scripts/complete-p011c-docs.mjs \
-            .github/workflows/p011c-desktop.yml \
-            .github/workflows/refine-p011c-navigation.yml \
-            .github/workflows/complete-p011c-docs.yml
-          git checkout origin/main -- .github/workflows/ci.yml
-          git diff --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "feat: finish desktop transcript navigation and export"
-          git push origin HEAD:feat/global-transcript-search
-
   root-checks:
     name: root checks (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
+        # the harness must stay portable Node — the windows leg is the
+        # guardrail for the in-progress Windows port (POSIX-only tests
+        # self-skip there)
         os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
+      # tests never launch Electron; skip the binary download
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -137,6 +100,8 @@ jobs:
 
   macos-package-smoke:
     name: unsigned macOS arm64 package layout
+    # Pin the native Apple Silicon image so pnpm installs the arm64 optional
+    # CUA/UBJS runtimes that electron-builder must package.
     runs-on: macos-26
     timeout-minutes: 25
     env:
