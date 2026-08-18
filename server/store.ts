@@ -1,7 +1,9 @@
 // Bot + thread persistence. bots.json holds bot records (including the
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
-// one). messages-<threadId>.json holds the folded transcript.
+// one). Legacy messages-<threadId>.json remains a migration/recovery anchor;
+// the optional P0.11b cutover backend stores folded transcripts incrementally
+// in owner-local SQLite.
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -14,6 +16,7 @@ import {
   canonicalFileFingerprint,
   type TranscriptSearchResult,
 } from "./message-search-index.ts";
+import { TranscriptStore } from "./transcript-store.ts";
 import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
 
 export type CumeaColor =
@@ -165,6 +168,13 @@ export interface BotRecordDeletionTransaction {
   finalize: () => void;
 }
 
+export interface StoreOptions {
+  messageSearch?: boolean;
+  /** P0.11b2 cutover backend. The real harness enables this only in P0.11b3,
+   * after canonical deletion is proven end-to-end. */
+  transcripts?: boolean;
+}
+
 const COLORS: CumeaColor[] = [
   "green",
   "blue",
@@ -237,8 +247,9 @@ export class Store {
   private defaultSelection: () => ModelSelection;
   private messageSearch: MessageSearchIndex | null = null;
   private messageSearchHasResidualData = false;
+  private transcripts: TranscriptStore | null = null;
 
-  constructor(defaultSelection: () => ModelSelection, options: { messageSearch?: boolean } = {}) {
+  constructor(defaultSelection: () => ModelSelection, options: StoreOptions = {}) {
     this.defaultSelection = defaultSelection;
     mkdirSync(DATA_DIR, { recursive: true });
     try {
@@ -262,11 +273,26 @@ export class Store {
       }
     }
     if (migrated) this.saveBots();
+
+    if (options.transcripts) {
+      this.transcripts = new TranscriptStore();
+      try {
+        this.transcripts.recoverPendingDeletes(new Set(this.bots.map((bot) => bot.threadId)));
+        // Establish every currently-owned canonical thread before the Store
+        // advertises the cutover backend. Import is all-or-nothing per thread;
+        // a malformed legacy source therefore fails startup instead of
+        // silently creating a split-brain JSON/SQLite view.
+        for (const bot of this.bots) this.transcripts.ensureImported(bot.threadId, messagesFile(bot.threadId));
+      } catch (error) {
+        try { this.transcripts.close(); } catch {}
+        this.transcripts = null;
+        throw error;
+      }
+    }
+
     if (options.messageSearch) {
       try {
         this.messageSearch = new MessageSearchIndex();
-        this.messageSearch.seedLegacy(this.bots);
-        this.messageSearchHasResidualData = false;
       } catch (error) {
         this.messageSearch = null;
         this.messageSearchHasResidualData = existsSync(MESSAGE_SEARCH_DB_PATH);
@@ -274,6 +300,37 @@ export class Store {
           "[message-search] local transcript search is unavailable:",
           error instanceof Error ? error.message : String(error),
         );
+      }
+
+      if (this.messageSearch) {
+        if (this.transcripts) {
+          for (const bot of this.bots) {
+            const state = this.transcripts.threadState(bot.threadId);
+            if (!state) throw new Error(`canonical transcript is missing for ${bot.threadId}`);
+            let matches = false;
+            try {
+              matches = this.messageSearch.revisionMatches(bot.threadId, state.revision);
+            } catch (error) {
+              this.disableMessageSearch(error);
+              break;
+            }
+            if (matches || !this.messageSearch) continue;
+            const canonicalMessages = this.transcripts.messagesFor(bot.threadId, messagesFile(bot.threadId));
+            try {
+              this.messageSearch.replaceThreadRevision(bot.threadId, canonicalMessages, state.revision);
+            } catch (error) {
+              this.disableMessageSearch(error);
+              break;
+            }
+          }
+        } else {
+          try {
+            this.messageSearch.seedLegacy(this.bots);
+          } catch (error) {
+            this.disableMessageSearch(error);
+          }
+        }
+        if (this.messageSearch) this.messageSearchHasResidualData = false;
       }
     }
   }
@@ -288,10 +345,14 @@ export class Store {
     this.messageSearch = null;
   }
 
-  private indexMessage(threadId: string, message: Message) {
+  private indexMessage(threadId: string, message: Message, revision?: number) {
     if (!this.messageSearch) return;
     try {
-      this.messageSearch.upsert(threadId, message, canonicalFileFingerprint(messagesFile(threadId)));
+      if (revision !== undefined) {
+        this.messageSearch.upsertRevision(threadId, message, revision);
+      } else {
+        this.messageSearch.upsert(threadId, message, canonicalFileFingerprint(messagesFile(threadId)));
+      }
     } catch (error) {
       this.disableMessageSearch(error);
     }
@@ -304,10 +365,14 @@ export class Store {
   messagesFor(threadId: string): Message[] {
     let list = this.messages.get(threadId);
     if (!list) {
-      try {
-        list = JSON.parse(readFileSync(messagesFile(threadId), "utf8"));
-      } catch {
-        list = [];
+      if (this.transcripts) {
+        list = this.transcripts.messagesFor(threadId, messagesFile(threadId));
+      } else {
+        try {
+          list = JSON.parse(readFileSync(messagesFile(threadId), "utf8"));
+        } catch {
+          list = [];
+        }
       }
       this.messages.set(threadId, list!);
     }
@@ -317,6 +382,12 @@ export class Store {
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
     const full: Message = { id: newId(), at: Date.now(), ...message };
     const list = this.messagesFor(threadId);
+    if (this.transcripts) {
+      const revision = this.transcripts.append(threadId, full, messagesFile(threadId));
+      list.push(full);
+      this.indexMessage(threadId, full, revision);
+      return full;
+    }
     list.push(full);
     writeFileAtomic(messagesFile(threadId), JSON.stringify(list, null, 2));
     this.indexMessage(threadId, full);
@@ -327,10 +398,17 @@ export class Store {
     const list = this.messagesFor(threadId);
     const idx = list.findIndex((m) => m.id === messageId);
     if (idx === -1) return null;
-    list[idx] = { ...list[idx], ...patch, card: patch.card ?? list[idx].card };
+    const next = { ...list[idx], ...patch, card: patch.card ?? list[idx].card };
+    if (this.transcripts) {
+      const revision = this.transcripts.replaceMessage(threadId, next);
+      list[idx] = next;
+      this.indexMessage(threadId, next, revision);
+      return next;
+    }
+    list[idx] = next;
     writeFileAtomic(messagesFile(threadId), JSON.stringify(list, null, 2));
-    this.indexMessage(threadId, list[idx]);
-    return list[idx];
+    this.indexMessage(threadId, next);
+    return next;
   }
 
   bot(id: string) {
@@ -374,10 +452,13 @@ export class Store {
   deleteBot(id: string): boolean {
     const bot = this.bot(id);
     if (!bot) return false;
+    if (this.transcripts) {
+      throw Object.assign(
+        new Error("canonical transcript deletion is not enabled until P0.11b3"),
+        { status: 409 },
+      );
+    }
 
-    // Capture canonical transcript state before the JSON file is moved into
-    // the deletion quarantine. A cold Store cache must still be able to
-    // reconstruct the derived search index if a later metadata commit fails.
     const transcriptSnapshot = [...this.messagesFor(bot.threadId)];
     const files = stageFilesForDeletion(this.botDeletionFiles(id));
     let transaction: BotRecordDeletionTransaction | null = null;
@@ -421,6 +502,12 @@ export class Store {
   ): BotRecordDeletionTransaction | null {
     const bot = this.bot(id);
     if (!bot) return null;
+    if (this.transcripts) {
+      throw Object.assign(
+        new Error("canonical transcript deletion is not enabled until P0.11b3"),
+        { status: 409 },
+      );
+    }
     if (!this.messageSearch && this.messageSearchHasResidualData) {
       throw Object.assign(
         new Error("local transcript search index is unavailable; indexed transcript deletion cannot be guaranteed"),
@@ -432,10 +519,6 @@ export class Store {
       try {
         this.messageSearch.deleteThread(bot.threadId);
       } catch (error) {
-        // deleteThread can fail after SQLite committed the logical DELETE
-        // (for example while enforcing the privacy checkpoint). Restore the
-        // derived rows before reporting a failed bot deletion so the visible
-        // bot never survives with a silently missing search transcript.
         try {
           this.messageSearch.replaceThread(bot.threadId, searchSnapshot);
         } catch (restoreError) {
@@ -481,9 +564,6 @@ export class Store {
           restoreSearch();
           settled = true;
         } catch (error) {
-          // Keep the retry anchor visible in the live store even when the
-          // durable rollback itself is blocked. The search index is derived;
-          // canonical transcript bytes remain in the quarantined JSON file.
           throw Object.assign(new Error("could not restore bot record after deletion failed"), {
             status: 500,
             cause: error,
@@ -521,6 +601,8 @@ export class Store {
   close(): void {
     try { this.messageSearch?.close(); } catch {}
     this.messageSearch = null;
+    try { this.transcripts?.close(); } catch {}
+    this.transcripts = null;
   }
 
   patchBot(id: string, patch: Partial<BotRecord>): BotRecord | null {
