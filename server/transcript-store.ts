@@ -258,6 +258,9 @@ export class TranscriptStore {
 
   replaceMessage(threadId: string, message: Message): number {
     validateThreadId(threadId);
+    const state = this.threadState(threadId);
+    if (!state) throw statusError(404, "no such canonical transcript");
+    if (state.state !== STATE_ACTIVE) throw statusError(409, "transcript is pending deletion");
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const result = this.db.prepare(`
@@ -265,8 +268,8 @@ export class TranscriptStore {
         WHERE thread_id = ? AND message_id = ?
       `).run(message.at, JSON.stringify(message), threadId, message.id);
       if (Number(result.changes) !== 1) throw statusError(404, "no such canonical transcript message");
-      this.db.prepare("UPDATE transcript_threads SET revision = revision + 1 WHERE thread_id = ? AND state = ?")
-        .run(threadId, STATE_ACTIVE);
+      this.db.prepare("UPDATE transcript_threads SET revision = revision + 1 WHERE thread_id = ?")
+        .run(threadId);
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch {}
