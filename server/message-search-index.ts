@@ -136,50 +136,61 @@ export class MessageSearchIndex {
     // spend even a short creation window under a permissive umask.
     closeSync(openSync(path, "a", 0o600));
     try { chmodSync(path, 0o600); } catch {}
-    this.db = new DatabaseSync(path);
-    this.db.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;",
-    );
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS message_search_meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS message_search (
-        thread_id TEXT NOT NULL,
-        message_id TEXT NOT NULL,
-        at INTEGER NOT NULL,
-        role TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        search_text TEXT NOT NULL,
-        PRIMARY KEY (thread_id, message_id)
-      );
-      CREATE INDEX IF NOT EXISTS message_search_thread_at
-        ON message_search(thread_id, at DESC);
-      CREATE TABLE IF NOT EXISTS message_search_thread_state (
-        thread_id TEXT PRIMARY KEY,
-        canonical_size TEXT NOT NULL,
-        canonical_inode TEXT NOT NULL,
-        canonical_mtime_ns TEXT NOT NULL,
-        canonical_ctime_ns TEXT NOT NULL
-      );
-    `);
-    this.db.prepare(`
-      INSERT INTO message_search_meta(key, value) VALUES('schema_version', ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(String(SCHEMA_VERSION));
+
+    const db = new DatabaseSync(path);
+    this.db = db;
     try {
-      this.db.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS message_search_fts USING fts5(
-          thread_id UNINDEXED,
-          message_id UNINDEXED,
-          search_text,
-          tokenize = 'unicode61 remove_diacritics 2'
+      db.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;",
+      );
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS message_search_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS message_search (
+          thread_id TEXT NOT NULL,
+          message_id TEXT NOT NULL,
+          at INTEGER NOT NULL,
+          role TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          search_text TEXT NOT NULL,
+          PRIMARY KEY (thread_id, message_id)
+        );
+        CREATE INDEX IF NOT EXISTS message_search_thread_at
+          ON message_search(thread_id, at DESC);
+        CREATE TABLE IF NOT EXISTS message_search_thread_state (
+          thread_id TEXT PRIMARY KEY,
+          canonical_size TEXT NOT NULL,
+          canonical_inode TEXT NOT NULL,
+          canonical_mtime_ns TEXT NOT NULL,
+          canonical_ctime_ns TEXT NOT NULL
         );
       `);
-      this.fts5 = true;
-    } catch {
-      this.fts5 = false;
+      db.prepare(`
+        INSERT INTO message_search_meta(key, value) VALUES('schema_version', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).run(String(SCHEMA_VERSION));
+      try {
+        db.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS message_search_fts USING fts5(
+            thread_id UNINDEXED,
+            message_id UNINDEXED,
+            search_text,
+            tokenize = 'unicode61 remove_diacritics 2'
+          );
+        `);
+        this.fts5 = true;
+      } catch {
+        this.fts5 = false;
+      }
+    } catch (error) {
+      // DatabaseSync can successfully open a corrupt/non-database file and
+      // fail only on the first PRAGMA/schema statement. Close that partially
+      // initialized handle before propagating the error; otherwise Windows
+      // keeps the profile directory locked and recovery/deletion cannot run.
+      try { db.close(); } catch {}
+      throw error;
     }
   }
 
