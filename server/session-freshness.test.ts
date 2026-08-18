@@ -11,15 +11,25 @@ function fixture() {
 }
 
 describe("SessionFreshnessStore", () => {
-  it("persists per-thread dispatched selection without transcript data", () => {
+  it("persists pending before dispatch and confirms only the matching started session", () => {
     const f = fixture();
     try {
       const first = new SessionFreshnessStore(f.root);
-      first.mark("thread-1", { instanceId: "claude", model: "claude-sonnet-5" });
-      const second = new SessionFreshnessStore(f.root);
-      expect(second.get("thread-1")).toEqual({ state: "dispatched", instanceId: "claude", model: "claude-sonnet-5" });
+      first.begin("thread-1", { instanceId: "claude", model: "claude-sonnet-5" });
+      expect(new SessionFreshnessStore(f.root).get("thread-1")).toEqual({
+        state: "pending",
+        instanceId: "claude",
+        model: "claude-sonnet-5",
+      });
+      expect(first.confirm("thread-1", "gemini")).toBe(false);
+      expect(first.get("thread-1")?.state).toBe("pending");
+      expect(first.confirm("thread-1", "claude")).toBe(true);
+      expect(new SessionFreshnessStore(f.root).get("thread-1")).toEqual({
+        state: "dispatched",
+        instanceId: "claude",
+        model: "claude-sonnet-5",
+      });
       const disk = readFileSync(join(f.root, "session-freshness.json"), "utf8");
-      expect(disk).toContain("claude-sonnet-5");
       expect(disk).not.toContain("messages");
       expect(disk).not.toContain("transcript");
     } finally {
@@ -33,11 +43,27 @@ describe("SessionFreshnessStore", () => {
       writeFileSync(join(f.root, "session-freshness.json"), "not-json");
       const store = new SessionFreshnessStore(f.root);
       expect(store.get("thread-1")).toBeNull();
-      store.mark("thread-1", { instanceId: "codex", model: "gpt-5.6-sol" });
+      store.begin("thread-1", { instanceId: "codex", model: "gpt-5.6-sol" });
       expect(new SessionFreshnessStore(f.root).get("thread-1")).toEqual({
-        state: "dispatched",
+        state: "pending",
         instanceId: "codex",
         model: "gpt-5.6-sol",
+      });
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("keeps pending after a simulated crash until the next decision rebuilds", () => {
+    const f = fixture();
+    try {
+      const store = new SessionFreshnessStore(f.root);
+      store.begin("thread-crash", { instanceId: "claude", model: "claude-sonnet-5" });
+      const restarted = new SessionFreshnessStore(f.root);
+      expect(restarted.get("thread-crash")).toEqual({
+        state: "pending",
+        instanceId: "claude",
+        model: "claude-sonnet-5",
       });
     } finally {
       f.cleanup();
@@ -48,8 +74,10 @@ describe("SessionFreshnessStore", () => {
     const f = fixture();
     try {
       const store = new SessionFreshnessStore(f.root);
-      store.mark("thread-a", { instanceId: "claude", model: "a" });
-      store.mark("thread-b", { instanceId: "gemini", model: "b" });
+      store.begin("thread-a", { instanceId: "claude", model: "a" });
+      store.confirm("thread-a", "claude");
+      store.begin("thread-b", { instanceId: "gemini", model: "b" });
+      store.confirm("thread-b", "gemini");
       store.delete("thread-a");
       expect(store.get("thread-a")).toBeNull();
       expect(store.get("thread-b")).toEqual({ state: "dispatched", instanceId: "gemini", model: "b" });
@@ -66,8 +94,8 @@ describe("SessionFreshnessStore", () => {
     const f = fixture();
     try {
       const store = new SessionFreshnessStore(f.root);
-      expect(() => store.mark("../thread", { instanceId: "claude", model: "model" })).toThrow(/invalid/);
-      expect(() => store.mark("thread", { instanceId: "claude", model: "bad\nmodel" })).toThrow(/invalid/);
+      expect(() => store.begin("../thread", { instanceId: "claude", model: "model" })).toThrow(/invalid/);
+      expect(() => store.begin("thread", { instanceId: "claude", model: "bad\nmodel" })).toThrow(/invalid/);
     } finally {
       f.cleanup();
     }
