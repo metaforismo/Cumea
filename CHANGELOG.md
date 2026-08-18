@@ -37,6 +37,8 @@ All notable changes to Cumea are documented here. This project follows
 - Added global desktop transcript search to the existing agent search field, bounded exact-message
   navigation with highlighted focus and Return to latest, plus bounded Markdown/JSON visible-transcript
   export. Search jumps do not load entire long conversations.
+- Added a desktop-local per-thread Runtime inspector over the existing normalized event stream and
+  secret-redacted native protocol tee, with bounded Events/Raw lenses, expandable JSON and periodic refresh.
 
 ### Changed
 
@@ -53,6 +55,9 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Runtime/Raw diagnostics remain desktop-local and `no-store`; they are excluded from bootstrap,
+  transcript search/export and paired mobile routes. Normalized events drop `RuntimeEvent.raw`, while
+  native payloads are bounded before entering renderer state and large records become omission previews.
 - Exact transcript navigation and export remain desktop-local. Export projects only folded visible fields:
   raw screen bytes, provider-native/request identifiers, attachment IDs, resume cursors and filesystem paths
   are excluded; screenshot messages are represented only by an explicit omission marker.

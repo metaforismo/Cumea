@@ -35,7 +35,8 @@ visible team:
 - persistent Mote-based bot avatars with shape, palette, upload, semantic activity states, and
   reduced-motion behavior;
 - an agent-first Expo companion for pairing, search, chat, stop, approvals, and routine status;
-- durable tasks, runs, tool steps, handoffs, artifacts, transcripts, configuration, and event logs.
+- durable tasks, runs, tool steps, handoffs, artifacts, transcripts, configuration, and event logs;
+- a desktop-local Runtime inspector with bounded Events and Raw provider diagnostics for the active agent.
 
 The product name comes from the Sibyl of Cumae: one interface that gives a clear voice to a council
 of agents.
@@ -237,6 +238,7 @@ Preview.
 | `server/contracts.ts` | provider driver and canonical event contracts |
 | `server/drivers/` | Claude, Codex, Grok, Gemini, computer, and peer-agent adapters |
 | `server/harness/` | provider registry and event bus |
+| `server/thread-inspector.ts` | bounded owner-local Runtime/Raw diagnostic projection over existing per-thread logs |
 | `electron/` | desktop shell, OS-backed credential vault, native permissions, dictation, and local computer use |
 | `apps/mobile/` | Expo Router companion, agent-list home, pairing, chat, approvals, and routines |
 
@@ -253,7 +255,10 @@ search database remains derived and reconciles against canonical transcript revi
 uses a rollback-capable SQLite prepare/commit phase before purging attachments, event/native logs and
 legacy anchors, so a later purge failure can still reconstruct a committed transcript exactly. See
 [local transcript search](docs/transcript-search.md) and
-[canonical transcript persistence](docs/transcript-persistence.md).
+[canonical transcript persistence](docs/transcript-persistence.md). The chat header also exposes a
+desktop-local Runtime inspector over the existing normalized event log and secret-redacted native tee;
+that diagnostic surface is bounded, `no-store`, excluded from search/export/bootstrap, and never added
+to the paired mobile API. See [runtime inspector](docs/runtime-inspector.md).
 
 Packaged desktop startup keeps the renderer on the stable private origin `http://127.0.0.1:8799`.
 Electron serves the built UI from its own loopback gateway, starts the API-only harness on an
