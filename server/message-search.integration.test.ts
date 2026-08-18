@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { TranscriptStore } from "./transcript-store.ts";
 
 type HarnessChild = ChildProcessByStdio<null, Readable, Readable>;
 const children = new Set<HarnessChild>();
@@ -118,40 +119,44 @@ async function json(port: number, route: string, init?: RequestInit) {
 }
 
 describe("local transcript search integration", () => {
-  it("indexes creation-time visible messages and removes the bot's hits with the real deletion lifecycle", async () => {
-    const { port } = await startHarness();
-    const created = await json(port, "/api/bots", {
+  it("indexes creation-time canonical messages and removes canonical/search state with the real HTTP deletion lifecycle", async () => {
+    const harness = await startHarness();
+    const created = await json(harness.port, "/api/bots", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "Searchable" }),
     });
     expect(created.response.status).toBe(201);
     const botId = String((created.body as any).bot.id);
+    const threadId = String((created.body as any).bot.threadId);
 
-    // Bot creation persists a local greeting before any provider turn. Using
-    // it here keeps this storage/search integration independent from the
-    // deliberately unavailable provider in the performance fixture.
-    const found = await json(port, "/api/search/messages?q=nice%20to%20meet&limit=10");
+    const found = await json(harness.port, "/api/search/messages?q=nice%20to%20meet&limit=10");
     expect(found.response.status).toBe(200);
     expect((found.body as any).available).toBe(true);
     expect((found.body as any).hits).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ botId, botName: "Searchable" }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ botId, botName: "Searchable" })]),
     );
+    await expect(access(path.join(harness.dataDir, `messages-${threadId}.json`))).rejects.toMatchObject({ code: "ENOENT" });
 
-    const removed = await json(port, `/api/bots/${botId}`, {
+    const removed = await json(harness.port, `/api/bots/${botId}`, {
       method: "DELETE",
       headers: { "x-cumea-operation-id": "search-index-delete-test" },
     });
     expect(removed.response.status).toBe(200);
 
-    const afterDelete = await json(port, "/api/search/messages?q=nice%20to%20meet&limit=10");
-    expect(afterDelete.response.status).toBe(200);
+    const afterDelete = await json(harness.port, "/api/search/messages?q=nice%20to%20meet&limit=10");
     expect((afterDelete.body as any).hits.some((hit: { botId?: string }) => hit.botId === botId)).toBe(false);
+    await stop(harness.child);
+
+    const canonical = new TranscriptStore(path.join(harness.dataDir, "transcripts.sqlite"));
+    try {
+      expect(canonical.threadState(threadId)).toBeNull();
+    } finally {
+      canonical.close();
+    }
   });
 
-  it("restores search and canonical bytes when a cache-cold HTTP deletion cannot commit bot metadata", async () => {
+  it("restores bot, canonical SQLite, and search when a cache-cold HTTP deletion cannot commit bot metadata", async () => {
     const first = await startHarness();
     const created = await json(first.port, "/api/bots", {
       method: "POST",
@@ -163,8 +168,8 @@ describe("local transcript search integration", () => {
     const threadId = String((created.body as any).bot.threadId);
     await stop(first.child);
 
-    // Restart from the same profile. seedLegacy reads canonical JSON directly,
-    // so the Store's in-memory transcript map is still cold when DELETE starts.
+    // Restart from the same canonical profile so the in-memory transcript map
+    // is cold when DELETE begins.
     const restarted = await startHarness({ dataDir: first.dataDir });
     const botsFile = path.join(first.dataDir, "bots.json");
     const botsBackup = path.join(first.dataDir, "bots.json.rollback-test");
@@ -181,10 +186,20 @@ describe("local transcript search integration", () => {
     expect((found.body as any).hits).toEqual(
       expect.arrayContaining([expect.objectContaining({ botId, botName: "Cold rollback" })]),
     );
-    await expect(access(path.join(first.dataDir, `messages-${threadId}.json`))).resolves.toBeUndefined();
+    await expect(access(path.join(first.dataDir, `messages-${threadId}.json`))).rejects.toMatchObject({ code: "ENOENT" });
 
     await rm(botsFile, { recursive: true, force: true });
     await rename(botsBackup, botsFile);
+    await stop(restarted.child);
+
+    const canonical = new TranscriptStore(path.join(first.dataDir, "transcripts.sqlite"));
+    try {
+      expect(canonical.threadState(threadId)).toMatchObject({ state: "active" });
+      expect(canonical.messagesFor(threadId).some((message) => message.text?.includes("Nice to meet") || message.text?.includes("nice to meet")))
+        .toBe(true);
+    } finally {
+      canonical.close();
+    }
   });
 
   it("rejects unbounded local queries", async () => {
