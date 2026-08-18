@@ -34,6 +34,9 @@ All notable changes to Cumea are documented here. This project follows
   and patches through owner-local `transcripts.sqlite` without whole-thread JSON rewrites; existing
   legacy JSON remains an immutable migration/recovery anchor until its bot is deleted, and new bots
   create no JSON transcript. The derived search index reconciles against canonical revisions.
+- Added global desktop transcript search to the existing agent search field, bounded exact-message
+  navigation with highlighted focus and Return to latest, plus bounded Markdown/JSON visible-transcript
+  export. Search jumps do not load entire long conversations.
 
 ### Changed
 
@@ -49,6 +52,9 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Exact transcript navigation and export remain desktop-local. Export projects only folded visible fields:
+  raw screen bytes, provider-native/request identifiers, attachment IDs, resume cursors and filesystem paths
+  are excluded; screenshot messages are represented only by an explicit omission marker.
 - Canonical bot deletion is a rollback-capable cross-store transaction: SQLite first enters
   `pending_delete`, commits and privacy-checkpoints the transcript while retaining an exact private
   rollback snapshot, then outer bot/workspace/file purges run, and only a successful full purge releases
