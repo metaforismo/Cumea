@@ -122,13 +122,13 @@ should not bypass the release, security, persistence, or measurement foundations
     - [x] P0.11b1 — Add the owner-local `transcripts.sqlite` schema, all-or-nothing validated/hash-
       attributed legacy import, stable ordering, revisions, incremental mutation primitives,
       reversible pending-delete state, crash reconciliation, backup primitive, and cross-platform tests.
-      Production Store reads/writes remain JSON until P0.11b2.
-    - [ ] P0.11b2 — Switch production transcript reads/appends/patches to canonical SQLite, reconcile
-      the derived search index against canonical revisions, and stop whole-thread JSON writes only after
-      a verified import while retaining the legacy source as a migration recovery anchor.
+    - [x] P0.11b2 — Wire a guarded Store cutover backend that imports owned threads fail-closed,
+      reads/appends/patches canonical SQLite without whole-thread JSON rewrites, reconciles the derived
+      search index against canonical revisions, preserves existing legacy JSON as a recovery anchor,
+      and fails bot deletion closed until the b3 transaction is available.
     - [ ] P0.11b3 — Integrate canonical pending-delete recovery with the real HTTP bot deletion path,
-      prove crash/restart and privacy cleanup windows, document backup/restore operations, and retire
-      the active legacy JSON path without weakening rollback or deletion guarantees.
+      prove crash/restart and privacy cleanup windows, enable the canonical Store backend in production,
+      document backup/restore operations, and retire active JSON writes without weakening rollback.
   - [ ] P0.11c — Add desktop global search/navigation, exact message jumping, transcript export, and
     UX tests on top of the local index without widening the mobile/remote privacy surface.
 - [ ] **P0.12 — Agent liveness and loop protection.** Add activity-based stall detection with
@@ -231,3 +231,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-18 | Competitive audit | Re-audited Cumea against Rakazo `2718b1f` and OpenMausBot `4a9d654`; retained Cumea's privacy/security model while promoting transcript SQLite/search, liveness protection, renderer/thread scaling, inspectable memory, visual journey evidence, and pluggable user-owned computer backends into explicit roadmap gates. |
 | 2026-08-18 | P0.11a | Completed the owner-local derived transcript search index with incremental visible-message indexing, local-only bounded search, canonical-file fingerprint reconciliation, cache-cold HTTP rollback evidence, privacy-sensitive SQLite deletion semantics, and cross-platform handle cleanup; canonical JSON remains authoritative until P0.11b. |
 | 2026-08-18 | P0.11b1 | Completed the versioned canonical transcript SQLite foundation with verified legacy import, stable ordering/revisions, incremental mutation primitives, reversible pending deletion, crash reconciliation, independently readable local backups, and cross-platform CI; production Store cutover remains P0.11b2. |
+| 2026-08-18 | P0.11b2 | Completed the guarded Store cutover backend with verified legacy import, SQLite-only incremental appends/patches, canonical-revision search reconciliation, restart/crash evidence, no new whole-thread JSON files, and fail-closed deletion until b3; the real harness remains legacy-backed until b3 enables it. |
