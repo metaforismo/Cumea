@@ -112,7 +112,7 @@ should not bypass the release, security, persistence, or measurement foundations
   rewrite amplification with a versioned owner-local SQLite/WAL message store, lazy verified legacy
   import, per-message insert/update, rollback-aware thread deletion, bounded transcript search, and
   export primitives without making provider-private payloads searchable by default.
-  - [~] P0.11a — Add the owner-local derived SQLite/WAL search projection, incremental append/patch
+  - [x] P0.11a — Add the owner-local derived SQLite/WAL search projection, incremental append/patch
     indexing, local-only bounded search API, privacy-safe field projection, canonical-file fingerprint
     reconciliation, secure-delete/WAL cleanup, rollback-aware bot deletion, and cross-platform handle
     lifecycle. Canonical JSON remains authoritative until P0.11b.
@@ -219,4 +219,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-17 | P0.03b | Replaced packaged harness polling/fallback ports with an OS-assigned private listener and exact-PID UtilityProcess readiness message; hardened the private listener Host/origin boundary and kept remote listener ports independent. |
 | 2026-08-18 | P0.04 | Replaced the desktop startup/reconnect fetch cascade with one bounded cursor-consistent bootstrap, buffered SSE reconciliation, lazy unselected-thread hydration, and deferred full Work loading when startup projections are truncated. |
 | 2026-08-18 | Competitive audit | Re-audited Cumea against Rakazo `2718b1f` and OpenMausBot `4a9d654`; retained Cumea's privacy/security model while promoting transcript SQLite/search, liveness protection, renderer/thread scaling, inspectable memory, visual journey evidence, and pluggable user-owned computer backends into explicit roadmap gates. |
-| 2026-08-18 | P0.11a | Began the owner-local derived transcript search index with incremental visible-message indexing, local-only bounded search, canonical-file fingerprint reconciliation, privacy-sensitive SQLite deletion semantics, and rollback-aware bot lifecycle; canonical JSON remains authoritative until P0.11b. |
+| 2026-08-18 | P0.11a | Completed the owner-local derived transcript search index with incremental visible-message indexing, local-only bounded search, canonical-file fingerprint reconciliation, cache-cold HTTP rollback evidence, privacy-sensitive SQLite deletion semantics, and cross-platform handle cleanup; canonical JSON remains authoritative until P0.11b. |
