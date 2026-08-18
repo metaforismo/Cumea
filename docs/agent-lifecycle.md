@@ -1,5 +1,7 @@
 # Agent lifecycle watchdog
 
+> **Verification boundary:** P0.12a is covered by the root test/typecheck matrix on macOS, Ubuntu and Windows, the production build/SBOM gate, mobile test/typecheck/export, landing build and unsigned macOS arm64 package-layout smoke. These gates do not establish signed-release, physical-device, or provider-process failure acceptance on every supported environment.
+
 P0.12a makes long-running agent work observable without treating a timer as proof that an external provider is dead.
 
 ## States
