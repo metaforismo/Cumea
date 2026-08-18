@@ -1,12 +1,12 @@
 # Local transcript search index
 
-P0.11a adds an owner-local search index without changing the canonical transcript format yet.
+Cumea keeps transcript search in a separate owner-local SQLite/WAL database. It is intentionally **derived** from the canonical folded conversation history rather than being the source of truth.
 
 ## Current persistence boundary
 
-Canonical conversation history is still stored in `messages-<threadId>.json` and keeps Cumea's existing atomic-write and file-quarantine rollback behavior. `message-search.sqlite` is a **derived** SQLite/WAL projection used only for local search.
+Canonical conversation history now lives in `transcripts.sqlite`. `message-search.sqlite` contains only the bounded visible-text projection needed for local search.
 
-This ordering is deliberate. Moving the source of truth to SQLite before migration, deletion, and rollback semantics are proved would trade one performance problem for a weaker recovery contract. P0.11b is the separate canonical-store migration gate.
+Existing `messages-<threadId>.json` files from older installs are immutable migration/recovery anchors; new canonical threads create no JSON transcript and migrated anchors are removed with their bot.
 
 ## What is indexed
 
@@ -32,30 +32,35 @@ GET /api/search/messages?q=<query>&limit=<1..50>
 
 The remote/mobile allowlist does not expose this endpoint. A response reports whether local search is available and whether it is running in `fts5`, `like`, or `unavailable` mode.
 
-## Migration and self-healing
+## Revision-based self-healing
 
-On harness startup, the derived index compares each current thread's stored canonical-file fingerprint with a cheap `stat` fingerprint of the live JSON source (`size`, inode, nanosecond mtime, and nanosecond ctime). Matching threads require no JSON parse. A missing or mismatched fingerprint rebuilds only that thread from canonical JSON.
+The production canonical backend uses each thread's SQLite revision as the derived-index reconciliation token.
 
-This closes the crash window where the atomic canonical JSON write succeeded but the following derived SQLite upsert did not. Corrupt/unreadable canonical transcripts remain isolated to their own thread, while SQLite failures during reconciliation propagate and disable the derived index rather than silently creating a permanent search hole.
+Every successful canonical append or patch advances the thread revision. The corresponding search update stores the same `canonical_revision`. On harness startup:
+
+- a matching revision requires no rebuild;
+- a missing or mismatched revision rebuilds only that thread from canonical SQLite.
+
+This closes the crash window where canonical SQLite committed but the process died before the derived search upsert. The older JSON file-fingerprint state remains supported only for legacy/test compatibility; it is no longer the production source of truth.
 
 ## Deletion and privacy
 
-Deletion remains fail-closed:
+Deletion remains fail-closed and participates in the same bot deletion transaction as canonical history:
 
-1. Cumea snapshots the canonical transcript while its JSON file is still live, including on the real HTTP deletion path after a cache-cold restart.
-2. Canonical and bot-owned files are moved into same-volume deletion quarantine rather than immediately destroyed.
-3. The derived SQLite thread is deleted before the bot metadata commit.
-4. SQLite uses `secure_delete=ON`; a privacy-sensitive delete also requires a WAL truncate checkpoint.
-5. Only after metadata stores commit may quarantined bytes be purged and the deletion become visible.
-6. If metadata commit or the SQLite delete/checkpoint fails, Cumea restores the derived rows from the pre-quarantine snapshot and restores the quarantined canonical bytes.
+1. canonical SQLite enters a reversible `pending_delete` state;
+2. derived search rows are deleted;
+3. bot/workspace metadata is prepared;
+4. canonical SQLite commits its DELETE and WAL truncate privacy checkpoint while retaining an exact rollback snapshot;
+5. quarantined attachments, event/native logs, and any legacy transcript anchor are purged;
+6. only a complete outer purge releases the rollback snapshot and makes deletion final.
 
-If a residual search database exists but Cumea cannot open it, bot deletion is rejected rather than pretending indexed text was removed. This is stricter than treating a derived index as disposable because deletion is a privacy boundary, not only a cache invalidation operation.
+If metadata persistence, search deletion, the post-COMMIT canonical checkpoint, or a later file purge fails, Cumea restores the canonical transcript and the derived search projection when rollback remains possible. If a residual search database exists but cannot be opened, bot deletion is rejected rather than pretending indexed text was removed.
 
 The SQLite handle is closed during normal harness shutdown and also when initialization fails partway through. The database path is created/repaired owner-only and lives inside Cumea's owner-only data directory.
 
 ### Recovering a broken derived index
 
-Because `message-search.sqlite` is not canonical in P0.11a, it can be rebuilt without deleting conversation history. Close every Cumea process first, then move these files out of `~/.cumea/` as a recovery backup if they exist:
+Because `message-search.sqlite` is derived, it can be rebuilt without deleting canonical conversation history. Close every Cumea process first, then move these files out of `~/.cumea/` as a recovery backup if they exist:
 
 ```text
 message-search.sqlite
@@ -63,10 +68,8 @@ message-search.sqlite-wal
 message-search.sqlite-shm
 ```
 
-On the next start, Cumea creates a fresh owner-local index and rebuilds current bot threads from the canonical `messages-<threadId>.json` files. Do not remove the canonical JSON files as part of this recovery.
+On the next start, Cumea creates a fresh owner-local index and rebuilds current bot threads from `transcripts.sqlite` using canonical revisions. Do **not** remove `transcripts.sqlite` as part of search-index recovery.
 
 ## What remains in P0.11
 
-P0.11a establishes the search/deletion contract but intentionally leaves whole-thread canonical JSON rewrites in place.
-
-P0.11b will migrate canonical transcript persistence to incremental SQLite with a versioned, rollback-aware import path and crash/recovery evidence. P0.11c will add desktop global navigation, transcript-result jumping, and export on top of the local index without widening the remote surface.
+The persistence/search foundation is complete. P0.11c adds global desktop search/navigation, exact-message jumping, and bounded visible-transcript export on top of this local index without widening the remote surface.
