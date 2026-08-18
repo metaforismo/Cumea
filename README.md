@@ -37,7 +37,8 @@ visible team:
 - an agent-first Expo companion for pairing, search, chat, stop, approvals, and routine status;
 - durable tasks, runs, tool steps, handoffs, artifacts, transcripts, configuration, and event logs;
 - a desktop-local Runtime inspector with bounded Events and Raw provider diagnostics for the active agent;
-- attended busy-user steering: send additional direction while an agent is working, with a bounded durable queue and one coalesced follow-up turn.
+- attended busy-user steering: send additional direction while an agent is working, with a bounded durable queue and one coalesced follow-up turn;
+- lifecycle-aware Work status with explicit working / waiting / no-signal / dead projections and advisory repeated-action recovery instead of timer-based auto-kill.
 
 The product name comes from the Sibyl of Cumae: one interface that gives a clear voice to a council
 of agents.
@@ -209,6 +210,8 @@ See [engine/session freshness](docs/session-freshness.md).
 
 While an agent is already working, desktop and paired mobile keep the composer usable. Explicit user messages are persisted immediately as bounded **queued steering**, then coalesced into one ordinary attended follow-up when the current turn settles. Cumea atomically claims a steering batch as `dispatching` before external provider work; an ambiguous crash/reload never guesses and silently replays that batch. Routines, retries, and peer fan-out retain the one-turn guard. See [busy-user steering](docs/busy-steering.md).
 
+Tracked Work runs now expose honest lifecycle state. Provider questions/approvals are explicitly `waiting` and exempt from silence timers; `no-signal` / `dead` are advisory observations and never auto-kill a provider. Repeated-identical tool/effect sequences surface through Work / Needs You so the user can steer or stop the current turn. See [agent lifecycle watchdog](docs/agent-lifecycle.md).
+
 “Teach as routine” currently captures a completed bot task and its prompt; it does not yet record a
 human clicking through an arbitrary desktop workflow. Scheduled routines run while the Cumea
 harness is running. Laptop-off execution therefore works only when that harness and its configured
@@ -246,6 +249,7 @@ Preview.
 | `server/turn-context.ts` | bounded canonical context rebuild and native-session resume decision |
 | `server/session-freshness.ts` | private owner-local per-thread pending/dispatched/invalidated provider-session state |
 | `server/busy-steering.ts` | bounded attended steering queue selection, capacity checks, and deterministic coalescing |
+| `server/lifecycle-watchdog.ts` | bounded process-local activity state machine for Work liveness, waiting exemptions, and repeated-effect alerts |
 | `server/transcript-store.ts` | versioned canonical SQLite/WAL transcript database, verified legacy import, revisions, deletion staging, and local backup primitive |
 | `server/contracts.ts` | provider driver and canonical event contracts |
 | `server/drivers/` | Claude, Codex, Grok, Gemini, computer, and peer-agent adapters |
