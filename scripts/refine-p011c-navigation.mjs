@@ -8,13 +8,60 @@ function replaceOnce(needle, replacement, label) {
   source = `${source.slice(0, first)}${replacement}${source.slice(first + needle.length)}`;
 }
 
-replaceOnce(
-  `    if (action.type === "select") {\n      const bot = stateRef.current.bots.find((candidate) => candidate.id === action.id);\n      const threadId = bot?.threadId;\n      if (threadId && !loadedThreadsRef.current.has(threadId)) {\n        loadedThreadsRef.current.add(threadId);\n        void api(\`/api/bots/\${encodeURIComponent(action.id)}/messages?limit=\${BOT_MESSAGE_BOOTSTRAP_LIMIT}\`)\n          .then((body) => {\n            baseDispatch({ type: "messagesHydrated", threadId, messages: body.messages ?? [] });\n          })\n          .catch((error) => {\n            loadedThreadsRef.current.delete(threadId);\n            console.warn("Failed to hydrate selected transcript", error);\n          });\n      }\n    }\n`,
-  `    if (action.type === "select") {\n      const current = stateRef.current;\n      const bot = current.bots.find((candidate) => candidate.id === action.id);\n      const threadId = bot?.threadId;\n      const returningFromSearch = current.searchFocus?.botId === action.id;\n      if (threadId && (returningFromSearch || !loadedThreadsRef.current.has(threadId))) {\n        loadedThreadsRef.current.add(threadId);\n        void api(\`/api/bots/\${encodeURIComponent(action.id)}/messages?limit=\${BOT_MESSAGE_BOOTSTRAP_LIMIT}\`)\n          .then((body) => {\n            baseDispatch(\n              returningFromSearch\n                ? { type: "latestMessages", threadId, messages: body.messages ?? [] }\n                : { type: "messagesHydrated", threadId, messages: body.messages ?? [] },\n            );\n          })\n          .catch((error) => {\n            if (!returningFromSearch) loadedThreadsRef.current.delete(threadId);\n            console.warn("Failed to hydrate selected transcript", error);\n          });\n      }\n    }\n`,
-  "select returns from historical search window",
-);
+const needle = [
+  '        case "select": {',
+  '          const bot = stateRef.current.bots.find((b) => b.id === action.id);',
+  '          if (bot?.unread) {',
+  '            api(`/api/bots/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});',
+  '          }',
+  '          if (',
+  '            bot &&',
+  '            !loadedThreadsRef.current.has(bot.threadId) &&',
+  '            !loadingThreadsRef.current.has(bot.threadId)',
+  '          ) {',
+  '            loadingThreadsRef.current.add(bot.threadId);',
+  '            api(`/api/bots/${bot.id}/messages?limit=80`)',
+  '              .then(({ messages }) => {',
+  '                loadedThreadsRef.current.add(bot.threadId);',
+  '                rawDispatch({ type: "messagesHydrated", threadId: bot.threadId, messages });',
+  '              })',
+  '              .catch(showError)',
+  '              .finally(() => loadingThreadsRef.current.delete(bot.threadId));',
+  '          }',
+  '          break;',
+  '        }',
+].join("\n");
 
-for (const needle of ["returningFromSearch", 'type: "latestMessages"', "current.searchFocus?.botId"]) {
-  if (!source.includes(needle)) throw new Error(`missing invariant: ${needle}`);
+const replacement = [
+  '        case "select": {',
+  '          const current = stateRef.current;',
+  '          const bot = current.bots.find((b) => b.id === action.id);',
+  '          const returningFromSearch = current.searchFocus?.botId === action.id;',
+  '          if (bot?.unread) {',
+  '            api(`/api/bots/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});',
+  '          }',
+  '          if (',
+  '            bot &&',
+  '            (returningFromSearch || !loadedThreadsRef.current.has(bot.threadId)) &&',
+  '            !loadingThreadsRef.current.has(bot.threadId)',
+  '          ) {',
+  '            loadingThreadsRef.current.add(bot.threadId);',
+  '            api(`/api/bots/${bot.id}/messages?limit=80`)',
+  '              .then(({ messages }) => {',
+  '                loadedThreadsRef.current.add(bot.threadId);',
+  '                rawDispatch(returningFromSearch',
+  '                  ? { type: "latestMessages", threadId: bot.threadId, messages }',
+  '                  : { type: "messagesHydrated", threadId: bot.threadId, messages });',
+  '              })',
+  '              .catch(showError)',
+  '              .finally(() => loadingThreadsRef.current.delete(bot.threadId));',
+  '          }',
+  '          break;',
+  '        }',
+].join("\n");
+
+replaceOnce(needle, replacement, "select returns from historical search window");
+for (const required of ["returningFromSearch", 'type: "latestMessages"', "current.searchFocus?.botId"]) {
+  if (!source.includes(required)) throw new Error(`missing invariant: ${required}`);
 }
 writeFileSync(path, source);
