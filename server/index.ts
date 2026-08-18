@@ -1016,7 +1016,15 @@ routineTimer.unref();
 const lifecycleTimer = setInterval(() => {
   const { projections, alerts } = lifecycleWatchdog.tick();
   let changed = false;
-  for (const value of projections) changed = workspace.setRunLifecycle(value.runId, value) || changed;
+  for (const value of projections) {
+    const current = workspace.run(value.runId)?.lifecycle;
+    const semanticChange =
+      !current ||
+      current.state !== value.state ||
+      current.waitingSince !== value.waitingSince ||
+      current.reason !== value.reason;
+    if (semanticChange) changed = workspace.setRunLifecycle(value.runId, value) || changed;
+  }
   for (const alert of alerts) changed = workspace.markLifecycleAttention(alert.runId, alert) || changed;
   if (changed) broadcastWorkspace();
 }, 15_000);

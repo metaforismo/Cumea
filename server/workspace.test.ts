@@ -259,6 +259,65 @@ describe("WorkspaceStore", () => {
     expect(existsSync(directory)).toBe(true);
   });
 
+  it("keeps provider attention separate from watchdog recovery state", () => {
+    const store = new WorkspaceStore();
+    const task = store.createTask({ botId: "bot-1", prompt: "Long task" });
+    const run = store.createRun(task.id);
+    store.setRunLifecycle(run.id, {
+      threadId: "thread-1",
+      runId: run.id,
+      state: "no_signal",
+      lastActivityAt: 1_000,
+    });
+    store.markLifecycleAttention(run.id, {
+      threadId: "thread-1",
+      runId: run.id,
+      kind: "no_signal",
+      title: "No signal",
+      observedAt: 2_000,
+    });
+    expect(store.run(run.id)).toMatchObject({ status: "needs_attention", attentionKind: "lifecycle" });
+
+    store.markNeedsAttention(run.id, "Approve send?", "request-1");
+    expect(store.run(run.id)).toMatchObject({ status: "needs_attention", attentionKind: "provider" });
+    expect(store.run(run.id)?.lifecycleAlert).toBeUndefined();
+
+    store.setRunLifecycle(run.id, {
+      threadId: "thread-1",
+      runId: run.id,
+      state: "working",
+      lastActivityAt: 3_000,
+    });
+    expect(store.run(run.id)).toMatchObject({ status: "needs_attention", attentionKind: "provider" });
+    store.resumeRun(run.id, "request-1", false);
+    expect(store.run(run.id)).toMatchObject({ status: "running", attentionKind: undefined });
+  });
+
+  it("auto-clears recovered silence alerts but keeps repeated-effect alerts visible", () => {
+    const store = new WorkspaceStore();
+    const firstTask = store.createTask({ botId: "bot-1", prompt: "Silent task" });
+    const firstRun = store.createRun(firstTask.id);
+    store.markLifecycleAttention(firstRun.id, {
+      threadId: "thread-1", runId: firstRun.id, kind: "dead", title: "No runtime signal", observedAt: 1_000,
+    });
+    store.setRunLifecycle(firstRun.id, {
+      threadId: "thread-1", runId: firstRun.id, state: "working", lastActivityAt: 2_000,
+    });
+    expect(store.run(firstRun.id)).toMatchObject({ status: "running", attentionKind: undefined });
+    expect(store.run(firstRun.id)?.steps.at(-1)).toMatchObject({ kind: "lifecycle", status: "completed" });
+
+    const secondTask = store.createTask({ botId: "bot-1", prompt: "Loop task" });
+    const secondRun = store.createRun(secondTask.id);
+    store.markLifecycleAttention(secondRun.id, {
+      threadId: "thread-2", runId: secondRun.id, kind: "repeated_effect", title: "Repeated action", observedAt: 3_000, repeatCount: 6,
+    });
+    store.setRunLifecycle(secondRun.id, {
+      threadId: "thread-2", runId: secondRun.id, state: "working", lastActivityAt: 4_000,
+    });
+    expect(store.run(secondRun.id)).toMatchObject({ status: "needs_attention", attentionKind: "lifecycle" });
+    expect(store.run(secondRun.id)?.lifecycleAlert?.kind).toBe("repeated_effect");
+  });
+
   it("enforces persistent attachment count and byte quotas per bot", () => {
     const countStore = new WorkspaceStore();
     for (let index = 0; index < ATTACHMENT_MAX_COUNT_PER_BOT; index += 1) {

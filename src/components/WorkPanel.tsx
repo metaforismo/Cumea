@@ -105,7 +105,13 @@ function TaskCard({ task }: { task: TaskRecord }) {
               <span className={cn("rounded-full px-2 py-0.5", run.lifecycle.state === "working" ? "bg-accent/10 text-accent" : run.lifecycle.state === "waiting" ? "bg-warning/10 text-warning" : "bg-danger/10 text-danger")}>
                 {run.lifecycle.state.replace("_", " ")}
               </span>
-              <span className="text-ink-secondary">Last signal {relativeTime(run.lifecycle.lastActivityAt)}</span>
+              <span className="text-ink-secondary">
+                {run.lifecycle.state === "working"
+                  ? "Runtime active"
+                  : run.lifecycle.state === "waiting" && run.lifecycle.waitingSince
+                    ? `Waiting ${relativeTime(run.lifecycle.waitingSince)}`
+                    : `Last signal ${relativeTime(run.lifecycle.lastActivityAt)}`}
+              </span>
               {run.lifecycle.reason ? <span className="w-full text-ink-secondary">{run.lifecycle.reason}</span> : null}
             </div>
           )}
