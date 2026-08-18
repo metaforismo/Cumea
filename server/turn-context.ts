@@ -8,6 +8,7 @@ export type TurnContextReason =
   | "no-prior-user-turn"
   | "selected-session-fresh"
   | "provider-reloaded"
+  | "dispatch-interrupted"
   | "instance-changed"
   | "model-changed"
   | "selected-session-missing"
@@ -78,7 +79,7 @@ export function decideTurnContext(input: {
   selectedInstanceId: string;
   selectedModel: string;
   sessionModelSwitch: "in-session" | "unsupported";
-  sessionInvalidated?: boolean;
+  sessionState?: "dispatched" | "pending" | "invalidated" | null;
   lastDispatchedInstanceId?: string | null;
   lastDispatchedModel?: string | null;
   resumeCursors: Record<string, unknown>;
@@ -96,12 +97,20 @@ export function decideTurnContext(input: {
     };
   }
 
-  if (input.sessionInvalidated) {
+  if (input.sessionState === "invalidated") {
     return {
       resumeCursor: undefined,
       transcript: input.transcript,
       rebuildContext: true,
       reason: "provider-reloaded",
+    };
+  }
+  if (input.sessionState === "pending") {
+    return {
+      resumeCursor: undefined,
+      transcript: input.transcript,
+      rebuildContext: true,
+      reason: "dispatch-interrupted",
     };
   }
 
