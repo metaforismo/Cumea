@@ -69,6 +69,11 @@ function usableCursor(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+export function nativeResumeCursor(input: { resumeCursor?: unknown; rebuildContext?: boolean }): string | null {
+  if (input.rebuildContext) return null;
+  return usableCursor(input.resumeCursor) ?? null;
+}
+
 export function decideTurnContext(input: {
   selectedInstanceId: string;
   selectedModel: string;
