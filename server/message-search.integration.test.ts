@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
@@ -38,16 +39,41 @@ afterEach(async () => {
   }));
 });
 
-async function startHarness(): Promise<{ child: HarnessChild; port: number }> {
+async function reserveLoopbackPort(): Promise<number> {
+  const probe = createServer();
+  await new Promise<void>((resolve, reject) => {
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = probe.address();
+  const port = address && typeof address === "object" ? address.port : 0;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  if (!port) throw new Error("could not reserve a loopback port");
+  return port;
+}
+
+async function startHarness(options: { remote?: boolean } = {}): Promise<{
+  child: HarnessChild;
+  port: number;
+  remotePort?: number;
+}> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "cumea-search-harness-"));
   directories.add(dataDir);
+  const remotePort = options.remote ? await reserveLoopbackPort() : undefined;
   const child = spawn(process.execPath, ["server/index.ts"], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       CUMEA_DATA_DIR: dataDir,
       CUMEA_PORT: "0",
-      CUMEA_REMOTE_ACCESS: "0",
+      CUMEA_REMOTE_ACCESS: options.remote ? "1" : "0",
+      ...(remotePort
+        ? {
+            CUMEA_REMOTE_PORT: String(remotePort),
+            CUMEA_REMOTE_PUBLIC_URL: `http://127.0.0.1:${remotePort}`,
+            CUMEA_REMOTE_ALLOW_INSECURE: "1",
+          }
+        : {}),
       CUMEA_PERFORMANCE_MODE: "1",
       CUMEA_PERFORMANCE_FILE: path.join(dataDir, "fixture-performance.json"),
     },
@@ -55,7 +81,7 @@ async function startHarness(): Promise<{ child: HarnessChild; port: number }> {
   });
   children.add(child);
 
-  return await new Promise((resolve, reject) => {
+  const port = await new Promise<number>((resolve, reject) => {
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -68,7 +94,7 @@ async function startHarness(): Promise<{ child: HarnessChild; port: number }> {
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString("utf8");
       const match = stdout.match(/Cumea server running on http:\/\/127\.0\.0\.1:(\d+)/);
-      if (match) finish(() => resolve({ child, port: Number(match[1]) }));
+      if (match) finish(() => resolve(Number(match[1])));
     });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
     child.once("error", (error) => finish(() => reject(error)));
@@ -81,6 +107,7 @@ async function startHarness(): Promise<{ child: HarnessChild; port: number }> {
     );
     timer.unref?.();
   });
+  return { child, port, ...(remotePort ? { remotePort } : {}) };
 }
 
 async function json(port: number, route: string, init?: RequestInit) {
@@ -127,9 +154,39 @@ describe("local transcript search integration", () => {
     expect((afterDelete.body as any).hits).toEqual([]);
   });
 
-  it("keeps transcript search local-only", async () => {
+  it("rejects unbounded local queries", async () => {
     const { port } = await startHarness();
     const invalid = await json(port, "/api/search/messages?q=x&limit=0");
     expect(invalid.response.status).toBe(400);
+  });
+
+  it("does not expose transcript search on the authenticated remote/mobile surface", async () => {
+    const { port, remotePort } = await startHarness({ remote: true });
+    expect(remotePort).toBeTypeOf("number");
+
+    const session = await json(port, "/api/pairing/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ttlMs: 60_000 }),
+    });
+    expect(session.response.status).toBe(201);
+
+    const claim = await fetch(`http://127.0.0.1:${remotePort}/api/pairing/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId: (session.body as any).session.id,
+        secret: (session.body as any).session.secret,
+        deviceName: "Search boundary test",
+      }),
+    });
+    expect(claim.status).toBe(201);
+    const token = String(((await claim.json()) as any).token);
+
+    const remoteSearch = await fetch(`http://127.0.0.1:${remotePort}/api/search/messages?q=private`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(remoteSearch.status).toBe(403);
+    expect(await remoteSearch.json()).toEqual({ error: "endpoint is not available to mobile devices" });
   });
 });
