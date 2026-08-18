@@ -232,8 +232,8 @@ Preview.
 | `server/pairing.ts` | expiring one-time pairing sessions, hashed device tokens, and revocation |
 | `server/mobile.ts` | allowlisted mobile bot/message projections and sanitized remote SSE events |
 | `server/workspace.ts` | durable sections, attachments, tasks, runs, artifacts, and schedules |
-| `server/message-search-index.ts` | owner-local derived SQLite/WAL transcript search projection |
-| `server/transcript-store.ts` | P0.11b canonical SQLite/WAL transcript database foundation, verified legacy import, revisions, deletion staging, and local backup primitive |
+| `server/message-search-index.ts` | owner-local derived SQLite/WAL transcript search projection with legacy-file fingerprints and canonical-revision reconciliation |
+| `server/transcript-store.ts` | versioned canonical SQLite/WAL transcript database, verified legacy import, revisions, deletion staging, and local backup primitive |
 | `server/contracts.ts` | provider driver and canonical event contracts |
 | `server/drivers/` | Claude, Codex, Grok, Gemini, computer, and peer-agent adapters |
 | `server/harness/` | provider registry and event bus |
@@ -241,11 +241,13 @@ Preview.
 | `apps/mobile/` | Expo Router companion, agent-list home, pairing, chat, approvals, and routines |
 
 The renderer owns no provider transport. Commands cross the local API, providers emit one canonical
-event stream, and the UI folds that stream into visible conversation state. Local transcript search
-uses a separate derived SQLite/WAL projection over user-visible message fields only. P0.11b1 now
-provides the versioned `transcripts.sqlite` canonical-store contract and verified legacy import, but
-production `Store` reads/writes still remain on the rollback-safe JSON path until P0.11b2 switches
-them. See [local transcript search](docs/transcript-search.md) and
+event stream, and the UI folds that stream into visible conversation state. P0.11b2 adds a guarded
+`Store({ transcripts: true })` backend that imports owned legacy threads fail-closed, reads/appends/
+patches canonical SQLite incrementally, and reconciles the derived search index against canonical
+thread revisions. Existing legacy JSON remains byte-identical as a migration recovery anchor and new
+cutover threads create no whole-thread JSON file. The real harness deliberately stays on the legacy
+backend until P0.11b3 integrates and proves canonical bot deletion before enabling the cutover in
+production. See [local transcript search](docs/transcript-search.md) and
 [canonical transcript persistence](docs/transcript-persistence.md).
 
 Packaged desktop startup keeps the renderer on the stable private origin `http://127.0.0.1:8799`.
