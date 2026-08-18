@@ -20,7 +20,7 @@ Only text already folded into user-visible transcript messages is eligible:
 
 The index does **not** ingest raw screen pixels, provider-native resume cursors, hidden reasoning/raw provider events, credentials, connector secrets, or attachment filesystem paths. Search results are additionally filtered against the current bot roster so hidden bots do not appear.
 
-Each indexed message is capped to 64 KiB of UTF-8 search text. Queries are capped at 200 characters and results at 50 rows. FTS5 is used when Node's SQLite build provides it; otherwise Cumea falls back to a bounded local `LIKE` query.
+Each indexed message is capped to 64 KiB of UTF-8 search text. Queries are capped at 200 characters and results at 50 rows. FTS5 is used when Node's SQLite build provides it; only a missing FTS5 module activates the bounded `LIKE` fallback. Other SQLite initialization/write failures make the derived index unavailable instead of being mistaken for a feature fallback.
 
 ## API
 
@@ -34,23 +34,36 @@ The remote/mobile allowlist does not expose this endpoint. A response reports wh
 
 ## Migration and self-healing
 
-On harness startup, the derived index checks every current bot thread. Existing indexed threads are left alone. Missing rows are rebuilt from canonical JSON, so a previous transient rollback/index failure cannot create a permanent search hole merely because an older global seed marker exists.
+On harness startup, the derived index compares each current thread's stored canonical-file fingerprint with a cheap `stat` fingerprint of the live JSON source (`size`, inode, nanosecond mtime, and nanosecond ctime). Matching threads require no JSON parse. A missing or mismatched fingerprint rebuilds only that thread from canonical JSON.
 
-Corrupt/unreadable canonical transcripts follow the existing Store recovery behavior: one bad legacy file does not prevent healthy threads from indexing or Cumea from starting.
+This closes the crash window where the atomic canonical JSON write succeeded but the following derived SQLite upsert did not. Corrupt/unreadable canonical transcripts remain isolated to their own thread, while SQLite failures during reconciliation propagate and disable the derived index rather than silently creating a permanent search hole.
 
 ## Deletion and privacy
 
 Deletion remains fail-closed:
 
-1. Cumea snapshots the canonical transcript before moving its JSON file into the deletion quarantine.
-2. The derived SQLite thread is deleted.
-3. SQLite uses `secure_delete=ON`; a privacy-sensitive delete also requires a WAL truncate checkpoint.
-4. Only then may bot metadata commit and quarantined canonical bytes be purged.
-5. If metadata commit or the SQLite delete/checkpoint fails, Cumea restores the derived rows from the pre-quarantine snapshot and restores the canonical JSON file.
+1. Cumea snapshots the canonical transcript while its JSON file is still live, including on the real HTTP deletion path after a cache-cold restart.
+2. Canonical and bot-owned files are moved into same-volume deletion quarantine rather than immediately destroyed.
+3. The derived SQLite thread is deleted before the bot metadata commit.
+4. SQLite uses `secure_delete=ON`; a privacy-sensitive delete also requires a WAL truncate checkpoint.
+5. Only after metadata stores commit may quarantined bytes be purged and the deletion become visible.
+6. If metadata commit or the SQLite delete/checkpoint fails, Cumea restores the derived rows from the pre-quarantine snapshot and restores the quarantined canonical bytes.
 
 If a residual search database exists but Cumea cannot open it, bot deletion is rejected rather than pretending indexed text was removed. This is stricter than treating a derived index as disposable because deletion is a privacy boundary, not only a cache invalidation operation.
 
-The SQLite handle is closed during normal harness shutdown. The database path is created/repaired owner-only and lives inside Cumea's owner-only data directory.
+The SQLite handle is closed during normal harness shutdown and also when initialization fails partway through. The database path is created/repaired owner-only and lives inside Cumea's owner-only data directory.
+
+### Recovering a broken derived index
+
+Because `message-search.sqlite` is not canonical in P0.11a, it can be rebuilt without deleting conversation history. Close every Cumea process first, then move these files out of `~/.cumea/` as a recovery backup if they exist:
+
+```text
+message-search.sqlite
+message-search.sqlite-wal
+message-search.sqlite-shm
+```
+
+On the next start, Cumea creates a fresh owner-local index and rebuilds current bot threads from the canonical `messages-<threadId>.json` files. Do not remove the canonical JSON files as part of this recovery.
 
 ## What remains in P0.11
 
