@@ -338,15 +338,11 @@ bus.subscribe((event: RuntimeEvent) => {
   switch (event.type) {
     case "session.started":
       if (event.sessionId && event.providerInstanceId) {
+        // Cursor receipt alone is not enough to declare the session fresh: a
+        // native runtime can announce its session before it has incorporated
+        // the current user turn. Confirmation happens only on successful
+        // turn.completed below.
         store.setResumeCursor(bot.id, event.providerInstanceId, event.sessionId);
-        try {
-          sessionFreshness.confirm(event.threadId, event.providerInstanceId);
-        } catch (error) {
-          // A failed private metadata write must never invalidate the provider
-          // event or transcript. The still-pending record causes a safe
-          // canonical rebuild on the next turn/restart.
-          console.error("session freshness confirmation could not be persisted", error);
-        }
       }
       break;
     case "item.completed":
@@ -473,6 +469,16 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     }
     case "turn.completed": {
+      if (event.ok && event.providerInstanceId) {
+        try {
+          sessionFreshness.confirm(event.threadId, event.providerInstanceId);
+        } catch (error) {
+          // Leaving the private state pending is conservative: the next turn
+          // rebuilds canonical history instead of trusting a cursor whose
+          // completion could not be durably confirmed.
+          console.error("session freshness completion could not be persisted", error);
+        }
+      }
       // the last live frame becomes a settled inline screen message —
       // the screenshot-in-chat moment
       const frame = stopScreenPoller(bot.id);
@@ -606,6 +612,12 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
     throw Object.assign(new Error("task belongs to another bot"), { status: 409 });
   }
 
+  // Capture prior trust before changing it, then persist pending before the
+  // new user message itself becomes canonical. If anything fails after this
+  // point, a later turn rebuilds rather than trusting an older native cursor.
+  const previousSelection = sessionFreshness.get(bot.threadId);
+  sessionFreshness.begin(bot.threadId, selection);
+
   const userMessage = store.appendMessage(bot.threadId, {
     role: "user",
     kind: "text",
@@ -631,7 +643,6 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
   if (runId) activeRunByThread.set(bot.threadId, runId);
 
   const transcript = boundedTurnTranscript(store.messagesFor(bot.threadId), userMessage.id);
-  const previousSelection = sessionFreshness.get(bot.threadId);
   const turnContext = decideTurnContext({
     selectedInstanceId: selection.instanceId,
     selectedModel: selection.model,
@@ -711,10 +722,6 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
           )
         : [];
 
-      // Persist pending before the adapter can create/resume a native
-      // session. A crash before session.started therefore cannot make an old
-      // cursor appear fresh after restart.
-      sessionFreshness.begin(bot.threadId, selection);
       const started = await instance.adapter.sendTurn({
         threadId: bot.threadId,
         text: providerText,

@@ -96,10 +96,10 @@ export class SessionFreshnessStore {
     return value ? { ...value } : null;
   }
 
-  /** Persist before handing a turn to a native provider. If the process dies
-   * before session.started confirms the new/resumed session, a later launch
-   * sees `pending` and rebuilds from canonical history instead of trusting an
-   * older cursor left in bots.json. */
+  /** Persist before the new user turn becomes canonical. If the process dies
+   * before a successful turn.completed confirms the new/resumed session, a
+   * later launch sees `pending` and rebuilds from canonical history instead
+   * of trusting an older cursor left in bots.json. */
   begin(threadId: string, selection: { instanceId: string; model: string }): void {
     this.assertSelection(threadId, selection);
     this.records.set(threadId, { state: "pending", ...selection });
@@ -107,9 +107,9 @@ export class SessionFreshnessStore {
     this.save();
   }
 
-  /** Confirm only the instance that actually announced session.started. The
-   * selected model comes from the pending dispatch record so a settings edit
-   * during the in-flight turn cannot relabel that session. */
+  /** Confirm only the instance whose turn actually completed successfully.
+   * The selected model comes from the pending dispatch record so a settings
+   * edit during the in-flight turn cannot relabel that session. */
   confirm(threadId: string, instanceId: string): boolean {
     if (!validId(threadId) || !validId(instanceId)) return false;
     const pending = this.records.get(threadId);
