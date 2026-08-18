@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { TranscriptStore } from "./transcript-store.ts";
 import { ATTACHMENT_MAX_COUNT_PER_BOT } from "./workspace.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -453,11 +454,11 @@ describe("harness HTTP API", () => {
   });
 
   for (const target of [
-    { label: "transcript", relative: (threadId: string) => `messages-${threadId}.json` },
-    { label: "event log", relative: (threadId: string) => join("events", `${threadId}.ndjson`) },
-    { label: "native log", relative: (threadId: string) => join("native", `${threadId}.ndjson`) },
+    { label: "transcript", relative: (threadId: string) => `messages-${threadId}.json`, legacyAnchor: true },
+    { label: "event log", relative: (threadId: string) => join("events", `${threadId}.ndjson`), legacyAnchor: false },
+    { label: "native log", relative: (threadId: string) => join("native", `${threadId}.ndjson`), legacyAnchor: false },
   ]) {
-    it(`keeps all records and restores prepared files when the ${target.label} path is blocked`, async () => {
+    it(`keeps all records and restores canonical state when the ${target.label} path is blocked`, async () => {
       const created = await api("POST", "/api/bots");
       const bot = created.body.bot;
       const routine = await api("POST", "/api/routines", {
@@ -468,9 +469,11 @@ describe("harness HTTP API", () => {
       });
       expect(routine.status).toBe(201);
 
-      const transcript = join(home, ".cumea", `messages-${bot.threadId}.json`);
-      const transcriptBefore = readFileSync(transcript, "utf8");
       const blockedPath = join(home, ".cumea", target.relative(bot.threadId));
+      // New canonical-only bots never write messages-<thread>.json. Create an
+      // explicit legacy recovery anchor only for the transcript staging case,
+      // modelling a bot that was migrated from the pre-P0.11b format.
+      if (target.legacyAnchor) writeFileSync(blockedPath, JSON.stringify(bot.messages ?? []));
       rmSync(blockedPath, { recursive: true, force: true });
       mkdirSync(blockedPath, { recursive: true });
 
@@ -480,13 +483,24 @@ describe("harness HTTP API", () => {
       expect((await api("GET", "/api/work")).body.workspace.routines).toContainEqual(
         expect.objectContaining({ id: routine.body.routine.id, botId: bot.id }),
       );
-      expect(existsSync(blockedPath)).toBe(true);
-      if (target.label !== "transcript") {
-        expect(readFileSync(transcript, "utf8")).toBe(transcriptBefore);
+      const search = await api("GET", "/api/search/messages?q=nice%20to%20meet&limit=50");
+      expect(search.body.hits).toEqual(expect.arrayContaining([expect.objectContaining({ botId: bot.id })]));
+      const canonical = new TranscriptStore(join(home, ".cumea", "transcripts.sqlite"));
+      try {
+        expect(canonical.threadState(bot.threadId)).toMatchObject({ state: "active" });
+      } finally {
+        canonical.close();
       }
+      expect(existsSync(blockedPath)).toBe(true);
 
       rmSync(blockedPath, { recursive: true, force: true });
       expect((await api("DELETE", `/api/bots/${bot.id}`)).status).toBe(200);
+      const after = new TranscriptStore(join(home, ".cumea", "transcripts.sqlite"));
+      try {
+        expect(after.threadState(bot.threadId)).toBeNull();
+      } finally {
+        after.close();
+      }
     });
   }
 
