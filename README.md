@@ -241,13 +241,14 @@ Preview.
 | `apps/mobile/` | Expo Router companion, agent-list home, pairing, chat, approvals, and routines |
 
 The renderer owns no provider transport. Commands cross the local API, providers emit one canonical
-event stream, and the UI folds that stream into visible conversation state. P0.11b2 adds a guarded
-`Store({ transcripts: true })` backend that imports owned legacy threads fail-closed, reads/appends/
-patches canonical SQLite incrementally, and reconciles the derived search index against canonical
-thread revisions. Existing legacy JSON remains byte-identical as a migration recovery anchor and new
-cutover threads create no whole-thread JSON file. The real harness deliberately stays on the legacy
-backend until P0.11b3 integrates and proves canonical bot deletion before enabling the cutover in
-production. See [local transcript search](docs/transcript-search.md) and
+event stream, and the UI folds that stream into visible conversation state. The production harness
+now stores folded conversation history incrementally in owner-local `transcripts.sqlite`; legacy
+`messages-<threadId>.json` files are verified migration/recovery anchors only, are never rewritten,
+and are removed with their migrated bot. New threads create no whole-thread JSON file. The separate
+search database remains derived and reconciles against canonical transcript revisions. Bot deletion
+uses a rollback-capable SQLite prepare/commit phase before purging attachments, event/native logs and
+legacy anchors, so a later purge failure can still reconstruct a committed transcript exactly. See
+[local transcript search](docs/transcript-search.md) and
 [canonical transcript persistence](docs/transcript-persistence.md).
 
 Packaged desktop startup keeps the renderer on the stable private origin `http://127.0.0.1:8799`.
