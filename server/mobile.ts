@@ -161,7 +161,7 @@ function publicRuntimeEvent(event: RuntimeEvent): Record<string, unknown> | null
 const TASK_STATUSES = new Set(["queued", "running", "needs_attention", "completed", "failed", "cancelled"]);
 const RUN_STATUSES = new Set(["running", "needs_attention", "completed", "failed", "cancelled"]);
 const STEP_STATUSES = new Set(["running", "needs_attention", "completed", "failed", "denied"]);
-const STEP_KINDS = new Set(["tool", "approval", "handoff"]);
+const STEP_KINDS = new Set(["tool", "approval", "handoff", "lifecycle"]);
 const ARTIFACT_KINDS = new Set(["attachment", "response", "screen"]);
 const TASK_SOURCES = new Set(["message", "routine", "handoff"]);
 const ROUTINE_LAST_STATUSES = new Set(["running", "completed", "failed"]);
@@ -306,6 +306,13 @@ export function publicMobileWorkspace(
       artifacts,
       ...(numberValue(run.startedAt) !== undefined ? { startedAt: numberValue(run.startedAt) } : {}),
       ...(numberValue(run.completedAt) !== undefined ? { completedAt: numberValue(run.completedAt) } : {}),
+      ...(["provider", "lifecycle"].includes(String(run.attentionKind)) ? { attentionKind: run.attentionKind } : {}),
+      ...(recordValue(run.lifecycle) && ["working", "waiting", "no_signal", "dead"].includes(String(recordValue(run.lifecycle)!.state)) ? { lifecycle: {
+        state: String(recordValue(run.lifecycle)!.state),
+        ...(numberValue(recordValue(run.lifecycle)!.lastActivityAt) !== undefined ? { lastActivityAt: numberValue(recordValue(run.lifecycle)!.lastActivityAt) } : {}),
+        ...(numberValue(recordValue(run.lifecycle)!.waitingSince) !== undefined ? { waitingSince: numberValue(recordValue(run.lifecycle)!.waitingSince) } : {}),
+        ...(stringValue(recordValue(run.lifecycle)!.reason, 180) ? { reason: stringValue(recordValue(run.lifecycle)!.reason, 180) } : {}),
+      } } : {}),
     }];
   });
 

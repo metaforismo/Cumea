@@ -100,6 +100,21 @@ function TaskCard({ task }: { task: TaskRecord }) {
       {open && (
         <div className="border-t border-hairline/40 px-3 py-3">
           <div className="whitespace-pre-wrap text-[12px] leading-relaxed text-ink-secondary">{task.prompt}</div>
+          {run?.lifecycle && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
+              <span className={cn("rounded-full px-2 py-0.5", run.lifecycle.state === "working" ? "bg-accent/10 text-accent" : run.lifecycle.state === "waiting" ? "bg-warning/10 text-warning" : "bg-danger/10 text-danger")}>
+                {run.lifecycle.state.replace("_", " ")}
+              </span>
+              <span className="text-ink-secondary">Last signal {relativeTime(run.lifecycle.lastActivityAt)}</span>
+              {run.lifecycle.reason ? <span className="w-full text-ink-secondary">{run.lifecycle.reason}</span> : null}
+            </div>
+          )}
+          {run?.lifecycleAlert && (
+            <div className="mt-3 rounded-lg border border-warning/30 bg-warning/5 px-2.5 py-2 text-[11px] text-warning">
+              <div className="font-medium">{run.lifecycleAlert.title}</div>
+              <div className="mt-1 text-ink-secondary">Cumea did not stop the agent automatically. Open its chat to steer it or stop the current turn.</div>
+            </div>
+          )}
           {run?.steps.length ? (
             <div className="mt-3 space-y-2">
               {run.steps.map((step) => (
@@ -176,8 +191,13 @@ function AttentionTab() {
       .filter((message) => message.kind === "options" && message.card && !message.card.answered && !message.card.dismissed)
       .map((message) => ({ bot, message })),
   );
+  const lifecycle = state.workspace.tasks.filter((task) => {
+    if (task.status !== "needs_attention") return false;
+    const run = state.workspace.runs.find((candidate) => candidate.id === task.latestRunId);
+    return run?.attentionKind === "lifecycle";
+  }).slice(-8).reverse();
   const failed = state.workspace.tasks.filter((task) => task.status === "failed").slice(-8).reverse();
-  if (!pending.length && !failed.length) {
+  if (!pending.length && !lifecycle.length && !failed.length) {
     return <div className="py-16 text-center text-[13px] text-ink-secondary">Nothing needs your attention.</div>;
   }
   return (
@@ -198,6 +218,12 @@ function AttentionTab() {
           <div className="mt-2 text-[11px] text-ink-secondary">{bot.name}</div>
         </button>
       ))}
+      {lifecycle.length > 0 && (
+        <div>
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-secondary">Agent recovery</div>
+          <div className="space-y-2">{lifecycle.map((task) => <TaskCard key={task.id} task={task} />)}</div>
+        </div>
+      )}
       {failed.length > 0 && (
         <div>
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-secondary">Failed runs</div>
