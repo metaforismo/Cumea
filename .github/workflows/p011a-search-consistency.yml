@@ -1,0 +1,37 @@
+name: P0.11a search consistency
+
+on:
+  push:
+    branches:
+      - perf/transcript-search-index
+    paths:
+      - scripts/repair-p011a-search-consistency.mjs
+      - .github/workflows/p011a-search-consistency.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: perf/transcript-search-index
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: node scripts/repair-p011a-search-consistency.mjs
+      - name: Verify and commit
+        shell: bash
+        run: |
+          grep -F 'Re-check per-thread presence on every start' server/message-search-index.ts
+          grep -F 'deleteThread can fail after SQLite committed' server/store.ts
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/message-search-index.ts server/store.ts
+          git commit -m "fix: self-heal and roll back transcript search index"
+          git push origin HEAD:perf/transcript-search-index
