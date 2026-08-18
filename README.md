@@ -264,11 +264,20 @@ fixed `:5199` UI and `:8799` harness pair described above.
 
 ## Direction
 
-The immediate engineering priorities are steady-state renderer/thread scaling, incremental local
-transcript persistence and search, agent liveness/loop protection, signed consumer distribution,
-mobile completion gates, and wider provider/computer capability parity. These changes keep Cumea's
-no-account local-first security model and its Grok-like three-pane desktop / agent-list-first mobile
-identity instead of replacing them with a hosted control plane.
+P0.11 is complete, so the immediate engineering priorities have shifted from transcript storage to
+**runtime diagnostics, draft-#9 extraction, steady-state renderer/thread scaling, lifecycle correctness,
+mobile completion, package closure, and provider/computer capability parity**. The first small tranche is
+a desktop-local per-thread Events/Raw inspector over logs Cumea already writes; raw provider material must
+remain outside the paired mobile surface.
+
+The current competitive audit is pinned to Cumea `4b897646`, Rakazo `9622c388`, and OpenMausBot
+`e7d71f4b`. It adopts ideas such as bounded diagnostics, engine-session freshness, busy-user steering,
+app-wide keyboard/reduced-motion treatment, trusted connector continuation, discovery-before-pairing,
+and package spawn-closure checks while explicitly rejecting mandatory hosted identity or a Cumea-operated
+control plane.
+
+These changes keep Cumea's no-account local-first security model and its Grok-like three-pane desktop /
+agent-list-first mobile identity instead of replacing them with a hosted architecture.
 
 See [ROADMAP.md](ROADMAP.md) for the ordered backlog,
 [the 2026-08-18 Rakazo/OpenMaus engineering audit](docs/competitive-audit-2026-08-18.md) for the latest
