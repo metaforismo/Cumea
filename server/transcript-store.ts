@@ -24,8 +24,26 @@ export interface TranscriptThreadState {
 }
 
 export interface TranscriptDeleteTransaction {
+  /** Commit the SQLite deletion + privacy checkpoint, but retain an in-memory
+   * snapshot until the outer cross-store transaction finishes purging files. */
+  commit(): void;
+  /** Restore the complete canonical thread even when commit() already deleted
+   * its SQLite rows before a later outer phase failed. */
   rollback(): void;
+  /** Release the rollback snapshot only after every outer purge succeeded. */
   finalize(): void;
+}
+
+export interface TranscriptStoreOptions {
+  /** Test/fault-injection boundary. Production always runs WAL TRUNCATE. */
+  checkpoint?: (db: DatabaseSync) => void;
+}
+
+interface TranscriptMessageRow {
+  ordinal: number;
+  message_id: string;
+  at: number;
+  payload_json: string;
 }
 
 function statusError(status: number, message: string, cause?: unknown): Error {
@@ -78,9 +96,11 @@ export function legacyTranscriptPath(threadId: string): string {
 export class TranscriptStore {
   readonly path: string;
   private db: DatabaseSync;
+  private readonly checkpoint: (db: DatabaseSync) => void;
 
-  constructor(path = TRANSCRIPT_DB_PATH) {
+  constructor(path = TRANSCRIPT_DB_PATH, options: TranscriptStoreOptions = {}) {
     this.path = path;
+    this.checkpoint = options.checkpoint ?? ((db) => db.exec("PRAGMA wal_checkpoint(TRUNCATE)"));
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     closeSync(openSync(path, "a", 0o600));
     try { chmodSync(path, 0o600); } catch {}
@@ -162,11 +182,6 @@ export class TranscriptStore {
       : null;
   }
 
-  /**
-   * Atomically establish a canonical thread. Existing legacy JSON is parsed,
-   * structurally validated, hashed, inserted, counted, and committed as one
-   * SQLite transaction. A crash before COMMIT leaves no partial thread.
-   */
   ensureImported(threadId: string, legacyPath = legacyTranscriptPath(threadId)): TranscriptThreadState {
     validateThreadId(threadId);
     const existing = this.threadState(threadId);
@@ -278,46 +293,101 @@ export class TranscriptStore {
     return this.threadState(threadId)!.revision;
   }
 
+  private messageRows(threadId: string): TranscriptMessageRow[] {
+    return this.db.prepare(`
+      SELECT ordinal, message_id, at, payload_json
+      FROM transcript_messages WHERE thread_id = ? ORDER BY ordinal ASC
+    `).all(threadId) as unknown as TranscriptMessageRow[];
+  }
+
+  private restoreDeletionSnapshot(state: TranscriptThreadState, rows: readonly TranscriptMessageRow[]): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("DELETE FROM transcript_threads WHERE thread_id = ?").run(state.threadId);
+      this.db.prepare(`
+        INSERT INTO transcript_threads(thread_id, revision, state, legacy_sha256, imported_at)
+        VALUES(?, ?, ?, ?, ?)
+      `).run(state.threadId, state.revision, STATE_ACTIVE, state.legacySha256, state.importedAt);
+      const insert = this.db.prepare(`
+        INSERT INTO transcript_messages(thread_id, ordinal, message_id, at, payload_json)
+        VALUES(?, ?, ?, ?, ?)
+      `);
+      for (const row of rows) {
+        insert.run(state.threadId, row.ordinal, row.message_id, row.at, row.payload_json);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+  }
+
   /**
-   * Phase one of deletion keeps all message bytes present and reversible.
-   * Startup can recover an interrupted transaction by comparing pending
-   * threads with the authoritative bot roster.
+   * Phase one keeps all bytes present. commit() deletes and checkpoints, but
+   * retains a private snapshot until finalize(), allowing the outer bot /
+   * workspace / filesystem transaction to roll the canonical transcript back
+   * even when SQLite deletion already committed before another purge failed.
    */
   stageDelete(threadId: string): TranscriptDeleteTransaction {
     validateThreadId(threadId);
     const state = this.threadState(threadId);
     if (!state) throw statusError(404, "no such canonical transcript");
     if (state.state !== STATE_ACTIVE) throw statusError(409, "canonical transcript deletion is already pending");
+    const snapshot: TranscriptThreadState = { ...state, state: STATE_ACTIVE };
+    const rows = this.messageRows(threadId);
+    if (rows.length !== state.messageCount) throw new Error("canonical deletion snapshot count mismatch");
+
     this.db.prepare("UPDATE transcript_threads SET state = ? WHERE thread_id = ?").run(STATE_PENDING_DELETE, threadId);
+    let deletionCommitted = false;
     let settled = false;
+
     return {
+      commit: () => {
+        if (settled || deletionCommitted) return;
+        let sqliteCommitted = false;
+        try {
+          this.db.exec("BEGIN IMMEDIATE");
+          const result = this.db.prepare("DELETE FROM transcript_threads WHERE thread_id = ? AND state = ?")
+            .run(threadId, STATE_PENDING_DELETE);
+          if (Number(result.changes) !== 1) throw new Error("canonical pending transcript disappeared before commit");
+          this.db.exec("COMMIT");
+          sqliteCommitted = true;
+          // If this throws, rollback() below can still reconstruct the exact
+          // committed thread from the private state+message snapshot.
+          this.checkpoint(this.db);
+          deletionCommitted = true;
+        } catch (error) {
+          if (!sqliteCommitted) {
+            try { this.db.exec("ROLLBACK"); } catch {}
+          } else {
+            deletionCommitted = true;
+          }
+          throw error;
+        }
+      },
       rollback: () => {
         if (settled) return;
-        this.db.prepare("UPDATE transcript_threads SET state = ? WHERE thread_id = ?").run(STATE_ACTIVE, threadId);
-        settled = true;
+        const current = this.threadState(threadId);
+        try {
+          if (!current || deletionCommitted) {
+            this.restoreDeletionSnapshot(snapshot, rows);
+          } else {
+            this.db.prepare("UPDATE transcript_threads SET state = ? WHERE thread_id = ?")
+              .run(STATE_ACTIVE, threadId);
+          }
+          settled = true;
+        } catch (error) {
+          throw statusError(500, "could not restore canonical transcript after deletion failed", error);
+        }
       },
       finalize: () => {
         if (settled) return;
-        this.db.exec("BEGIN IMMEDIATE");
-        try {
-          this.db.prepare("DELETE FROM transcript_threads WHERE thread_id = ? AND state = ?")
-            .run(threadId, STATE_PENDING_DELETE);
-          this.db.exec("COMMIT");
-          this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-          settled = true;
-        } catch (error) {
-          try { this.db.exec("ROLLBACK"); } catch {}
-          throw error;
-        }
+        if (!deletionCommitted) throw new Error("canonical transcript deletion must commit before finalize");
+        settled = true;
       },
     };
   }
 
-  /**
-   * Recover a process crash that happened after phase-one deletion. A thread
-   * still owned by a bot becomes active again. Orphaned pending rows are
-   * finalized and scrubbed because the bot metadata commit already won.
-   */
   recoverPendingDeletes(activeThreadIds: ReadonlySet<string>): { restored: number; finalized: number } {
     const rows = this.db.prepare(
       "SELECT thread_id FROM transcript_threads WHERE state = ? ORDER BY thread_id",
@@ -334,7 +404,7 @@ export class TranscriptStore {
         finalized += 1;
       }
     }
-    if (finalized) this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    if (finalized) this.checkpoint(this.db);
     return { restored, finalized };
   }
 
