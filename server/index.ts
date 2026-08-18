@@ -1493,6 +1493,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         activeRunByThread.delete(bot.threadId);
       }
       clearThreadEventState(bot.threadId);
+      // Snapshot canonical transcript state while its JSON file is still at
+      // the live path. Existing bots may have a cold in-memory transcript
+      // cache after restart; once stageFilesForDeletion renames that file, a
+      // later metadata failure must still be able to rebuild the search index.
+      const transcriptSnapshot = [...store.messagesFor(bot.threadId)];
       let stagedFiles: StagedFileDeletion | null = null;
       let workspaceTransaction: ReturnType<typeof workspace.removeBotDataTransaction> | null = null;
       let botTransaction: ReturnType<typeof store.deleteBotRecordTransaction> | null = null;
@@ -1507,7 +1512,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
           ...workspace.botDeletionFiles(bot.id),
         ]);
         workspaceTransaction = workspace.removeBotDataTransaction(bot.id);
-        botTransaction = store.deleteBotRecordTransaction(bot.id);
+        botTransaction = store.deleteBotRecordTransaction(bot.id, transcriptSnapshot);
         if (!botTransaction) throw Object.assign(new Error("bot disappeared during deletion"), { status: 500 });
 
         // A purge failure rolls metadata and all remaining quarantined bytes
