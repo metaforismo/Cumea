@@ -1,0 +1,37 @@
+name: P0.11c transcript navigation API
+
+on:
+  push:
+    branches:
+      - feat/global-transcript-search
+    paths:
+      - scripts/apply-p011c-api.mjs
+      - .github/workflows/p011c-api.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/global-transcript-search
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: node scripts/apply-p011c-api.mjs
+      - name: Verify and commit
+        shell: bash
+        run: |
+          grep -F 'transcript export is local-only' server/index.ts
+          grep -F 'exact transcript navigation is local-only' server/index.ts
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/index.ts
+          git commit -m "feat: expose local transcript navigation and export"
+          git push origin HEAD:feat/global-transcript-search
