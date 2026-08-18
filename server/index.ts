@@ -628,8 +628,9 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
     selectedInstanceId: selection.instanceId,
     selectedModel: selection.model,
     sessionModelSwitch: instance.adapter.capabilities.sessionModelSwitch,
-    lastDispatchedInstanceId: previousSelection?.instanceId,
-    lastDispatchedModel: previousSelection?.model,
+    sessionInvalidated: previousSelection?.state === "invalidated",
+    lastDispatchedInstanceId: previousSelection?.state === "dispatched" ? previousSelection.instanceId : undefined,
+    lastDispatchedModel: previousSelection?.state === "dispatched" ? previousSelection.model : undefined,
     resumeCursors: bot.resumeCursors,
     transcript,
   });
@@ -772,18 +773,12 @@ function configStatus() {
 /** Rebuild the provider fleet after a config change so new keys take
  * effect without a server restart (kills any in-flight turns). */
 async function reloadProviders() {
+  // Persist the distrust marker before touching the current fleet. If this
+  // owner-local write fails, leave the live providers intact rather than
+  // creating a restart window where an old cursor could be trusted again.
+  sessionFreshness.invalidate(store.bots.map((bot) => bot.threadId));
   bus.detachAll();
   await registry.disposeAll();
-  // The provider fleet identity/configuration changed. Persisted native cursors
-  // may still exist on disk/provider side, but we deliberately stop trusting
-  // them until canonical history has rebuilt a fresh selected session.
-  sessionFreshness.invalidateAll();
-  for (const bot of store.bots) bot.resumeCursors = {};
-  try {
-    for (const bot of store.bots) store.patchBot(bot.id, { resumeCursors: {} });
-  } catch (error) {
-    console.error("could not persist provider-session invalidation", error);
-  }
   await registry.load(instanceConfigs(cfg));
   bus.attach(registry.instances());
   // disposeAll terminates old turns after the bus is detached, so their

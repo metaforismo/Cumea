@@ -51,6 +51,17 @@ describe("turn context freshness", () => {
     });
   });
 
+  it("rebuilds after an explicit provider-fleet invalidation even when one old cursor remains", () => {
+    expect(decide({
+      sessionInvalidated: true,
+      resumeCursors: { claude: "old-session" },
+    })).toMatchObject({
+      resumeCursor: undefined,
+      rebuildContext: true,
+      reason: "provider-reloaded",
+    });
+  });
+
   it("rebuilds A to B to A instead of trusting A's stale cursor", () => {
     expect(
       decide({
