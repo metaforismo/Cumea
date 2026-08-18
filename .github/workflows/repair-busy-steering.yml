@@ -1,4 +1,4 @@
-name: Repair busy steering transform
+name: Apply busy steering v2
 
 on:
   pull_request:
@@ -20,16 +20,15 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-      - name: Repair and syntax-check transform
-        run: |
-          node scripts/repair-busy-steering-transform.mjs
-          node --check scripts/apply-busy-steering.mjs
+      - name: Syntax-check transform
+        run: node --check scripts/apply-busy-steering-v2.mjs
       - name: Apply product integration
-        run: node scripts/apply-busy-steering.mjs
-      - name: Remove all one-shot machinery and restore normal CI
+        run: node scripts/apply-busy-steering-v2.mjs
+      - name: Commit product-only diff
         run: |
           rm -f \
             scripts/apply-busy-steering.mjs \
+            scripts/apply-busy-steering-v2.mjs \
             scripts/repair-busy-steering-transform.mjs \
             .github/workflows/repair-busy-steering.yml
           git checkout origin/main -- .github/workflows/ci.yml
