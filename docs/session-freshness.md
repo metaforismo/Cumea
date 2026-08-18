@@ -1,6 +1,6 @@
 # Engine and native-session freshness
 
-Cumea can route one conversation through different provider instances over time. A provider-native resume cursor is useful only while the native session still represents the latest canonical conversation.
+Cumea can route one conversation through different provider instances over time. A provider-native resume cursor is useful only while the native session still represents the latest **successfully completed** canonical conversation.
 
 A cursor is therefore **not** trusted merely because one exists in bot metadata.
 
@@ -18,7 +18,7 @@ The same problem exists after:
 
 - provider-fleet/config reload;
 - a model change on an adapter that cannot switch models inside one native session;
-- a crash after dispatch started but before the replacement native session announced `session.started`;
+- a crash or failed turn after dispatch started but before that turn completed successfully;
 - missing or ambiguous legacy cursor state.
 
 ## Private freshness state
@@ -27,27 +27,33 @@ Cumea keeps a small owner-local `session-freshness.json` beside the harness data
 
 Each thread is one of:
 
-- `dispatched` — a matching `session.started` confirmed the selected instance/model;
-- `pending` — dispatch began, but no matching native session has been confirmed yet;
+- `dispatched` — the matching provider instance completed its dispatched turn successfully;
+- `pending` — a turn was prepared/dispatched, but successful completion has not been durably confirmed;
 - `invalidated` — the provider fleet was reloaded and old native sessions must not be trusted.
 
 The file contains no transcript text, provider credentials, prompts, or native protocol payloads.
 
 ### Dispatch ordering
 
-For every turn:
+Cumea captures the previously trusted selection before changing freshness state. For every turn the ordering is:
 
 ```text
-canonical user message persisted
-→ decide resume vs rebuild from canonical history
+capture previous freshness / choose the selected instance+model
 → persist freshness = pending
+→ persist the new canonical user message
+→ build bounded prior context excluding that new message
+→ decide resume vs rebuild using the captured previous freshness
 → adapter.sendTurn(...)
-→ provider emits session.started
-→ persist provider resume cursor
+→ session.started may persist the provider's new resume cursor
+→ turn.completed(ok=true)
 → confirm freshness = dispatched
 ```
 
-This ordering closes the crash window between handing work to a provider and receiving its new native session id. If the process dies while freshness remains `pending`, the next turn rebuilds from canonical history even if an older cursor still exists.
+`session.started` is deliberately **not** the confirmation point. Some native runtimes announce a session before the current user turn has been fully incorporated. A cursor can therefore be stored on `session.started`, but it remains untrusted while freshness is `pending`.
+
+If the process dies, the provider exits, or the turn fails anywhere after `pending` was persisted and before successful completion, the next turn rebuilds from canonical history even if an older or newly announced cursor remains in bot metadata.
+
+Writing `pending` happens before the new user message is appended. If that small owner-local freshness write fails, the turn fails closed before the new message is committed rather than entering a state whose native-session trust cannot be represented durably.
 
 Provider reload invalidation is persisted **before** the old fleet is detached/disposed. If that private owner-local write fails, reload fails closed and leaves the current provider fleet intact.
 
@@ -57,9 +63,11 @@ A native session is resumed only when:
 
 1. the thread has prior user history;
 2. freshness is `dispatched`;
-3. the selected provider instance is still the last dispatched instance;
+3. the selected provider instance is still the last successfully dispatched instance;
 4. the selected native cursor exists;
 5. if the adapter reports `sessionModelSwitch: unsupported`, the selected model is unchanged.
+
+`pending` always rebuilds with reason `dispatch-interrupted`; `invalidated` always rebuilds with reason `provider-reloaded`.
 
 Otherwise Cumea starts a fresh native session and rebuilds bounded context from canonical folded transcript history.
 
@@ -85,8 +93,11 @@ The key-billed Grok API driver is transcript-replay rather than native-session c
 
 - missing/corrupt freshness metadata is treated as unknown and rebuilds ambiguous state;
 - a dispatch that fails after `pending` was persisted remains pending, causing a safe rebuild next time;
-- a `session.started` from a different instance cannot confirm another instance's pending record;
-- failure to persist `session.started` confirmation leaves the thread pending, which is slower but safe;
+- `session.started` records a cursor but cannot make a pending thread fresh by itself;
+- only a successful `turn.completed` from the matching provider instance can confirm the pending record;
+- a completion from another instance cannot confirm the pending selection;
+- failure to persist completion confirmation leaves the thread pending, which is slower but safe;
+- provider reload writes `invalidated` before replacing the fleet;
 - bot deletion removes the private freshness record after the user-visible deletion transaction succeeds.
 
 ## Scope
