@@ -13,11 +13,17 @@ export interface DispatchedSelection {
   model: string;
 }
 
+export interface PendingSelection {
+  state: "pending";
+  instanceId: string;
+  model: string;
+}
+
 export interface InvalidatedSelection {
   state: "invalidated";
 }
 
-export type SessionFreshnessRecord = DispatchedSelection | InvalidatedSelection;
+export type SessionFreshnessRecord = DispatchedSelection | PendingSelection | InvalidatedSelection;
 
 interface Document {
   schema: typeof SCHEMA;
@@ -53,11 +59,15 @@ function parseDocument(value: unknown): Map<string, SessionFreshnessRecord> {
       continue;
     }
     if (
-      candidate.state !== "dispatched" ||
+      (candidate.state !== "dispatched" && candidate.state !== "pending") ||
       !validId(candidate.instanceId) ||
       !validModel(candidate.model)
     ) continue;
-    out.set(threadId, { state: "dispatched", instanceId: candidate.instanceId, model: candidate.model });
+    out.set(threadId, {
+      state: candidate.state,
+      instanceId: candidate.instanceId,
+      model: candidate.model,
+    });
   }
   return out;
 }
@@ -86,13 +96,31 @@ export class SessionFreshnessStore {
     return value ? { ...value } : null;
   }
 
-  mark(threadId: string, selection: Omit<DispatchedSelection, "state">): void {
-    if (!validId(threadId) || !validId(selection.instanceId) || !validModel(selection.model)) {
-      throw new Error("invalid session freshness selection");
-    }
-    this.records.set(threadId, { state: "dispatched", ...selection });
+  /** Persist before handing a turn to a native provider. If the process dies
+   * before session.started confirms the new/resumed session, a later launch
+   * sees `pending` and rebuilds from canonical history instead of trusting an
+   * older cursor left in bots.json. */
+  begin(threadId: string, selection: { instanceId: string; model: string }): void {
+    this.assertSelection(threadId, selection);
+    this.records.set(threadId, { state: "pending", ...selection });
     this.trim();
     this.save();
+  }
+
+  /** Confirm only the instance that actually announced session.started. The
+   * selected model comes from the pending dispatch record so a settings edit
+   * during the in-flight turn cannot relabel that session. */
+  confirm(threadId: string, instanceId: string): boolean {
+    if (!validId(threadId) || !validId(instanceId)) return false;
+    const pending = this.records.get(threadId);
+    if (!pending || pending.state !== "pending" || pending.instanceId !== instanceId) return false;
+    this.records.set(threadId, {
+      state: "dispatched",
+      instanceId: pending.instanceId,
+      model: pending.model,
+    });
+    this.save();
+    return true;
   }
 
   /** Persist invalidation before replacing the provider fleet. Old native
@@ -110,6 +138,12 @@ export class SessionFreshnessStore {
   delete(threadId: string): void {
     if (!this.records.delete(threadId)) return;
     this.save();
+  }
+
+  private assertSelection(threadId: string, selection: { instanceId: string; model: string }) {
+    if (!validId(threadId) || !validId(selection.instanceId) || !validModel(selection.model)) {
+      throw new Error("invalid session freshness selection");
+    }
   }
 
   private trim() {
