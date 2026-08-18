@@ -25,3 +25,5 @@ for (const needle of [
   if (!source.includes(needle)) throw new Error(`missing invariant ${needle}`);
 }
 writeFileSync(path, source);
+
+// Trigger commit: workflow already exists on the branch.
