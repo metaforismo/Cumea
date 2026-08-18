@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -52,13 +52,14 @@ async function reserveLoopbackPort(): Promise<number> {
   return port;
 }
 
-async function startHarness(options: { remote?: boolean } = {}): Promise<{
+async function startHarness(options: { remote?: boolean; dataDir?: string } = {}): Promise<{
   child: HarnessChild;
   port: number;
+  dataDir: string;
   remotePort?: number;
 }> {
-  const dataDir = await mkdtemp(path.join(os.tmpdir(), "cumea-search-harness-"));
-  directories.add(dataDir);
+  const dataDir = options.dataDir ?? await mkdtemp(path.join(os.tmpdir(), "cumea-search-harness-"));
+  if (!options.dataDir) directories.add(dataDir);
   const remotePort = options.remote ? await reserveLoopbackPort() : undefined;
   const child = spawn(process.execPath, ["server/index.ts"], {
     cwd: process.cwd(),
@@ -107,7 +108,7 @@ async function startHarness(options: { remote?: boolean } = {}): Promise<{
     );
     timer.unref?.();
   });
-  return { child, port, ...(remotePort ? { remotePort } : {}) };
+  return { child, port, dataDir, ...(remotePort ? { remotePort } : {}) };
 }
 
 async function json(port: number, route: string, init?: RequestInit) {
@@ -148,6 +149,42 @@ describe("local transcript search integration", () => {
     const afterDelete = await json(port, "/api/search/messages?q=nice%20to%20meet&limit=10");
     expect(afterDelete.response.status).toBe(200);
     expect((afterDelete.body as any).hits.some((hit: { botId?: string }) => hit.botId === botId)).toBe(false);
+  });
+
+  it("restores search and canonical bytes when a cache-cold HTTP deletion cannot commit bot metadata", async () => {
+    const first = await startHarness();
+    const created = await json(first.port, "/api/bots", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Cold rollback" }),
+    });
+    expect(created.response.status).toBe(201);
+    const botId = String((created.body as any).bot.id);
+    const threadId = String((created.body as any).bot.threadId);
+    await stop(first.child);
+
+    // Restart from the same profile. seedLegacy reads canonical JSON directly,
+    // so the Store's in-memory transcript map is still cold when DELETE starts.
+    const restarted = await startHarness({ dataDir: first.dataDir });
+    const botsFile = path.join(first.dataDir, "bots.json");
+    const botsBackup = path.join(first.dataDir, "bots.json.rollback-test");
+    await rename(botsFile, botsBackup);
+    await mkdir(botsFile);
+
+    const failed = await json(restarted.port, `/api/bots/${botId}`, {
+      method: "DELETE",
+      headers: { "x-cumea-operation-id": "cold-http-rollback" },
+    });
+    expect(failed.response.status).toBe(500);
+
+    const found = await json(restarted.port, "/api/search/messages?q=nice%20to%20meet&limit=20");
+    expect((found.body as any).hits).toEqual(
+      expect.arrayContaining([expect.objectContaining({ botId, botName: "Cold rollback" })]),
+    );
+    await expect(access(path.join(first.dataDir, `messages-${threadId}.json`))).resolves.toBeUndefined();
+
+    await rm(botsFile, { recursive: true, force: true });
+    await rename(botsBackup, botsFile);
   });
 
   it("rejects unbounded local queries", async () => {
