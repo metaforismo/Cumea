@@ -883,20 +883,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           );
           break;
         case "select": {
-          const bot = stateRef.current.bots.find((b) => b.id === action.id);
+          const current = stateRef.current;
+          const bot = current.bots.find((b) => b.id === action.id);
+          const returningFromSearch = current.searchFocus?.botId === action.id;
           if (bot?.unread) {
             api(`/api/bots/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
           }
           if (
             bot &&
-            !loadedThreadsRef.current.has(bot.threadId) &&
+            (returningFromSearch || !loadedThreadsRef.current.has(bot.threadId)) &&
             !loadingThreadsRef.current.has(bot.threadId)
           ) {
             loadingThreadsRef.current.add(bot.threadId);
             api(`/api/bots/${bot.id}/messages?limit=80`)
               .then(({ messages }) => {
                 loadedThreadsRef.current.add(bot.threadId);
-                rawDispatch({ type: "messagesHydrated", threadId: bot.threadId, messages });
+                rawDispatch(returningFromSearch
+                  ? { type: "latestMessages", threadId: bot.threadId, messages }
+                  : { type: "messagesHydrated", threadId: bot.threadId, messages });
               })
               .catch(showError)
               .finally(() => loadingThreadsRef.current.delete(bot.threadId));
