@@ -38,6 +38,7 @@ interface RawMessage {
   attachments?: Array<{ id: string; name: string; mime: string; size: number }>;
   handoff?: { prompt?: string; reply?: string; status?: string };
   tool?: { name?: string; ok?: boolean };
+  delivery?: "queued" | "dispatching" | "failed";
   at: number;
 }
 
@@ -241,7 +242,7 @@ function mapMessage(agentId: string, message: RawMessage): ChatMessage {
           : "text",
     text: messageText(message),
     createdAt: message.at,
-    status: message.tool?.ok === false ? "error" : "done",
+    status: message.delivery === "queued" ? "queued" : message.delivery === "dispatching" ? "sending" : message.delivery === "failed" || message.tool?.ok === false ? "error" : "done",
     attachments: message.attachments,
   };
 }
@@ -581,11 +582,13 @@ export class HostClient {
     };
   }
 
-  async sendMessage(agentId: string, text: string, attachmentIds: string[] = []): Promise<void> {
-    await this.request(`/api/bots/${encodeURIComponent(agentId)}/messages`, {
+  async sendMessage(agentId: string, text: string, attachmentIds: string[] = []): Promise<{ queued: boolean; message: ChatMessage | null }> {
+    const body = await this.request(`/api/bots/${encodeURIComponent(agentId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ text, attachmentIds }),
     });
+    const raw = rawMessage(body.message);
+    return { queued: body.queued === true, message: raw ? mapMessage(agentId, raw) : null };
   }
 
   async createAgent(name: string, title: string): Promise<AgentSummary> {

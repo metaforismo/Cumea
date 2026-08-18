@@ -109,7 +109,7 @@ export function Composer({ bot }: { bot: Bot }) {
   }, [text]);
 
   const send = async () => {
-    if ((!text.trim() && !attachments.length) || bot.busy || uploading || sending) return;
+    if ((!text.trim() && !attachments.length) || uploading || sending) return;
     const targetBotId = bot.id;
     const generation = operationGenerationRef.current;
     const draftText = text;
@@ -347,7 +347,7 @@ export function Composer({ bot }: { bot: Bot }) {
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
-          disabled={uploading || sending || attachments.length >= 10 || bot.busy}
+          disabled={uploading || sending || attachments.length >= 10}
           className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
           title="Attach files (25 MB each)"
           aria-label="Attach files"
@@ -404,7 +404,7 @@ export function Composer({ bot }: { bot: Bot }) {
           disabled={uploading || sending}
           aria-label={`Message ${bot.name}`}
           placeholder={
-            recording ? "Listening…" : bot.busy ? `${bot.name} is working…` : `Message ${bot.name}`
+            recording ? "Listening…" : bot.busy ? `Steer ${bot.name} after this turn…` : `Message ${bot.name}`
           }
           className="max-h-40 min-h-6 w-full resize-none overflow-y-auto bg-transparent py-0.5 text-[15px] leading-5 text-ink placeholder:text-ink-secondary focus:outline-none"
         />
@@ -418,18 +418,19 @@ export function Composer({ bot }: { bot: Bot }) {
           >
             <Square size={14} className="fill-current" />
           </button>
-        ) : hasPayload ? (
+        ) : null}
+        {hasPayload ? (
           <button
             type="button"
             onClick={() => void send()}
             disabled={uploading || sending}
             className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink text-app transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
-            title={sending ? "Sending…" : "Send"}
-            aria-label={sending ? "Sending message" : `Send message to ${bot.name}`}
+            title={sending ? "Sending…" : bot.busy ? "Queue steering after the current turn" : "Send"}
+            aria-label={sending ? "Sending message" : bot.busy ? `Queue steering for ${bot.name}` : `Send message to ${bot.name}`}
           >
             {sending ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={17} strokeWidth={2.4} />}
           </button>
-        ) : (
+        ) : !bot.busy ? (
           <button
             type="button"
             onClick={toggleMic}
@@ -444,7 +445,7 @@ export function Composer({ bot }: { bot: Bot }) {
           >
             <Mic size={18} />
           </button>
-        )}
+        ) : null}
         </div>
       </div>
     </div>

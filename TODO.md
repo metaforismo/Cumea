@@ -159,7 +159,7 @@ should not bypass the release, security, persistence, or measurement foundations
   - [ ] P0.12a — Add activity-based stall detection with waiting-on-human exemptions, honest working /
     waiting / no-signal / dead projections, bounded repeated-identical tool/effect detection, and visible
     recovery through Work / Needs You rather than silently killing legitimate long tasks.
-  - [ ] P0.12b — Persist explicit user messages sent while a bot is busy, mark them visibly queued, bound
+  - [x] P0.12b — Persist explicit user messages sent while a bot is busy, mark them visibly queued, bound
     count/bytes, and drain/coalesce them into one attended follow-up turn on settlement with explicit
     stop/restart semantics. Do not apply this queue implicitly to routines or peer fan-out.
   - [x] P0.12c — Add dispatch-based engine/session freshness. Record which provider instance last ran the
@@ -276,3 +276,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-18 | Competitive audit refresh | Re-pinned Cumea `4b897646`, Rakazo `9622c388`, and OpenMausBot `e7d71f4b`; promoted raw diagnostics, draft-#9 extraction, app-wide accessibility, session freshness, busy steering, package spawn closure, connector continuation, mobile discovery/notifications, provider onboarding, and bounded subagents into explicit gates without weakening the local/privacy model. |
 | 2026-08-18 | P1.11a | Added a desktop-local bounded Runtime inspector over existing normalized and secret-redacted native thread logs, with Events/Raw lenses, payload clipping, torn-line tolerance, real-harness local/no-store evidence, authenticated mobile denial, and right-slot UI integration. |
 | 2026-08-18 | P0.12c | Added dispatch-based native-session freshness with private per-thread pending/dispatched/invalidated state, A→B→A and unsupported-model rebuilds, provider-reload invalidation, bounded canonical context, shared native cursor refusal, successful-turn confirmation, and fake-Claude rebuild evidence. |
+| 2026-08-19 | P0.12b | Added bounded attended busy-user steering with canonical queued/dispatching/failed delivery state, one-follow-up coalescing, atomic batch claims, at-most-once crash/reload behavior, desktop/mobile Stop+Send controls, and real-harness recovery/no-duplication evidence. |

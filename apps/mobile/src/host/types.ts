@@ -40,7 +40,7 @@ export interface ChatMessage {
   kind: "text" | "activity" | "approval" | "handoff";
   text: string;
   createdAt: number;
-  status?: "sending" | "streaming" | "done" | "error";
+  status?: "sending" | "queued" | "streaming" | "done" | "error";
   attachments?: ChatAttachment[];
   clientMessageId?: string;
 }

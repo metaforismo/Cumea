@@ -36,7 +36,8 @@ visible team:
   reduced-motion behavior;
 - an agent-first Expo companion for pairing, search, chat, stop, approvals, and routine status;
 - durable tasks, runs, tool steps, handoffs, artifacts, transcripts, configuration, and event logs;
-- a desktop-local Runtime inspector with bounded Events and Raw provider diagnostics for the active agent.
+- a desktop-local Runtime inspector with bounded Events and Raw provider diagnostics for the active agent;
+- attended busy-user steering: send additional direction while an agent is working, with a bounded durable queue and one coalesced follow-up turn.
 
 The product name comes from the Sibyl of Cumae: one interface that gives a clear voice to a council
 of agents.
@@ -206,6 +207,8 @@ still represents the latest successful turn. Provider reloads, A→B→A routing
 unsupported in-session model changes start a new native session with bounded canonical transcript context.
 See [engine/session freshness](docs/session-freshness.md).
 
+While an agent is already working, desktop and paired mobile keep the composer usable. Explicit user messages are persisted immediately as bounded **queued steering**, then coalesced into one ordinary attended follow-up when the current turn settles. Cumea atomically claims a steering batch as `dispatching` before external provider work; an ambiguous crash/reload never guesses and silently replays that batch. Routines, retries, and peer fan-out retain the one-turn guard. See [busy-user steering](docs/busy-steering.md).
+
 “Teach as routine” currently captures a completed bot task and its prompt; it does not yet record a
 human clicking through an arbitrary desktop workflow. Scheduled routines run while the Cumea
 harness is running. Laptop-off execution therefore works only when that harness and its configured
@@ -242,6 +245,7 @@ Preview.
 | `server/message-search-index.ts` | owner-local derived SQLite/WAL transcript search projection with legacy-file fingerprints and canonical-revision reconciliation |
 | `server/turn-context.ts` | bounded canonical context rebuild and native-session resume decision |
 | `server/session-freshness.ts` | private owner-local per-thread pending/dispatched/invalidated provider-session state |
+| `server/busy-steering.ts` | bounded attended steering queue selection, capacity checks, and deterministic coalescing |
 | `server/transcript-store.ts` | versioned canonical SQLite/WAL transcript database, verified legacy import, revisions, deletion staging, and local backup primitive |
 | `server/contracts.ts` | provider driver and canonical event contracts |
 | `server/drivers/` | Claude, Codex, Grok, Gemini, computer, and peer-agent adapters |

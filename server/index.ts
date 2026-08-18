@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { buildDesktopBootstrap } from "./bootstrap.ts";
+import { assertBusySteeringCapacity, coalesceBusySteering, queuedSteering } from "./busy-steering.ts";
 import {
   localHostAllowed,
   localOriginAllowed,
@@ -493,9 +494,20 @@ bus.subscribe((event: RuntimeEvent) => {
         activeRunByThread.delete(event.threadId);
         broadcastWorkspace();
       }
+      const steeringMessageIds = activeSteeringByThread.get(event.threadId);
+      if (steeringMessageIds?.length) {
+        try {
+          patchSteeringDelivery(event.threadId, steeringMessageIds);
+        } catch (error) {
+          console.error("settled steering delivery state could not be persisted", error);
+        } finally {
+          activeSteeringByThread.delete(event.threadId);
+        }
+      }
       store.patchBot(bot.id, { busy: false, unread: true });
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
       clearThreadEventState(event.threadId);
+      scheduleSteeringDrain(bot.id);
       break;
     }
   }
@@ -584,8 +596,86 @@ interface TurnOptions {
   taskTitle?: string;
   attachments?: AttachmentRecord[];
   track?: boolean;
+  /** Existing queued user rows consumed by this single attended follow-up. */
+  existingUserMessageIds?: string[];
+  onDispatchFailed?: (error: unknown) => void;
 }
 
+const steeringDrainInFlight = new Set<string>();
+const activeSteeringByThread = new Map<string, string[]>();
+
+function patchSteeringDelivery(threadId: string, messageIds: readonly string[], delivery?: "queued" | "dispatching" | "failed") {
+  const messages = store.patchMessageDeliveryBatch(threadId, messageIds, delivery);
+  for (const message of messages) broadcast({ kind: "message.patch", threadId, message });
+}
+
+function markSteeringFailed(
+  bot: NonNullable<ReturnType<typeof store.bot>>,
+  messageIds: readonly string[],
+  error: unknown,
+  appendActivity: boolean,
+) {
+  patchSteeringDelivery(bot.threadId, messageIds, "failed");
+  if (!appendActivity) return;
+  const detail = error instanceof Error ? error.message : String(error);
+  const activity = store.appendMessage(bot.threadId, {
+    role: "bot",
+    kind: "activity",
+    tool: { name: "queued steering failed: " + detail.slice(0, 140), ok: false },
+  });
+  broadcast({ kind: "message", threadId: bot.threadId, message: activity });
+}
+
+function queueBusySteering(
+  bot: NonNullable<ReturnType<typeof store.bot>>,
+  text: string,
+  attachments: AttachmentRecord[],
+) {
+  const current = queuedSteering(store.messagesFor(bot.threadId));
+  assertBusySteeringCapacity({ current, text, attachments });
+  const message = store.appendMessage(bot.threadId, {
+    role: "user",
+    kind: "text",
+    text,
+    delivery: "queued",
+    ...(attachments.length ? { attachments: attachments.map(publicAttachment) } : {}),
+  });
+  broadcast({ kind: "message", threadId: bot.threadId, message });
+  return message;
+}
+
+function scheduleSteeringDrain(botId: string) {
+  queueMicrotask(() => void drainBusySteering(botId));
+}
+
+async function drainBusySteering(botId: string) {
+  if (steeringDrainInFlight.has(botId)) return;
+  const bot = store.bot(botId);
+  if (!bot || bot.busy) return;
+  const group = coalesceBusySteering(queuedSteering(store.messagesFor(bot.threadId)));
+  if (!group) return;
+
+  steeringDrainInFlight.add(botId);
+  try {
+    const attachments = workspace.attachmentsFor(bot.id, group.attachmentIds);
+    patchSteeringDelivery(bot.threadId, group.messageIds, "dispatching");
+    activeSteeringByThread.set(bot.threadId, [...group.messageIds]);
+    await startTurn(bot.id, group.text, {
+      attachments,
+      existingUserMessageIds: group.messageIds,
+      track: true,
+      onDispatchFailed: (error) => {
+        markSteeringFailed(bot, group.messageIds, error, false);
+        activeSteeringByThread.delete(bot.threadId);
+      },
+    });
+  } catch (error) {
+    markSteeringFailed(bot, group.messageIds, error, true);
+    activeSteeringByThread.delete(bot.threadId);
+  } finally {
+    steeringDrainInFlight.delete(botId);
+  }
+}
 async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
@@ -593,6 +683,16 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
   const commsDepth = opts.commsDepth ?? 0;
   const attachments = opts.attachments ?? [];
   const selection = { ...bot.modelSelection };
+  const existingUserMessageIds = [...new Set(opts.existingUserMessageIds ?? [])];
+  if (existingUserMessageIds.length) {
+    const byId = new Map(store.messagesFor(bot.threadId).map((message) => [message.id, message]));
+    for (const messageId of existingUserMessageIds) {
+      const message = byId.get(messageId);
+      if (!message || message.role !== "user" || message.kind !== "text" || message.delivery !== "dispatching") {
+        throw Object.assign(new Error("queued steering state changed before dispatch"), { status: 409 });
+      }
+    }
+  }
 
   const task = opts.track === false
     ? null
@@ -618,13 +718,15 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
   const previousSelection = sessionFreshness.get(bot.threadId);
   sessionFreshness.begin(bot.threadId, selection);
 
-  const userMessage = store.appendMessage(bot.threadId, {
-    role: "user",
-    kind: "text",
-    text,
-    ...(attachments.length ? { attachments: attachments.map(publicAttachment) } : {}),
-  });
-  broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
+  const userMessage = existingUserMessageIds.length
+    ? null
+    : store.appendMessage(bot.threadId, {
+        role: "user",
+        kind: "text",
+        text,
+        ...(attachments.length ? { attachments: attachments.map(publicAttachment) } : {}),
+      });
+  if (userMessage) broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
 
   let runId: string | undefined;
   if (task) {
@@ -642,7 +744,10 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
   }
   if (runId) activeRunByThread.set(bot.threadId, runId);
 
-  const transcript = boundedTurnTranscript(store.messagesFor(bot.threadId), userMessage.id);
+  const transcript = boundedTurnTranscript(
+    store.messagesFor(bot.threadId),
+    existingUserMessageIds.length ? existingUserMessageIds : userMessage?.id,
+  );
   const turnContext = decideTurnContext({
     selectedInstanceId: selection.instanceId,
     selectedModel: selection.model,
@@ -755,6 +860,7 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
       }
       if (integrations.computer) startScreenPoller(bot.id);
     } catch (e) {
+      try { opts.onDispatchFailed?.(e); } catch (callbackError) { console.error("steering failure callback failed", callbackError); }
       const message = e instanceof Error ? e.message : String(e);
       const failure = store.appendMessage(bot.threadId, {
         role: "bot",
@@ -769,8 +875,10 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
       }
       store.patchBot(bot.id, { busy: false });
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
+      scheduleSteeringDrain(bot.id);
     }
   })();
+  return userMessage;
 }
 
 // ── config hot-reload ─────────────────────────────────────────────────
@@ -798,15 +906,23 @@ async function reloadProviders() {
   // disposeAll terminates old turns after the bus is detached, so their
   // completion events cannot clear persisted UI state for us.
   for (const bot of store.bots) {
-    if (!bot.busy) continue;
-    store.patchBot(bot.id, { busy: false });
-    const runId = activeRunByThread.get(bot.threadId);
-    if (runId) {
-      workspace.completeRun(runId, false, "Providers reloaded while the task was running.");
-      activeRunByThread.delete(bot.threadId);
+    const steeringMessageIds = activeSteeringByThread.get(bot.threadId);
+    if (steeringMessageIds?.length) {
+      try { markSteeringFailed(bot, steeringMessageIds, new Error("provider reload interrupted steering dispatch"), false); }
+      catch (error) { console.error("could not mark interrupted steering after provider reload", error); }
+      activeSteeringByThread.delete(bot.threadId);
     }
-    clearThreadEventState(bot.threadId);
-    broadcast({ kind: "bot", bot: store.bot(bot.id) });
+    if (bot.busy) {
+      store.patchBot(bot.id, { busy: false });
+      const runId = activeRunByThread.get(bot.threadId);
+      if (runId) {
+        workspace.completeRun(runId, false, "Providers reloaded while the task was running.");
+        activeRunByThread.delete(bot.threadId);
+      }
+      clearThreadEventState(bot.threadId);
+      broadcast({ kind: "bot", bot: store.bot(bot.id) });
+    }
+    scheduleSteeringDrain(bot.id);
   }
   broadcastWorkspace();
 }
@@ -858,6 +974,34 @@ const routineTimer = setInterval(() => void dispatchDueRoutines(), 30_000);
 routineTimer.unref();
 const initialRoutineTimer = setTimeout(() => void dispatchDueRoutines(), 1_000);
 initialRoutineTimer.unref();
+
+const steeringRecoveryTimer = setTimeout(() => {
+  for (const bot of store.bots) {
+    const messages = store.messagesFor(bot.threadId);
+    const interrupted = messages.filter((message) => message.role === "user" && message.delivery === "dispatching");
+    if (interrupted.length) {
+      try {
+        patchSteeringDelivery(bot.threadId, interrupted.map((message) => message.id), "failed");
+        const activity = store.appendMessage(bot.threadId, {
+          role: "bot",
+          kind: "activity",
+          tool: { name: "steering dispatch was interrupted by restart; retry if still needed", ok: false },
+        });
+        broadcast({ kind: "message", threadId: bot.threadId, message: activity });
+      } catch (error) {
+        console.error("could not reconcile interrupted steering after restart", error);
+      }
+    }
+    if (!queuedSteering(store.messagesFor(bot.threadId)).length) continue;
+    const instance = registry.get(bot.modelSelection.instanceId);
+    if (bot.busy && !instance?.adapter.hasSession(bot.threadId)) {
+      store.patchBot(bot.id, { busy: false });
+      broadcast({ kind: "bot", bot: store.bot(bot.id) });
+    }
+    scheduleSteeringDrain(bot.id);
+  }
+}, 1_200);
+steeringRecoveryTimer.unref();
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -1555,6 +1699,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         activeRunByThread.delete(bot.threadId);
       }
       clearThreadEventState(bot.threadId);
+      activeSteeringByThread.delete(bot.threadId);
       // Snapshot canonical transcript state while its JSON file is still at
       // the live path. Existing bots may have a cold in-memory transcript
       // cache after restart; once stageFilesForDeletion renames that file, a
@@ -1708,13 +1853,23 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       });
     }
     if (m && method === "POST") {
+      const bot = store.bot(m[1]);
+      if (!bot || (surface === "remote" && bot.hidden)) return json(res, 404, { error: "no such bot" });
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
       const attachmentIds = Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String).slice(0, 10) : [];
       const attachments = workspace.attachmentsFor(m[1], attachmentIds);
-      await startTurn(m[1], text, { attachments, track: body.track !== false });
-      return json(res, 202, { ok: true });
+      const alreadyQueued = queuedSteering(store.messagesFor(bot.threadId)).length > 0;
+      if (bot.busy || alreadyQueued) {
+        const message = queueBusySteering(bot, text, attachments);
+        if (!bot.busy) scheduleSteeringDrain(bot.id);
+        const responseMessage = surface === "remote" ? publicMobileMessage(message, visibleRemoteBotIds()) : message;
+        return json(res, 202, { ok: true, queued: true, message: responseMessage });
+      }
+      const message = await startTurn(m[1], text, { attachments, track: body.track !== false });
+      const responseMessage = message && surface === "remote" ? publicMobileMessage(message, visibleRemoteBotIds()) : message;
+      return json(res, 202, { ok: true, queued: false, ...(responseMessage ? { message: responseMessage } : {}) });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer-preview$/);
     if (m && method === "GET") {
@@ -1949,6 +2104,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     clearInterval(routineTimer);
     clearTimeout(initialRoutineTimer);
+    clearTimeout(steeringRecoveryTimer);
     remoteServer?.close();
     server.close();
     store.close();

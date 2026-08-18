@@ -68,6 +68,7 @@ export interface Message {
   /** screen messages: a frame of the bot's computer (base64) */
   png?: string;
   mime?: string;
+  delivery?: "queued" | "dispatching" | "failed";
   at: number;
 }
 
@@ -729,7 +730,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     track?: boolean;
   }) => {
     try {
-      await api(`/api/bots/${input.botId}/messages`, {
+      const response = await api(`/api/bots/${input.botId}/messages`, {
         method: "POST",
         body: JSON.stringify({
           text: input.text,
@@ -737,7 +738,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           track: input.track,
         }),
       });
-      rawDispatch({ type: "previewMascotMotion", botId: input.botId, kind: "working" });
+      if (!response.queued) rawDispatch({ type: "previewMascotMotion", botId: input.botId, kind: "working" });
     } catch (error) {
       showError(error);
       throw error;

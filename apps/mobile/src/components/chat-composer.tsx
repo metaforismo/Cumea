@@ -116,33 +116,46 @@ export function ChatComposer({ agentName, working, attachmentsEnabled = true, on
             accessibilityLabel={`Message ${agentName}`}
             value={text}
             onChangeText={setText}
-            placeholder={`Ask ${agentName}`}
+            placeholder={working ? `Steer ${agentName} after this turn` : `Ask ${agentName}`}
             placeholderTextColor={theme.textSecondary}
             multiline
             maxLength={20_000}
             blurOnSubmit={false}
             style={{ flex: 1, maxHeight: 126, color: theme.text, fontSize: 16, lineHeight: 22, paddingVertical: 7 }}
           />
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel={working ? "Stop agent" : showMicrophone ? "Voice input unavailable" : canSend ? "Send message" : "Add a message before sending attachments"}
-            accessibilityHint={showMicrophone ? "Voice input is not enabled in this build" : undefined}
-            disabled={sending}
-            onPress={() => {
-              if (working) void stop();
-              else if (showMicrophone) Alert.alert("Voice input isn’t enabled yet", "Use the keyboard to message this bot.");
-              else void send();
-            }}
-            style={{ width: 36, height: 36, borderRadius: 18, opacity: working || canSend || showMicrophone ? 1 : 0.4, alignItems: "center", justifyContent: "center", backgroundColor: theme.text }}
-          >
-            {working ? (
-              <Text style={{ color: theme.background, fontSize: 16, fontWeight: "800" }}>■</Text>
-            ) : showMicrophone ? (
-              <MicrophoneGlyph />
-            ) : (
+          {working ? (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Stop agent"
+              disabled={sending}
+              onPress={() => void stop()}
+              style={{ width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: theme.cardRaised }}
+            >
+              <Text style={{ color: theme.text, fontSize: 15, fontWeight: "800" }}>■</Text>
+            </PressableScale>
+          ) : null}
+          {canSend ? (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel={working ? `Queue steering for ${agentName}` : "Send message"}
+              disabled={sending}
+              onPress={() => void send()}
+              style={{ width: 36, height: 36, borderRadius: 18, opacity: sending ? 0.55 : 1, alignItems: "center", justifyContent: "center", backgroundColor: theme.text }}
+            >
               <Text style={{ color: theme.background, fontSize: 20, fontWeight: "800" }}>↑</Text>
-            )}
-          </PressableScale>
+            </PressableScale>
+          ) : !working && showMicrophone ? (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Voice input unavailable"
+              accessibilityHint="Voice input is not enabled in this build"
+              disabled={sending}
+              onPress={() => Alert.alert("Voice input isn’t enabled yet", "Use the keyboard to message this bot.")}
+              style={{ width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: theme.text }}
+            >
+              <MicrophoneGlyph />
+            </PressableScale>
+          ) : null}
         </View>
       </View>
     </View>

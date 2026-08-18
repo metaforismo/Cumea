@@ -640,16 +640,27 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
           },
         }));
       }
-      await client.sendMessage(agentId, text, uploaded.map((attachment) => attachment.id));
-      setState((current) => ({
-        ...current,
-        messages: {
-          ...current.messages,
-          [agentId]: (current.messages[agentId] ?? []).map((message) =>
-            message.id === clientMessageId ? { ...message, status: "done" } : message,
+      const sent = await client.sendMessage(agentId, text, uploaded.map((attachment) => attachment.id));
+      setState((current) => {
+        const withoutOptimistic = (current.messages[agentId] ?? []).filter((message) => message.id !== clientMessageId);
+        const fallback = {
+          ...optimistic,
+          attachments: uploaded.length ? uploaded : optimistic.attachments,
+          status: sent.queued ? ("queued" as const) : ("done" as const),
+        };
+        return {
+          ...current,
+          messages: {
+            ...current.messages,
+            [agentId]: sent.message ? mergeMessages(withoutOptimistic, [sent.message]) : [...withoutOptimistic, fallback],
+          },
+          agents: current.agents.map((agent) =>
+            agent.id === agentId
+              ? { ...agent, presence: sent.queued ? agent.presence : ("working" as const), updatedAt: Date.now() }
+              : agent,
           ),
-        },
-      }));
+        };
+      });
     } catch (error) {
       // Cleanup is deliberately best-effort: a rollback failure must never
       // replace the upload/send error that the user can actually act on.

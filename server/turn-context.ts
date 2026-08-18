@@ -37,12 +37,20 @@ function clipUtf8(value: string, maxBytes: number): string {
 /** Keep the newest settled visible text while bounding both row count and UTF-8 bytes. */
 export function boundedTurnTranscript(
   messages: readonly Message[],
-  currentMessageId?: string,
+  excludedMessageIds?: string | readonly string[],
 ): Array<{ role: "user" | "assistant"; text: string }> {
+  const excluded = new Set(
+    typeof excludedMessageIds === "string"
+      ? [excludedMessageIds]
+      : excludedMessageIds ?? [],
+  );
   const candidates = messages
     .filter(
       (message) =>
-        message.id !== currentMessageId &&
+        !excluded.has(message.id) &&
+        message.delivery !== "queued" &&
+        message.delivery !== "dispatching" &&
+        message.delivery !== "failed" &&
         message.kind === "text" &&
         typeof message.text === "string" &&
         message.text.length > 0,

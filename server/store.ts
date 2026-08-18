@@ -127,6 +127,8 @@ export interface Message {
   /** screen messages: a frame of the bot's computer (base64 image) */
   png?: string;
   mime?: string;
+  /** Explicit attended user steering persisted while a bot is already busy. */
+  delivery?: "queued" | "dispatching" | "failed";
   at: number;
 }
 
@@ -411,6 +413,34 @@ export class Store {
     writeFileAtomic(messagesFile(threadId), JSON.stringify(list, null, 2));
     this.indexMessage(threadId, next);
     return next;
+  }
+
+  patchMessageDeliveryBatch(
+    threadId: string,
+    messageIds: readonly string[],
+    delivery?: "queued" | "dispatching" | "failed",
+  ): Message[] {
+    const uniqueIds = [...new Set(messageIds)];
+    if (!uniqueIds.length) return [];
+    const list = this.messagesFor(threadId);
+    const byId = new Map(list.map((message, index) => [message.id, { message, index }]));
+    const replacements = uniqueIds.map((messageId) => {
+      const found = byId.get(messageId);
+      if (!found) throw Object.assign(new Error(`no such transcript message ${messageId}`), { status: 404 });
+      return { index: found.index, message: { ...found.message, delivery } as Message };
+    });
+
+    if (this.transcripts) {
+      const revision = this.transcripts.replaceMessages(threadId, replacements.map((entry) => entry.message));
+      for (const entry of replacements) list[entry.index] = entry.message;
+      for (const entry of replacements) this.indexMessage(threadId, entry.message, revision);
+      return replacements.map((entry) => entry.message);
+    }
+
+    for (const entry of replacements) list[entry.index] = entry.message;
+    writeFileAtomic(messagesFile(threadId), JSON.stringify(list, null, 2));
+    for (const entry of replacements) this.indexMessage(threadId, entry.message);
+    return replacements.map((entry) => entry.message);
   }
 
   bot(id: string) {
