@@ -73,16 +73,38 @@ function botWorkspacePath(botId: string): string {
   return directory;
 }
 
+function checkedManagedDirectory(path: string, label: string): string {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    if (errno(error) === "ENOENT") throw httpError(410, label + " is unavailable");
+    throw Object.assign(new Error("could not inspect " + label), { status: 500, cause: error });
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw httpError(410, label + " is not a safe directory");
+  try {
+    return realpathSync(path);
+  } catch {
+    throw httpError(410, label + " is unavailable");
+  }
+}
+
 /** The only local working directory whose model-created files may be resolved. */
 export function botWorkspaceDirectory(botId: string): string {
-  const directory = botWorkspacePath(botId);
+  mkdirSync(BOT_WORKSPACES_DIR, { recursive: true, mode: 0o700 });
+  const root = checkedManagedDirectory(BOT_WORKSPACES_DIR, "bot workspace root");
+  const directory = resolve(root, validateBotId(botId));
+  if (!isContained(root, directory) || directory === root) throw httpError(400, "invalid bot workspace");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
+  checkedManagedDirectory(directory, "bot workspace");
   return directory;
 }
 
 /** Quarantine one exact bot workspace without following any child symlink. */
 export function stageBotWorkspaceForDeletion(botId: string): StagedFileDeletion {
-  const source = botWorkspacePath(botId);
+  const root = checkedManagedDirectory(BOT_WORKSPACES_DIR, "bot workspace root");
+  const source = resolve(root, validateBotId(botId));
+  if (!isContained(root, source) || source === root) throw httpError(400, "invalid bot workspace");
   let stat;
   try {
     stat = lstatSync(source);
@@ -196,14 +218,18 @@ function snapshotLocalFile(root: string, candidate: string, displayName: string,
 
 /** Resolve only a relative path inside one host-owned bot workspace. */
 export function readLocalBotFile(botId: string, requestedValue: unknown): ResolvedBotFile {
-  const workspace = botWorkspacePath(botId);
-  let root: string;
+  const managedRoot = checkedManagedDirectory(BOT_WORKSPACES_DIR, "bot workspace root");
+  const workspace = resolve(managedRoot, validateBotId(botId));
+  if (!isContained(managedRoot, workspace) || workspace === managedRoot) throw httpError(400, "invalid bot workspace");
   try {
-    root = realpathSync(workspace);
+    const stat = lstatSync(workspace);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw httpError(410, "bot workspace is not a safe directory");
   } catch (error) {
+    if ((error as { status?: number })?.status) throw error;
     if (errno(error) === "ENOENT") throw httpError(404, "file not found in this bot's workspace");
     throw httpError(410, "this bot's workspace is unavailable");
   }
+  const root = checkedManagedDirectory(workspace, "bot workspace");
   const requested = cleanRelativeRequestedPath(requestedValue);
   const candidate = resolve(root, requested);
   if (!isContained(root, candidate)) throw httpError(403, "file is outside this bot's workspace");
@@ -215,12 +241,7 @@ export function readStoredAttachmentFile(storedPath: string, displayName: string
   const lexicalRoot = resolve(ATTACHMENTS_DIR);
   const candidate = resolve(storedPath);
   if (!isContained(lexicalRoot, candidate)) throw httpError(403, "attachment is outside managed storage");
-  let root: string;
-  try {
-    root = realpathSync(lexicalRoot);
-  } catch {
-    throw httpError(410, "attachment storage is unavailable");
-  }
+  const root = checkedManagedDirectory(lexicalRoot, "attachment storage");
   const safeName = basename(displayName).replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 180);
   if (!safeName) throw httpError(400, "attachment name is invalid");
   return snapshotLocalFile(root, candidate, safeName, "attachment");
