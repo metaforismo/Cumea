@@ -7,6 +7,10 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Added an app-wide interaction accessibility baseline for keyboard-visible focus, branded text
+  selection, reduced-motion scrolling, and decorative panel/pop transitions. Existing semantic Mote
+  working/waiting state remains visible when animation is reduced; a real-browser acceptance journey
+  is still required before treating P0.09a as complete.
 - An opt-in packaged desktop performance runner with isolated first-run and returning profiles,
   deterministic no-provider fixtures, explicit cache treatment, multi-sample median/p95 evidence,
   bounded logs, process-tree timeouts, and versioned manifests. No benchmark result is claimed until
