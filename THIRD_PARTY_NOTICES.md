@@ -24,6 +24,31 @@ The trusted desktop pairing panel uses `qrcode.react` 4.2.0:
 The installed distribution also embeds Project Nayuki's QR Code Generator under
 the MIT License; see `licenses/qrcode-generator-MIT.txt`.
 
+## JSZip
+
+Safe local DOCX preview uses `jszip` 3.10.1 only after Cumea's own ZIP central-
+directory, entry-count, size, compression-ratio, path, active-content and XML
+preflight. Cumea then inflates only selected XML parts with additional runtime
+byte and CRC bounds.
+
+- Source: <https://github.com/Stuk/jszip>
+- Copyright (c) 2009–2016 Stuart Knightley and David Duponchel
+- License: MIT or GPLv3; Cumea distributes it under the MIT option
+- Complete MIT text: `licenses/jszip-MIT.txt`
+
+## PDF.js / pdfjs-dist
+
+Safe local PDF preview uses `pdfjs-dist` 6.2.108. The renderer fetches bytes
+from an opaque same-origin Cumea capability and renders through the bundled
+PDF.js worker. Cumea does not iframe/embed the PDF into the Chromium plugin.
+PDF loading, canvas area, image size, accessible text extraction and passwords
+remain explicitly bounded by the Cumea viewer.
+
+- Source: <https://github.com/mozilla/pdf.js>
+- Copyright: Mozilla Foundation and PDF.js contributors
+- License: Apache License 2.0
+- Complete text: `licenses/pdfjs-Apache-2.0.txt`
+
 ## @believer/react-native-markdown-display
 
 The mobile companion uses `@believer/react-native-markdown-display` 8.4.1:
