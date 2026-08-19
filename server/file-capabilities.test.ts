@@ -12,10 +12,11 @@ import {
   stageBotWorkspaceForDeletion,
 } from "./file-capabilities.ts";
 
-const ids = ["cap-safe", "cap-contained", "cap-sibling", "cap-expiry", "cap-delete"];
+const ids = ["cap-safe", "cap-contained", "cap-sibling", "cap-expiry", "cap-delete", "cap-root-swap"];
 
 afterEach(() => {
   for (const id of ids) rmSync(join(BOT_WORKSPACES_DIR, id), { recursive: true, force: true });
+  rmSync(join(DATA_DIR, "secret.md"), { force: true });
 });
 
 describe("file capability boundary", () => {
@@ -52,6 +53,17 @@ describe("file capability boundary", () => {
     expect(() => readLocalBotFile("cap-contained", "C:\\secret.md")).toThrow(/relative/i);
     symlinkSync(outside, join(workspace, "link.md"));
     expect(() => readLocalBotFile("cap-contained", "link.md")).toThrow(/regular/i);
+  });
+
+  it("fails closed when the bot workspace directory itself is replaced by a symlink", () => {
+    const sibling = botWorkspaceDirectory("cap-sibling");
+    writeFileSync(join(sibling, "other.md"), "other bot data");
+    const workspace = botWorkspaceDirectory("cap-root-swap");
+    rmSync(workspace, { recursive: true, force: true });
+    symlinkSync(sibling, workspace, "dir");
+
+    expect(() => botWorkspaceDirectory("cap-root-swap")).toThrow(/safe directory/i);
+    expect(() => readLocalBotFile("cap-root-swap", "other.md")).toThrow(/safe directory/i);
   });
 
   it("expires tokens and revokes every capability owned by a deleted bot", () => {
