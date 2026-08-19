@@ -34,6 +34,8 @@ visible team:
   navigation, bounded local transcript export, file attachments, reusable routines, and a “Needs you” inbox;
 - persistent Mote-based bot avatars with shape, palette, upload, semantic activity states, and
   reduced-motion behavior;
+- an app-wide interaction baseline for keyboard-visible focus, branded text selection, reduced-motion
+  scrolling, and decorative panel/pop transitions while semantic working/waiting state stays visible;
 - an agent-first Expo companion for pairing, search, chat, stop, approvals, and routine status;
 - durable tasks, runs, tool steps, handoffs, artifacts, transcripts, configuration, and event logs;
 - a desktop-local Runtime inspector with bounded Events and Raw provider diagnostics for the active agent;
@@ -288,7 +290,9 @@ fixed `:5199` UI and `:8799` harness pair described above.
 P0.11 and P0.12 are complete, so the immediate priorities are **draft-#9 extraction, steady-state
 renderer/thread scaling, resilient mobile completion, conversation/memory separation, package/release
 evidence, and a pluggable user-owned computer contract**. Storage, session freshness, busy steering and
-lifecycle evidence are foundations to preserve, not features to rewrite.
+lifecycle evidence are foundations to preserve, not features to rewrite. The source-level interaction
+accessibility baseline is now present, but P0.09a remains open until the exact browser journey records
+keyboard focus, selection readability, and reduced-motion behavior.
 
 The current competitive audit is pinned to Cumea `ea3d751b`, Rakazo `c3d386d8`, and OpenMausBot
 `70805c0a`. It adapts conversation reset into multi-conversation agents, hosted-memory compaction into an
