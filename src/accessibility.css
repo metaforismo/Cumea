@@ -1,0 +1,45 @@
+/* App-wide interaction baseline.
+   Component-specific motion may remain when it communicates semantic state; this layer removes
+   decorative panel/pop transitions and smooth scrolling for users who request reduced motion. */
+
+::selection {
+  background-color: color-mix(in srgb, var(--color-accent, #6ea8ff) 35%, transparent);
+  text-shadow: none;
+}
+
+:where(
+  button,
+  a[href],
+  input,
+  textarea,
+  select,
+  summary,
+  [role="button"],
+  [role="link"],
+  [role="menuitem"],
+  [role="tab"],
+  [tabindex]:not([tabindex="-1"])
+):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent, #6ea8ff) 75%, white) !important;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html,
+  html:focus-within {
+    scroll-behavior: auto !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+
+  .animate-panel-in,
+  .animate-pop-in {
+    animation: none !important;
+  }
+}
