@@ -49,12 +49,11 @@ All notable changes to Cumea are documented here. This project follows
 - Native provider continuation is now dispatch-fresh rather than cursor-presence based. A→B→A routing,
   provider reloads, interrupted dispatches and unsupported in-session model changes rebuild bounded canonical
   conversation context in a fresh native session instead of trusting stale provider state.
-- Re-audited Cumea `4b897646` against Rakazo `9622c388` and OpenMausBot `e7d71f4b`. With transcript
-  persistence/search now complete, the explicit next gates are local Runtime/Raw diagnostics, focused
-  draft-#9 extraction, steady-state renderer/thread scale, app-wide focus/reduced-motion behavior,
-  session freshness, busy-user steering, package spawn closure, trusted connector continuation,
-  mobile discovery/notifications, provider onboarding, inspectable memory, and bounded subagents.
-  Mandatory hosted identity/control-plane assumptions remain out of scope for the local default.
+- Re-audited Cumea `ea3d751b` against Rakazo `c3d386d8` and OpenMausBot `70805c0a` after P0.12.
+  Newly explicit gaps are Agent→Conversations separation, owner-local bounded history compaction,
+  steady-state typing/streaming/idle evidence, resilient mobile host-candidate rotation, BYO-VPS, and
+  fenced Team/Private computer sessions. Cumea keeps SQLite/local identity as the default and does not
+  adopt mandatory Better Auth/Postgres, hosted memory, or a Cumea-operated control plane.
 - P0.03 now keeps the stable renderer gateway while the packaged harness uses an OS-assigned private
   port. Readiness is published over a versioned exact-PID UtilityProcess message instead of HTTP
   polling/fixed fallback ports. The optional remote listener keeps an independent explicit/default
