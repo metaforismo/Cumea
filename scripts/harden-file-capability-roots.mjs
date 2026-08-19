@@ -21,14 +21,14 @@ export function botWorkspaceDirectory(botId: string): string {
   try {
     stat = lstatSync(path);
   } catch (error) {
-    if (errno(error) === "ENOENT") throw httpError(410, \`${"${label}"} is unavailable\`);
-    throw Object.assign(new Error(\`could not inspect ${"${label}"}\`), { status: 500, cause: error });
+    if (errno(error) === "ENOENT") throw httpError(410, label + " is unavailable");
+    throw Object.assign(new Error("could not inspect " + label), { status: 500, cause: error });
   }
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw httpError(410, \`${"${label}"} is not a safe directory\`);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw httpError(410, label + " is not a safe directory");
   try {
     return realpathSync(path);
   } catch {
-    throw httpError(410, \`${"${label}"} is unavailable\`);
+    throw httpError(410, label + " is unavailable");
   }
 }
 
@@ -73,15 +73,15 @@ source = replaceOnce(
   const managedRoot = checkedManagedDirectory(BOT_WORKSPACES_DIR, "bot workspace root");
   const workspace = resolve(managedRoot, validateBotId(botId));
   if (!isContained(managedRoot, workspace) || workspace === managedRoot) throw httpError(400, "invalid bot workspace");
-  let root: string;
   try {
-    root = checkedManagedDirectory(workspace, "bot workspace");
+    const stat = lstatSync(workspace);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw httpError(410, "bot workspace is not a safe directory");
   } catch (error) {
-    if ((error as { status?: number })?.status === 410 && errno((error as { cause?: unknown }).cause) === "ENOENT") {
-      throw httpError(404, "file not found in this bot's workspace");
-    }
-    throw error;
+    if ((error as { status?: number })?.status) throw error;
+    if (errno(error) === "ENOENT") throw httpError(404, "file not found in this bot's workspace");
+    throw httpError(410, "this bot's workspace is unavailable");
   }
+  const root = checkedManagedDirectory(workspace, "bot workspace");
 `,
   "workspace read root",
 );
