@@ -7,6 +7,10 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Added the P0.00a1 safe local-file capability foundation without exposing new routes yet: exact
+  per-bot workspaces, bounded regular-file snapshots, host-owned attachment reads, expiring/revocable
+  path-free capabilities, lightweight Markdown/PDF/DOCX signature classification, rollback-capable
+  workspace quarantine, and cross-platform security tests. HTTP/UI/PDF/DOCX activation remains P0.00a2.
 - Added a fail-closed packaged server runtime-closure gate. The desktop harness and every classified
   server sidecar must exist in staged `Resources/server`; reachable relative runtime imports are
   followed transitively, and source/proxy drift plus missing-entrypoint and missing-dependency cases
@@ -69,6 +73,10 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Model-cited file paths still cannot trigger renderer reads. The new local-file foundation requires
+  lexical and realpath containment inside an exact Cumea-owned directory, rejects final symlinks,
+  snapshots through a checked file descriptor, bounds file/token memory and lifetime, and exposes no
+  host path in its public capability projection. Activation remains a separate review gate.
 - Package runtime verification rejects unclassified server proxies, missing or empty declared
   entrypoints/dependencies, imports escaping the real staged server root, non-literal dynamic loading,
   and bare package imports under the current no-runtime-`node_modules` server packaging contract.
