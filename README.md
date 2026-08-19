@@ -80,6 +80,10 @@ local sample data and is not evidence that a provider task ran.
   the UI. Long-lived attachment-heavy agents may therefore reach that quota; the current recovery
   path is deleting the agent after reviewing the impact; that operation removes the agent's files
   and audit data together. Audit-aware storage management is tracked on the roadmap.
+- The safe local-file foundation treats model-cited paths as untrusted. It can snapshot only regular
+  files inside an exact Cumea-owned bot workspace or a host-owned attachment record into bounded,
+  expiring opaque capabilities; host paths are not projected. New preview/download routes and rich
+  Markdown/PDF/DOCX rendering remain disabled until P0.00a2 completes their separate activation gate.
 - The desktop harness binds to `127.0.0.1` and rejects state-changing browser requests from foreign
   origins. Remote access is a separate listener, disabled by default.
 - Optional mobile access uses a short-lived, single-use 256-bit pairing secret. Device bearer tokens
@@ -251,6 +255,7 @@ required before publishing a Developer Preview.
 | `server/pairing.ts` | expiring one-time pairing sessions, hashed device tokens, and revocation |
 | `server/mobile.ts` | allowlisted mobile bot/message projections and sanitized remote SSE events |
 | `server/workspace.ts` | durable sections, attachments, tasks, runs, artifacts, and schedules |
+| `server/file-capabilities.ts` | bounded owner-local workspace/attachment snapshots and opaque path-free read capabilities; not exposed to the renderer until P0.00a2 |
 | `server/message-search-index.ts` | owner-local derived SQLite/WAL transcript search projection with legacy-file fingerprints and canonical-revision reconciliation |
 | `server/turn-context.ts` | bounded canonical context rebuild and native-session resume decision |
 | `server/session-freshness.ts` | private owner-local per-thread pending/dispatched/invalidated provider-session state |
@@ -292,13 +297,15 @@ fixed `:5199` UI and `:8799` harness pair described above.
 
 ## Direction
 
-P0.11 and P0.12 are complete, the source-level accessibility baseline is present, and the package
-server spawn/dependency closure gate is now explicit. The immediate priorities are **draft-#9
-extraction, steady-state renderer/thread scaling, resilient mobile completion, conversation/memory
-separation, signed distribution and real-journey evidence, and a pluggable user-owned computer
-contract**. Storage, session freshness, busy steering, lifecycle and package-closure evidence are
-foundations to preserve, not features to rewrite. P0.09a remains open until the exact browser journey
-records keyboard focus, selection readability, and reduced-motion behavior.
+P0.11 and P0.12 are complete, the source-level accessibility baseline and packaged server runtime
+closure gate are present, and draft #9's safe-file work is now being extracted behind an explicit
+path-free capability boundary. P0.00a1 establishes that foundation without exposing new routes; P0.00a2
+still owns HTTP activation and inert Markdown/PDF/DOCX rendering. The immediate priorities are
+**finishing focused draft-#9 extraction, steady-state renderer/thread scaling, resilient mobile
+completion, conversation/memory separation, signed distribution and real-journey evidence, and a
+pluggable user-owned computer contract**. Storage, session freshness, busy steering, lifecycle and
+package-closure evidence are foundations to preserve, not features to rewrite. P0.09a remains open
+until the exact browser journey records keyboard focus, selection readability, and reduced-motion behavior.
 
 The current competitive audit is pinned to Cumea `ea3d751b`, Rakazo `c3d386d8`, and OpenMausBot
 `70805c0a`. It adapts conversation reset into multi-conversation agents, hosted-memory compaction into an
@@ -310,6 +317,7 @@ These changes keep Cumea's no-account local-first security model and its Grok-li
 agent-list-first mobile identity instead of replacing them with a hosted architecture.
 
 See [ROADMAP.md](ROADMAP.md) for the ordered backlog,
+[the safe local file preview security boundary](docs/file-preview-security.md),
 [the 2026-08-19 Rakazo/OpenMaus engineering audit](docs/competitive-audit-2026-08-19.md) for the latest
 `adopt / adapt / reject` decisions, [the 2026-08-18 audit](docs/competitive-audit-2026-08-18.md) for the
 previous pin, and [docs/UPSTREAM.md](docs/UPSTREAM.md) for the earlier upstream issue/PR audit.
