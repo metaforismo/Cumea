@@ -64,10 +64,10 @@ function literalRuntimeSpecifiers(source, file) {
     for (const match of source.matchAll(pattern)) specifiers.add(match[1]);
   }
 
-  if (/\bimport\s*\(\s*(?!["'])/.test(source)) {
+  if (/\bimport\s*\((?!\s*["'])/.test(source)) {
     throw new Error(`Packaged server runtime uses a non-literal dynamic import: ${file}`);
   }
-  if (/\brequire\s*\(\s*(?!["'])/.test(source)) {
+  if (/\brequire\s*\((?!\s*["'])/.test(source)) {
     throw new Error(`Packaged server runtime uses a non-literal require: ${file}`);
   }
   return [...specifiers];
