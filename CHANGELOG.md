@@ -7,6 +7,10 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Added a fail-closed packaged server runtime-closure gate. The desktop harness and every classified
+  server sidecar must exist in staged `Resources/server`; reachable relative runtime imports are
+  followed transitively, and source/proxy drift plus missing-entrypoint and missing-dependency cases
+  are covered by cross-platform mutation tests. Signed/runtime execution remains a separate release gate.
 - Added an app-wide interaction accessibility baseline for keyboard-visible focus, branded text
   selection, reduced-motion scrolling, and decorative panel/pop transitions. Existing semantic Mote
   working/waiting state remains visible when animation is reduced; a real-browser acceptance journey
@@ -65,6 +69,9 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Package runtime verification rejects unclassified server proxies, missing or empty declared
+  entrypoints/dependencies, imports escaping the real staged server root, non-literal dynamic loading,
+  and bare package imports under the current no-runtime-`node_modules` server packaging contract.
 - Lifecycle detection is advisory and never kills a provider solely because a timer elapsed. Real provider
   approvals/questions own a separate attention state and are exempt from silence/dead thresholds; ordinary
   heartbeats stay process-local so the watchdog does not amplify durable Workspace writes.

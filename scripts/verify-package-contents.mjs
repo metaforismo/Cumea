@@ -7,6 +7,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { CUA_DRIVER_RELEASE } from "./cua-driver-release.mjs";
+import {
+  verifyPackagedServerRuntime,
+  verifySourceSpawnManifest,
+} from "./package-runtime-closure.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const exec = promisify(execFile);
@@ -62,7 +66,6 @@ if (!resources) {
 const required = [
   ["app.asar", 1024],
   ["ui/index.html", 64],
-  ["server/index.js", 64],
   ["LICENSE", 64],
   ["THIRD_PARTY_NOTICES.md", 64],
   ["licenses/mote-studio-MIT.txt", 64],
@@ -74,6 +77,9 @@ const required = [
 for (const [relative, minimumBytes] of required) {
   await requireFile(path.join(resources, relative), minimumBytes);
 }
+
+await verifySourceSpawnManifest({ sourceRoot: root });
+const serverRuntime = await verifyPackagedServerRuntime(path.join(resources, "server"));
 
 const infoPlist = path.join(resources, "..", "Info.plist");
 for (const usageKey of ["NSScreenCaptureUsageDescription", "NSAppleEventsUsageDescription"]) {
@@ -126,5 +132,8 @@ for (const nativeRuntime of [cuaRuntime, cuaSdkLibrary, ubjsRuntime]) {
   }
 }
 
+console.log(
+  `Verified ${serverRuntime.entrypoints.length} packaged server entrypoints and ${serverRuntime.files.length} transitive runtime files.`,
+);
 console.log(`Verified unsigned package layout at ${path.relative(root, resources)}.`);
 console.log("This smoke check does not establish signing, notarization, launch, or device behavior.");
