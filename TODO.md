@@ -45,17 +45,23 @@ should not bypass the release, security, persistence, or measurement foundations
       exact per-bot workspaces, host-owned attachment reads, lexical/realpath containment, regular-file
       snapshot checks, 25 MiB/file and bounded-memory capability limits, TTL/revocation, format signature
       classification, rollback-capable workspace quarantine, cross-platform tests, and a written threat boundary.
-    - [ ] P0.00a2 — Activate the boundary through local-only resolve/preview/download routes, assign the
-      exact bot workspace as provider `cwd`, revoke/stage it with bot deletion, add safe message/file UI,
-      then land inert Markdown/PDF/DOCX viewers with PDF.js/JSZip budgets, dependency notices/SBOM/package
-      evidence, keyboard/focus behavior, and real-browser acceptance.
+    - [x] P0.00a2a — Replace the draft's generic ZIP dependency with a dependency-free bounded semantic
+      Markdown/DOCX parser: fixed ZIP central/local preflight, stored/DEFLATE only, size/entry/ratio/output
+      budgets, CRC verification, active-content/external-relationship/XML-entity rejection, and a small
+      heading/list/paragraph projection capped at 5,000 blocks / 2,000,000 characters.
+    - [ ] P0.00a2b — Activate the capability boundary through local-only resolve/preview/download routes,
+      assign the exact bot workspace as provider `cwd`, revoke/stage it with bot deletion, and prove that
+      a model-cited path or remote/mobile request cannot bypass the owner-local capability issuer.
+    - [ ] P0.00a2c — Add the safe desktop file dialog/links, inert Markdown/DOCX rendering, bounded PDF.js
+      worker/canvas rendering, dependency notices/SBOM/package evidence, keyboard/focus behavior, and the
+      exact real-browser acceptance journey. Keep raw HTML/script execution impossible.
   - [ ] P0.00b — Re-port editable native dictation from #9 as an explicit platform capability with
     permission/error states, user-editable interim text, and no silent cloud speech fallback.
   - [ ] P0.00c — Re-port the useful mobile paging/anchored-scroll/new-message work from #9 only after
     reconciling it with the current atomic bootstrap, narrowed SSE projection, and canonical SQLite.
   - [ ] P0.00d — Extract any still-useful Quick-agent, lifecycle and release-evidence work into separate
     current-main PRs; close the historical draft once every retained concern has a replacement or an
-    explicit reject decision.
+    explicit reject decision. Draft #32 is already closed as superseded; #9 is the only historical ledger.
 - [~] **P0.01 — Desktop performance baseline and regression harness.** Add production-build timing
   marks, deterministic fixtures, JSON/Markdown reports, comparison tooling, documented metric
   definitions, and bundle-size budgets before changing startup behavior.
@@ -326,3 +332,5 @@ Every implementation PR must include, where applicable:
 | 2026-08-19 | P0.09a1 | Added the app-wide keyboard-focus/selection/reduced-motion interaction baseline after component styles and a contract test that preserves custom-control focus coverage and non-semantic motion suppression; the real-browser acceptance journey remains P0.09a2. |
 | 2026-08-19 | P0.08a | Added the release-critical harness/sidecar manifest, source-proxy drift detection, staged-package transitive import closure, cross-platform mutation tests, and release documentation. Actual signed sidecar execution remains a P0.08/P0.09 evidence gate. |
 | 2026-08-19 | P0.00a1 | Extracted the safe owner-local file capability/workspace foundation from draft #9 with bounded snapshots, no host-path projection, expiry/revocation, signature checks, delete quarantine rollback, cross-platform tests, and a written security contract. HTTP/UI/PDF/DOCX activation remains P0.00a2. |
+| 2026-08-19 | P0.00a2a | Replaced the draft's JSZip DOCX path with a dependency-free bounded central-directory/DEFLATE/CRC/XML semantic parser and adversarial tests; routes, renderer and PDF.js remain separate gates. |
+| 2026-08-19 | Draft cleanup | Closed superseded safe-file draft #32 without merge; #9 remains the sole historical extraction ledger until the remaining retained concerns have replacement PRs or reject decisions. |
