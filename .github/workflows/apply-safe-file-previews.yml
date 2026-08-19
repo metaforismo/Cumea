@@ -22,13 +22,16 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - run: node --check scripts/apply-safe-file-previews.mjs
+      - name: Repair and syntax-check transform
+        run: |
+          node scripts/repair-safe-file-transform.mjs
+          node --check scripts/apply-safe-file-previews.mjs
       - run: node scripts/apply-safe-file-previews.mjs
       - name: Update current lockfile
         run: pnpm install --lockfile-only --no-frozen-lockfile
       - name: Commit product integration and remove one-shot machinery
         run: |
-          rm -f scripts/apply-safe-file-previews.mjs .github/workflows/apply-safe-file-previews.yml
+          rm -f scripts/apply-safe-file-previews.mjs scripts/repair-safe-file-transform.mjs .github/workflows/apply-safe-file-previews.yml
           git diff --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
