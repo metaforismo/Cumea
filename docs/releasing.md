@@ -53,6 +53,10 @@ the desktop UI and harness on Ubuntu; exports mobile JavaScript on Ubuntu; build
 locked landing on Ubuntu; and performs an unsigned macOS arm64 package-layout smoke. Every required
 job must be green for the candidate SHA. An Expo export is not a native mobile build.
 
+The root suite also verifies the declared packaged-server process manifest on every CI OS. Every
+`server/**/*-proxy.ts` sidecar must be classified as a release-critical entrypoint before it can land.
+This catches source/package drift before a platform package is even staged.
+
 ## 3. macOS arm64 package gate
 
 The CI smoke is intentionally unsigned:
@@ -73,10 +77,18 @@ The package smoke verifies that the app contains its UI, harness, native speech 
 executable CUA Driver with an arm64 slice reporting version 0.19.3, local-computer native runtime,
 and that the packaged driver is byte-identical to the release-verified prepared executable. It also
 checks the Screen Capture/Automation usage descriptions, MIT license, third-party notices, and
-bundled license files. The upstream asset currently carries a
-universal Mach-O (`x86_64 arm64`) even though its archive is named `darwin-arm64`; Cumea preserves
-that signed upstream executable instead of thinning and invalidating it. The smoke does not
-exercise macOS permissions, launch the Electron app, or establish Cumea signing/notarization.
+bundled license files.
+
+The same smoke now treats the staged `Resources/server` directory as a closed runtime graph. It starts
+from the harness plus every declared spawned proxy, follows literal relative static/dynamic imports and
+`require(...)` transitively, and fails on missing/empty dependencies, path escapes, non-literal dynamic
+loading, or bare package imports. This enforces the current packaging promise that the server needs no
+runtime `node_modules`; see [packaged server runtime closure](package-runtime-closure.md).
+
+The upstream asset currently carries a universal Mach-O (`x86_64 arm64`) even though its archive is
+named `darwin-arm64`; Cumea preserves that signed upstream executable instead of thinning and
+invalidating it. The smoke does not exercise macOS permissions, launch the Electron app, execute
+provider sidecars end-to-end, or establish Cumea signing/notarization.
 
 Before distributing a desktop binary:
 
