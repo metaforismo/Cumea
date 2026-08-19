@@ -285,25 +285,24 @@ fixed `:5199` UI and `:8799` harness pair described above.
 
 ## Direction
 
-P0.11 is complete, so the immediate engineering priorities have shifted from transcript storage to
-**runtime diagnostics, draft-#9 extraction, steady-state renderer/thread scaling, lifecycle correctness,
-mobile completion, package closure, and provider/computer capability parity**. The first small tranche is
-a desktop-local per-thread Events/Raw inspector over logs Cumea already writes; raw provider material must
-remain outside the paired mobile surface.
+P0.11 and P0.12 are complete, so the immediate priorities are **draft-#9 extraction, steady-state
+renderer/thread scaling, resilient mobile completion, conversation/memory separation, package/release
+evidence, and a pluggable user-owned computer contract**. Storage, session freshness, busy steering and
+lifecycle evidence are foundations to preserve, not features to rewrite.
 
-The current competitive audit is pinned to Cumea `4b897646`, Rakazo `9622c388`, and OpenMausBot
-`e7d71f4b`. It adopts ideas such as bounded diagnostics, engine-session freshness, busy-user steering,
-app-wide keyboard/reduced-motion treatment, trusted connector continuation, discovery-before-pairing,
-and package spawn-closure checks while explicitly rejecting mandatory hosted identity or a Cumea-operated
-control plane.
+The current competitive audit is pinned to Cumea `ea3d751b`, Rakazo `c3d386d8`, and OpenMausBot
+`70805c0a`. It adapts conversation reset into multi-conversation agents, hosted-memory compaction into an
+owner-local provenance-first memory contract, Team/Private computer screens into fenced run leases, and
+BYO-VPS / resilient host discovery into user-owned backend and transport contracts. Mandatory hosted
+identity, a Cumea-operated control plane, and hosted memory remain outside the local default.
 
 These changes keep Cumea's no-account local-first security model and its Grok-like three-pane desktop /
 agent-list-first mobile identity instead of replacing them with a hosted architecture.
 
 See [ROADMAP.md](ROADMAP.md) for the ordered backlog,
-[the 2026-08-18 Rakazo/OpenMaus engineering audit](docs/competitive-audit-2026-08-18.md) for the latest
-`adopt / adapt / reject` decisions, and [docs/UPSTREAM.md](docs/UPSTREAM.md) for the earlier upstream
-issue/PR audit.
+[the 2026-08-19 Rakazo/OpenMaus engineering audit](docs/competitive-audit-2026-08-19.md) for the latest
+`adopt / adapt / reject` decisions, [the 2026-08-18 audit](docs/competitive-audit-2026-08-18.md) for the
+previous pin, and [docs/UPSTREAM.md](docs/UPSTREAM.md) for the earlier upstream issue/PR audit.
 
 ## Contributing
 

@@ -101,10 +101,16 @@ should not bypass the release, security, persistence, or measurement foundations
   isolate and memoize composer/transcript boundaries, batch streaming deltas, lazy-load noncritical
   panels, defer Markdown / syntax work until messages settle, and cache settled rendering by content
   hash instead of re-highlighting unchanged code during every stream tick.
+  - [ ] P0.05a — Extend packaged performance evidence beyond launch: measure keydown→paint typing,
+    real reducer/SSE streaming, settings paint/settle, and idle CPU/working-set memory on bounded
+    transcripts. Keep runtime numbers informational until the fixed-Mac gate exists.
 - [ ] **P0.06 — Desktop conversation paging and scroll contract.** Load bounded pages, window long
   transcripts, preserve the reading position while prepending history, auto-follow only near the end,
   expose jump-to-latest / show-earlier affordances, and render very long user messages cheaply without
   forcing scroll during selection.
+  - [ ] P0.06a — Window mounted transcript rows independently from server paging, preserve an anchor
+    across prepend and search-window transitions, and prove selection/copy and near-bottom auto-follow
+    behavior on long threads before increasing default page sizes.
 - [ ] **P0.07 — Bounded warm-window reuse.** On macOS, hide and retain a sanitized renderer for a short
   TTL, stop sensitive previews and streams while hidden, restore quickly from the Dock, and destroy
   the window after the TTL or on explicit quit.
@@ -124,9 +130,11 @@ should not bypass the release, security, persistence, or measurement foundations
 - [ ] **P0.10 — Mobile completion gates.** Implement push delivery for Needs You, deep-link to the
   exact request, background reconciliation, offline/host-offline states, and physical-device
   microphone, VoiceOver, and TalkBack acceptance evidence.
-  - [ ] P0.10a — Add optional same-LAN Bonjour/mDNS host discovery and QR onboarding convenience **before**
-    the existing one-time cryptographic pairing; discovery metadata is never authentication and manual
-    URL/QR entry remains supported.
+  - [ ] P0.10a — Add optional same-LAN Bonjour/mDNS discovery **before** cryptographic pairing, rank
+    real interfaces ahead of tunnels/bridges, advertise per interface, re-advertise/withdraw on network
+    changes, and return a bounded ordered host-candidate list at pairing. The client rotates only on
+    transport/address failures (never 401), persists the working candidate, supports manual address
+    edits without losing the device token, and keeps discovery metadata strictly non-authenticating.
   - [ ] P0.10b — Add native Needs You notifications that open the exact request, reconcile current host
     state before showing actions, and never let a stale notification approve an already-resolved ask.
 - [x] **P0.11 — Incremental transcript persistence and local search index.** Replace whole-thread JSON
@@ -171,6 +179,9 @@ should not bypass the release, security, persistence, or measurement foundations
 - [ ] **P1.01 — Separate Agent, Conversation, and Memory.** Give one persistent agent multiple named,
   archivable conversations with fresh-context creation, search, export, durable identity, and a global
   keyboard navigation/search surface once P0.11 provides the local transcript index.
+  - [ ] P1.01a — Add New conversation / archive / clear-conversation semantics without deleting the
+    agent identity, its settings or its memories. Destructive clear must target one conversation and
+    retain export/recovery confirmation rather than being the only way to get fresh context.
 - [ ] **P1.02 — Rooms.** Add multi-agent conversations with mentions, a default responder, everyone /
   mentions-only routing, sender attribution, a shared bulletin, reactions, approvals, clear busy/waiting
   states, and an optional explicitly shared working folder/computer distinct from private agent state.
@@ -185,6 +196,10 @@ should not bypass the release, security, persistence, or measurement foundations
 - [ ] **P1.06 — Explicit memory.** Add personal, agent, project, and conversation scopes with source
   provenance, revision history, confirmation state, priority, expiry, inspection, editing, deletion,
   explicit prompt-load budgets, and user-visible topic/projection views instead of opaque hidden notes.
+  - [ ] P1.06a — Add owner-local bounded history compaction: summarize old canonical batches with
+    provenance/cursors and time/input limits, never advance on failed/empty summaries, shrink verbatim
+    history only after recall succeeds, mark recalled material as possibly stale data, and allow optional
+    external memory adapters only after the local contract is complete.
 - [ ] **P1.07 — Triggers and proactive work.** Extend routines with schedule, authenticated webhook,
   email, calendar, file-change, host-started, and previous-run-completed triggers. Keep external
   payloads visibly untrusted and effects idempotent.
@@ -211,6 +226,16 @@ should not bypass the release, security, persistence, or measurement foundations
   compatible implementations without making a Cumea-managed sandbox or cloud service mandatory.
   Model per-agent private and explicitly shared/team computers separately and report capabilities /
   degradation honestly.
+  - [ ] P1.12a — Add the backend conformance suite and a user-owned BYO-VPS implementation using a
+    preconfigured SSH alias / Docker transport: no app-stored private key, no auto-accepted host key,
+    no public container ports, explicit transport-vs-missing states, bounded status/lock timeouts,
+    hardened managed-container verification, disposable-filesystem copy, and no SSH alias on mobile.
+  - [ ] P1.12b — Add explicit Team/Project computer scope distinct from Private agent computers. Shared
+    files and graphical-session capability are separate; each run gets a fenced display/session lease,
+    stale claims are rejected, and completion/rollback/takeover release the exact lease deterministically.
+  - [ ] P1.12c — After the generic backend contract is stable, evaluate an explicitly paired user-owned
+    phone/device backend (for example USB Android) as an agent computer. Keep it separate from the
+    companion control surface and require the same capability/permission/lease evidence as other backends.
 
 ### P2 — Cumea differentiation
 
@@ -278,3 +303,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-18 | P0.12c | Added dispatch-based native-session freshness with private per-thread pending/dispatched/invalidated state, A→B→A and unsupported-model rebuilds, provider-reload invalidation, bounded canonical context, shared native cursor refusal, successful-turn confirmation, and fake-Claude rebuild evidence. |
 | 2026-08-19 | P0.12b | Added bounded attended busy-user steering with canonical queued/dispatching/failed delivery state, one-follow-up coalescing, atomic batch claims, at-most-once crash/reload behavior, desktop/mobile Stop+Send controls, and real-harness recovery/no-duplication evidence. |
 | 2026-08-19 | P0.12a | Added activity-based lifecycle projections, explicit waiting-on-human exemption, advisory no-signal/dead recovery, bounded repeated-effect detection, provider-vs-lifecycle attention ownership, semantic-only Workspace persistence, and Work/Needs You recovery UX. P0.12 is complete. |
+| 2026-08-19 | Competitive audit | Re-pinned Cumea `ea3d751b`, Rakazo `c3d386d8`, and OpenMausBot `70805c0a`; promoted conversation separation, local history compaction, steady-state renderer evidence, resilient companion candidate rotation, BYO-VPS, and fenced Team/Private computer semantics without adopting mandatory hosted identity/control-plane assumptions. |
