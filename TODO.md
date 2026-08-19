@@ -38,9 +38,17 @@ should not bypass the release, security, persistence, or measurement foundations
 - [~] **P0.00 — Triage draft PR #9.** Preserve its work, identify conflicts with current `main`, and
   split it into independently mergeable PRs for Quick agents, safe file viewers, dictation, mobile
   paging, lifecycle hardening, and release evidence. Do not merge the historical draft as one tranche.
-  - [ ] P0.00a — Re-port the safe file capability boundary and Markdown/PDF/DOCX viewers from #9 onto
+  - [~] P0.00a — Re-port the safe file capability boundary and Markdown/PDF/DOCX viewers from #9 onto
     current `main`, keeping attachment IDs/path resolution host-owned, MIME/size bounds explicit, and
     renderer output inert rather than executing document content.
+    - [x] P0.00a1 — Extract the owner-local filesystem/capability foundation without activating routes:
+      exact per-bot workspaces, host-owned attachment reads, lexical/realpath containment, regular-file
+      snapshot checks, 25 MiB/file and bounded-memory capability limits, TTL/revocation, format signature
+      classification, rollback-capable workspace quarantine, cross-platform tests, and a written threat boundary.
+    - [ ] P0.00a2 — Activate the boundary through local-only resolve/preview/download routes, assign the
+      exact bot workspace as provider `cwd`, revoke/stage it with bot deletion, add safe message/file UI,
+      then land inert Markdown/PDF/DOCX viewers with PDF.js/JSZip budgets, dependency notices/SBOM/package
+      evidence, keyboard/focus behavior, and real-browser acceptance.
   - [ ] P0.00b — Re-port editable native dictation from #9 as an explicit platform capability with
     permission/error states, user-editable interim text, and no silent cloud speech fallback.
   - [ ] P0.00c — Re-port the useful mobile paging/anchored-scroll/new-message work from #9 only after
@@ -317,3 +325,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-19 | Competitive audit | Re-pinned Cumea `ea3d751b`, Rakazo `c3d386d8`, and OpenMausBot `70805c0a`; promoted conversation separation, local history compaction, steady-state renderer evidence, resilient companion candidate rotation, BYO-VPS, and fenced Team/Private computer semantics without adopting mandatory hosted identity/control-plane assumptions. |
 | 2026-08-19 | P0.09a1 | Added the app-wide keyboard-focus/selection/reduced-motion interaction baseline after component styles and a contract test that preserves custom-control focus coverage and non-semantic motion suppression; the real-browser acceptance journey remains P0.09a2. |
 | 2026-08-19 | P0.08a | Added the release-critical harness/sidecar manifest, source-proxy drift detection, staged-package transitive import closure, cross-platform mutation tests, and release documentation. Actual signed sidecar execution remains a P0.08/P0.09 evidence gate. |
+| 2026-08-19 | P0.00a1 | Extracted the safe owner-local file capability/workspace foundation from draft #9 with bounded snapshots, no host-path projection, expiry/revocation, signature checks, delete quarantine rollback, cross-platform tests, and a written security contract. HTTP/UI/PDF/DOCX activation remains P0.00a2. |
