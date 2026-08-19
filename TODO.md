@@ -117,9 +117,12 @@ should not bypass the release, security, persistence, or measurement foundations
 - [ ] **P0.08 — Consumer desktop distribution.** Produce signed and notarized macOS artifacts, signed
   update metadata, stable / beta / nightly channels, rollback guidance, release notes in-app, and a
   Windows installer whose unsupported native capabilities fail closed.
-  - [ ] P0.08a — Extend package verification from top-level server/native artifacts to the complete
-    runtime spawn closure: every helper/proxy a packaged driver can resolve and execute must exist in
-    the staged package, with mutation tests that fail if one is omitted.
+  - [x] P0.08a — Verify the complete staged server runtime closure. The desktop harness and every
+    classified `*-proxy` sidecar must exist under `Resources/server`; reachable literal relative
+    imports are followed transitively; new source proxies must be explicitly classified; and mutation
+    tests fail on omitted entrypoints/dependencies, path escape, non-literal loading, or bare package
+    imports under the current no-runtime-`node_modules` contract. Signed sidecar execution remains
+    part of P0.08/P0.09 rather than being inferred from this structure gate.
 - [ ] **P0.09 — Real journey and packaged-shell tests.** Add browser journeys for onboarding, chat,
   approvals, attachments, Needs You, routines, pairing, and computer degradation, plus packaged
   Electron isolation/launch smoke tests and retained screenshot or visual-history evidence for the
@@ -313,3 +316,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-19 | P0.12a | Added activity-based lifecycle projections, explicit waiting-on-human exemption, advisory no-signal/dead recovery, bounded repeated-effect detection, provider-vs-lifecycle attention ownership, semantic-only Workspace persistence, and Work/Needs You recovery UX. P0.12 is complete. |
 | 2026-08-19 | Competitive audit | Re-pinned Cumea `ea3d751b`, Rakazo `c3d386d8`, and OpenMausBot `70805c0a`; promoted conversation separation, local history compaction, steady-state renderer evidence, resilient companion candidate rotation, BYO-VPS, and fenced Team/Private computer semantics without adopting mandatory hosted identity/control-plane assumptions. |
 | 2026-08-19 | P0.09a1 | Added the app-wide keyboard-focus/selection/reduced-motion interaction baseline after component styles and a contract test that preserves custom-control focus coverage and non-semantic motion suppression; the real-browser acceptance journey remains P0.09a2. |
+| 2026-08-19 | P0.08a | Added the release-critical harness/sidecar manifest, source-proxy drift detection, staged-package transitive import closure, cross-platform mutation tests, and release documentation. Actual signed sidecar execution remains a P0.08/P0.09 evidence gate. |
