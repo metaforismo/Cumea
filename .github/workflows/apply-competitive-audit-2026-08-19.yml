@@ -1,0 +1,33 @@
+name: Apply competitive audit backlog
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'docs/competitive-audit-2026-08-19' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: docs/competitive-audit-2026-08-19
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - run: node --check scripts/apply-competitive-audit-2026-08-19.mjs
+      - run: node scripts/apply-competitive-audit-2026-08-19.mjs
+      - name: Commit docs-only result and remove one-shot machinery
+        run: |
+          rm -f scripts/apply-competitive-audit-2026-08-19.mjs .github/workflows/apply-competitive-audit-2026-08-19.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "docs: align backlog with August 19 audit"
+          git push origin HEAD:docs/competitive-audit-2026-08-19
