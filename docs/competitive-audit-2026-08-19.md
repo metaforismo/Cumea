@@ -14,6 +14,14 @@ quality.
 The pins matter because both comparison projects are moving quickly. Every conclusion below should be
 rechecked before implementing a large tranche.
 
+## Evidence boundary
+
+This audit is based on the pinned repositories' source, tests, documentation, recent commits, and checked-in
+performance/release methodology. It does **not** independently reproduce competitor benchmarks, hosted
+services, signed releases, real sandbox providers, phone hardware, or production accounts. Likewise, an item
+being promoted into Cumea's roadmap is a design decision, not evidence that Cumea already implements or
+outperforms it. Fixed-machine performance and native/physical-device acceptance remain their existing gates.
+
 ## Executive view
 
 Cumea is now strongest where the previous audits found foundational risk: owner-local canonical SQLite
