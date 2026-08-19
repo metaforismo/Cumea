@@ -36,6 +36,8 @@ export const DATA_DIR = process.env.CUMEA_DATA_DIR
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
 export const ATTACHMENTS_DIR = join(DATA_DIR, "attachments");
+/** Host-owned working directories for model-created user-facing files. */
+export const BOT_WORKSPACES_DIR = join(DATA_DIR, "workspaces");
 
 const desktopBootstrap = consumeDesktopCredentialEnvironment(process.env);
 const desktopCredentials = Object.freeze({ ...desktopBootstrap.credentials });
@@ -45,7 +47,7 @@ export function desktopCredentialsManaged(): boolean {
 }
 
 export function ensureDirs() {
-  for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR, ATTACHMENTS_DIR]) {
+  for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR, ATTACHMENTS_DIR, BOT_WORKSPACES_DIR]) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     try {
       chmodSync(dir, 0o700);
