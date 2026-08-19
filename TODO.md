@@ -124,9 +124,17 @@ should not bypass the release, security, persistence, or measurement foundations
   approvals, attachments, Needs You, routines, pairing, and computer degradation, plus packaged
   Electron isolation/launch smoke tests and retained screenshot or visual-history evidence for the
   critical journeys.
-  - [ ] P0.09a — Add an app-wide keyboard/focus/selection/reduced-motion baseline and acceptance journey:
+  - [~] P0.09a — Add an app-wide keyboard/focus/selection/reduced-motion baseline and acceptance journey:
     visible `:focus-visible` state without pointer-only rings, brand selection styling, and reduced-motion
     handling for panel/pop/scroll transitions while semantic busy indicators remain truthful.
+    - [x] P0.09a1 — Land the app-wide interaction stylesheet after component styles, covering native and
+      custom keyboard-focusable controls, brand text selection, smooth-scroll suppression, decorative
+      panel/pop animation removal, and near-zero transition timing without hiding semantic activity state.
+      Keep the baseline under a source-level contract test so later UI refactors cannot silently drop it.
+    - [ ] P0.09a2 — Record the real-browser acceptance journey: pointer interactions must not gain noisy
+      rings, keyboard navigation must retain visible focus across the shell/custom controls, text selection
+      must remain readable, and reduced-motion must suppress panel/pop/scroll motion while busy/waiting
+      state stays understandable. Retain screenshot/visual evidence with the exact candidate commit.
 - [ ] **P0.10 — Mobile completion gates.** Implement push delivery for Needs You, deep-link to the
   exact request, background reconciliation, offline/host-offline states, and physical-device
   microphone, VoiceOver, and TalkBack acceptance evidence.
@@ -304,3 +312,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-19 | P0.12b | Added bounded attended busy-user steering with canonical queued/dispatching/failed delivery state, one-follow-up coalescing, atomic batch claims, at-most-once crash/reload behavior, desktop/mobile Stop+Send controls, and real-harness recovery/no-duplication evidence. |
 | 2026-08-19 | P0.12a | Added activity-based lifecycle projections, explicit waiting-on-human exemption, advisory no-signal/dead recovery, bounded repeated-effect detection, provider-vs-lifecycle attention ownership, semantic-only Workspace persistence, and Work/Needs You recovery UX. P0.12 is complete. |
 | 2026-08-19 | Competitive audit | Re-pinned Cumea `ea3d751b`, Rakazo `c3d386d8`, and OpenMausBot `70805c0a`; promoted conversation separation, local history compaction, steady-state renderer evidence, resilient companion candidate rotation, BYO-VPS, and fenced Team/Private computer semantics without adopting mandatory hosted identity/control-plane assumptions. |
+| 2026-08-19 | P0.09a1 | Added the app-wide keyboard-focus/selection/reduced-motion interaction baseline after component styles and a contract test that preserves custom-control focus coverage and non-semantic motion suppression; the real-browser acceptance journey remains P0.09a2. |
