@@ -233,10 +233,14 @@ pnpm release:sbom
 
 The CI matrix runs root type checking and tests on macOS, Ubuntu, and Windows; production UI and
 harness builds plus an SBOM on Ubuntu; Expo JavaScript and independently locked landing builds on
-Ubuntu; and an unsigned macOS arm64 package-layout smoke. A green CI run is not evidence of signing,
-notarization, native desktop behavior on every OS, or physical-device mobile support. See
-[the release checklist](docs/releasing.md) for the evidence required before publishing a Developer
-Preview.
+Ubuntu; and an unsigned macOS arm64 package-layout smoke. Root CI also rejects an unclassified
+server `*-proxy.ts`, while the staged-package smoke starts from every declared server process and
+verifies its complete self-contained relative import closure under `Resources/server`. See
+[packaged server runtime closure](docs/package-runtime-closure.md).
+
+A green CI run is not evidence of signing, notarization, native desktop behavior on every OS, or
+physical-device mobile support. See [the release checklist](docs/releasing.md) for the evidence
+required before publishing a Developer Preview.
 
 ## Architecture
 
@@ -259,6 +263,7 @@ Preview.
 | `server/thread-inspector.ts` | bounded owner-local Runtime/Raw diagnostic projection over existing per-thread logs |
 | `electron/` | desktop shell, OS-backed credential vault, native permissions, dictation, and local computer use |
 | `apps/mobile/` | Expo Router companion, agent-list home, pairing, chat, approvals, and routines |
+| `scripts/package-runtime-closure.mjs` | release manifest and transitive dependency-closure gate for packaged server processes |
 
 The renderer owns no provider transport. Commands cross the local API, providers emit one canonical
 event stream, and the UI folds that stream into visible conversation state. The desktop sidebar search
@@ -287,12 +292,13 @@ fixed `:5199` UI and `:8799` harness pair described above.
 
 ## Direction
 
-P0.11 and P0.12 are complete, so the immediate priorities are **draft-#9 extraction, steady-state
-renderer/thread scaling, resilient mobile completion, conversation/memory separation, package/release
-evidence, and a pluggable user-owned computer contract**. Storage, session freshness, busy steering and
-lifecycle evidence are foundations to preserve, not features to rewrite. The source-level interaction
-accessibility baseline is now present, but P0.09a remains open until the exact browser journey records
-keyboard focus, selection readability, and reduced-motion behavior.
+P0.11 and P0.12 are complete, the source-level accessibility baseline is present, and the package
+server spawn/dependency closure gate is now explicit. The immediate priorities are **draft-#9
+extraction, steady-state renderer/thread scaling, resilient mobile completion, conversation/memory
+separation, signed distribution and real-journey evidence, and a pluggable user-owned computer
+contract**. Storage, session freshness, busy steering, lifecycle and package-closure evidence are
+foundations to preserve, not features to rewrite. P0.09a remains open until the exact browser journey
+records keyboard focus, selection readability, and reduced-motion behavior.
 
 The current competitive audit is pinned to Cumea `ea3d751b`, Rakazo `c3d386d8`, and OpenMausBot
 `70805c0a`. It adapts conversation reset into multi-conversation agents, hosted-memory compaction into an
