@@ -82,8 +82,9 @@ local sample data and is not evidence that a provider task ran.
   and audit data together. Audit-aware storage management is tracked on the roadmap.
 - The safe local-file foundation treats model-cited paths as untrusted. It can snapshot only regular
   files inside an exact Cumea-owned bot workspace or a host-owned attachment record into bounded,
-  expiring opaque capabilities; host paths are not projected. New preview/download routes and rich
-  Markdown/PDF/DOCX rendering remain disabled until P0.00a2 completes their separate activation gate.
+  expiring opaque capabilities; host paths are not projected. Markdown remains inert text and DOCX
+  semantic parsing now uses a dependency-free bounded ZIP/XML reader before decompression. New
+  preview/download routes, desktop viewers, and PDF.js rendering remain disabled until P0.00a2b/a2c.
 - The desktop harness binds to `127.0.0.1` and rejects state-changing browser requests from foreign
   origins. Remote access is a separate listener, disabled by default.
 - Optional mobile access uses a short-lived, single-use 256-bit pairing secret. Device bearer tokens
@@ -98,7 +99,7 @@ local sample data and is not evidence that a provider task ran.
   already-captured PNG/JPEG frame, never computer control, and still requires a paired device token.
 - Packaged optional credentials are encrypted through the operating-system credential service,
   remain write-only to the renderer, and are supplied only to a fresh local harness bootstrap.
-  Credential-shaped writes to the ordinary packaged config API are rejected, and each provider
+  Credential-shaped writes to the ordinary managed config API are rejected, and each provider
   receives only the credential it owns. Source/browser hosting retains an explicit owner-only
   `config.json` fallback.
 - External links are limited to HTTPS, with HTTP allowed only for loopback development URLs.
@@ -255,7 +256,8 @@ required before publishing a Developer Preview.
 | `server/pairing.ts` | expiring one-time pairing sessions, hashed device tokens, and revocation |
 | `server/mobile.ts` | allowlisted mobile bot/message projections and sanitized remote SSE events |
 | `server/workspace.ts` | durable sections, attachments, tasks, runs, artifacts, and schedules |
-| `server/file-capabilities.ts` | bounded owner-local workspace/attachment snapshots and opaque path-free read capabilities; not exposed to the renderer until P0.00a2 |
+| `server/file-capabilities.ts` | bounded owner-local workspace/attachment snapshots and opaque path-free read capabilities; not exposed to the renderer until P0.00a2b |
+| `server/document-preview.ts` | dependency-free bounded Markdown/DOCX semantic parser over passive structured output; no HTTP/renderer activation yet |
 | `server/message-search-index.ts` | owner-local derived SQLite/WAL transcript search projection with legacy-file fingerprints and canonical-revision reconciliation |
 | `server/turn-context.ts` | bounded canonical context rebuild and native-session resume decision |
 | `server/session-freshness.ts` | private owner-local per-thread pending/dispatched/invalidated provider-session state |
@@ -298,14 +300,15 @@ fixed `:5199` UI and `:8799` harness pair described above.
 ## Direction
 
 P0.11 and P0.12 are complete, the source-level accessibility baseline and packaged server runtime
-closure gate are present, and draft #9's safe-file work is now being extracted behind an explicit
-path-free capability boundary. P0.00a1 establishes that foundation without exposing new routes; P0.00a2
-still owns HTTP activation and inert Markdown/PDF/DOCX rendering. The immediate priorities are
-**finishing focused draft-#9 extraction, steady-state renderer/thread scaling, resilient mobile
-completion, conversation/memory separation, signed distribution and real-journey evidence, and a
-pluggable user-owned computer contract**. Storage, session freshness, busy steering, lifecycle and
-package-closure evidence are foundations to preserve, not features to rewrite. P0.09a remains open
-until the exact browser journey records keyboard focus, selection readability, and reduced-motion behavior.
+closure gate are present, and draft #9's safe-file work is now split into explicit review layers.
+P0.00a1 establishes path-free bounded owner-local file capabilities; P0.00a2a adds dependency-free
+bounded Markdown/DOCX semantic parsing. P0.00a2b still owns provider workspace/runtime route activation,
+and P0.00a2c owns the desktop file dialog, PDF.js, package evidence and browser acceptance. Superseded
+safe-file draft #32 is closed; #9 remains the single historical extraction ledger. The immediate
+priorities remain **finishing focused draft-#9 extraction, steady-state renderer/thread scaling,
+resilient mobile completion, conversation/memory separation, signed distribution and real-journey
+evidence, and a pluggable user-owned computer contract**. P0.09a remains open until the exact browser
+journey records keyboard focus, selection readability, and reduced-motion behavior.
 
 The current competitive audit is pinned to Cumea `ea3d751b`, Rakazo `c3d386d8`, and OpenMausBot
 `70805c0a`. It adapts conversation reset into multi-conversation agents, hosted-memory compaction into an
