@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { markOnce } from "./lib/performance";
 import "./styles.css";
+import "./accessibility.css";
 
 markOnce("cumea:renderer:entry-evaluated");
 markOnce("cumea:renderer:render-start");
