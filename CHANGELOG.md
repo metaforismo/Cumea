@@ -7,10 +7,15 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Added dependency-free bounded Markdown/DOCX semantic preview parsing. DOCX now goes through Cumea's
+  own fixed ZIP central/local preflight, stored/DEFLATE-only decompression, CRC verification, archive /
+  entry / ratio / output budgets, active-content and external-relationship rejection, passive XML
+  checks, and a bounded heading/list/paragraph projection before any renderer is allowed to consume it.
 - Added the P0.00a1 safe local-file capability foundation without exposing new routes yet: exact
   per-bot workspaces, bounded regular-file snapshots, host-owned attachment reads, expiring/revocable
   path-free capabilities, lightweight Markdown/PDF/DOCX signature classification, rollback-capable
-  workspace quarantine, and cross-platform security tests. HTTP/UI/PDF/DOCX activation remains P0.00a2.
+  workspace quarantine, and cross-platform security tests. HTTP/UI/PDF activation remains split across
+  P0.00a2b/P0.00a2c rather than being inferred from these parser primitives.
 - Added a fail-closed packaged server runtime-closure gate. The desktop harness and every classified
   server sidecar must exist in staged `Resources/server`; reachable relative runtime imports are
   followed transitively, and source/proxy drift plus missing-entrypoint and missing-dependency cases
@@ -58,6 +63,8 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Changed
 
+- Closed stale safe-file draft PR #32 without merge after its retained concerns were split into current-main
+  replacement tranches. Historical PR #9 is now the only extraction ledger for the remaining old v0.2 work.
 - Native provider continuation is now dispatch-fresh rather than cursor-presence based. A→B→A routing,
   provider reloads, interrupted dispatches and unsupported in-session model changes rebuild bounded canonical
   conversation context in a fresh native session instead of trusting stale provider state.
@@ -73,7 +80,11 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
-- Model-cited file paths still cannot trigger renderer reads. The new local-file foundation requires
+- DOCX semantic parsing is fail-closed before decompression: ZIP64, encryption, data descriptors,
+  unsupported methods, unsafe/duplicate paths, central/local disagreement, compression bombs, active
+  Word parts, DOCTYPE/ENTITY declarations, external relationships, invalid entities, CRC/size mismatch,
+  and oversized semantic output are rejected without rendering archive-controlled HTML.
+- Model-cited file paths still cannot trigger renderer reads. The local-file foundation requires
   lexical and realpath containment inside an exact Cumea-owned directory, rejects final symlinks,
   snapshots through a checked file descriptor, bounds file/token memory and lifetime, and exposes no
   host path in its public capability projection. Activation remains a separate review gate.
