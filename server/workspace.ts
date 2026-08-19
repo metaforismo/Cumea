@@ -4,12 +4,14 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { newId } from "./contracts.ts";
+import type { RunLifecycleAlert, RunLifecycleProjection } from "./lifecycle-watchdog.ts";
 import { stageFilesForDeletion, type DeletionFile } from "./delete-files.ts";
 
 export type TaskSource = "message" | "routine" | "handoff";
 export type TaskStatus = "queued" | "running" | "needs_attention" | "completed" | "failed" | "cancelled";
 export type RunStatus = "running" | "needs_attention" | "completed" | "failed" | "cancelled";
 export type StepStatus = "running" | "needs_attention" | "completed" | "failed" | "denied";
+export type RunAttentionKind = "provider" | "lifecycle";
 
 export interface SectionRecord {
   id: string;
@@ -31,7 +33,7 @@ export interface AttachmentRecord {
 export interface RunStep {
   id: string;
   itemId?: string;
-  kind: "tool" | "approval" | "handoff";
+  kind: "tool" | "approval" | "handoff" | "lifecycle";
   title: string;
   status: StepStatus;
   startedAt: number;
@@ -75,6 +77,9 @@ export interface RunRecord {
   startedAt: number;
   completedAt?: number;
   error?: string;
+  attentionKind?: RunAttentionKind;
+  lifecycle?: Omit<RunLifecycleProjection, "threadId" | "runId">;
+  lifecycleAlert?: Omit<RunLifecycleAlert, "threadId" | "runId">;
 }
 
 export type RoutineSchedule =
@@ -555,6 +560,91 @@ export class WorkspaceStore {
     this.save();
   }
 
+
+  setRunLifecycle(runId: string, projection: RunLifecycleProjection): boolean {
+    const run = this.run(runId);
+    if (!run || run.completedAt !== undefined || projection.runId !== runId) return false;
+    const next = {
+      state: projection.state,
+      lastActivityAt: projection.lastActivityAt,
+      ...(projection.waitingSince !== undefined ? { waitingSince: projection.waitingSince } : {}),
+      ...(projection.reason ? { reason: projection.reason } : {}),
+      ...(projection.repeatCount !== undefined ? { repeatCount: projection.repeatCount } : {}),
+    };
+    const previous = run.lifecycle;
+    const lifecycleChanged = JSON.stringify(previous ?? null) !== JSON.stringify(next);
+    if (lifecycleChanged) run.lifecycle = next;
+
+    let attentionChanged = false;
+    if (
+      run.attentionKind === "lifecycle" &&
+      run.lifecycleAlert?.kind !== "repeated_effect" &&
+      (projection.state === "working" || projection.state === "waiting")
+    ) {
+      const step = [...run.steps].reverse().find((candidate) => candidate.kind === "lifecycle" && candidate.status === "needs_attention");
+      if (step) {
+        step.status = "completed";
+        step.completedAt = Date.now();
+      }
+      run.attentionKind = undefined;
+      run.lifecycleAlert = undefined;
+      if (run.status === "needs_attention") run.status = "running";
+      const task = this.data.tasks.find((candidate) => candidate.id === run.taskId);
+      if (task?.status === "needs_attention") {
+        task.status = "running";
+        task.updatedAt = Date.now();
+      }
+      attentionChanged = true;
+    }
+    if (lifecycleChanged || attentionChanged) this.save();
+    return lifecycleChanged || attentionChanged;
+  }
+
+  markLifecycleAttention(runId: string, alert: RunLifecycleAlert): boolean {
+    const run = this.run(runId);
+    if (!run || run.completedAt !== undefined || alert.runId !== runId) return false;
+    // A real provider ask owns attention while it is unresolved. The watchdog
+    // is advisory and must never replace an approval/question boundary.
+    if (run.attentionKind === "provider") return false;
+    if (
+      run.attentionKind === "lifecycle" &&
+      run.lifecycleAlert?.kind === alert.kind &&
+      run.lifecycleAlert.title === alert.title
+    ) return false;
+
+    if (run.attentionKind === "lifecycle") {
+      const prior = [...run.steps].reverse().find((candidate) => candidate.kind === "lifecycle" && candidate.status === "needs_attention");
+      if (prior) {
+        prior.status = "completed";
+        prior.completedAt = Date.now();
+      }
+    }
+    run.attentionKind = "lifecycle";
+    run.lifecycleAlert = {
+      kind: alert.kind,
+      title: alert.title,
+      observedAt: alert.observedAt,
+      ...(alert.signature ? { signature: alert.signature } : {}),
+      ...(alert.repeatCount !== undefined ? { repeatCount: alert.repeatCount } : {}),
+    };
+    run.status = "needs_attention";
+    const task = this.data.tasks.find((candidate) => candidate.id === run.taskId);
+    if (task) {
+      task.status = "needs_attention";
+      task.updatedAt = Date.now();
+    }
+    run.steps.push({
+      id: newId(),
+      itemId: `lifecycle:${alert.kind}:${alert.observedAt}`,
+      kind: "lifecycle",
+      title: alert.title,
+      status: "needs_attention",
+      startedAt: alert.observedAt,
+    });
+    this.save();
+    return true;
+  }
+
   addStep(runId: string, input: Pick<RunStep, "kind" | "title"> & { itemId?: string; status?: StepStatus }): RunStep | null {
     const run = this.run(runId);
     if (!run) return null;
@@ -596,6 +686,12 @@ export class WorkspaceStore {
   markNeedsAttention(runId: string, title: string, itemId?: string) {
     const run = this.run(runId);
     if (!run) return;
+    if (run.attentionKind === "lifecycle") {
+      const lifecycleStep = [...run.steps].reverse().find((candidate) => candidate.kind === "lifecycle" && candidate.status === "needs_attention");
+      if (lifecycleStep) { lifecycleStep.status = "completed"; lifecycleStep.completedAt = Date.now(); }
+      run.lifecycleAlert = undefined;
+    }
+    run.attentionKind = "provider";
     run.status = "needs_attention";
     const task = this.data.tasks.find((candidate) => candidate.id === run.taskId);
     if (task) {
@@ -610,6 +706,7 @@ export class WorkspaceStore {
     if (!run) return;
     this.completeStep(runId, requestId, denied ? "denied" : "completed");
     if (!denied) {
+      run.attentionKind = undefined;
       run.status = "running";
       const task = this.data.tasks.find((candidate) => candidate.id === run.taskId);
       if (task) {
@@ -626,6 +723,9 @@ export class WorkspaceStore {
     const now = Date.now();
     run.status = ok ? "completed" : error === "interrupted" ? "cancelled" : "failed";
     run.completedAt = now;
+    run.attentionKind = undefined;
+    run.lifecycleAlert = undefined;
+    run.lifecycle = undefined;
     if (!ok && error) run.error = error;
     for (const step of run.steps) {
       if (step.status === "running" || step.status === "needs_attention") {

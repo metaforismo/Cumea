@@ -41,6 +41,8 @@ All notable changes to Cumea are documented here. This project follows
   secret-redacted native protocol tee, with bounded Events/Raw lenses, expandable JSON and periodic refresh.
 - Added attended busy-user steering on desktop and paired mobile. Explicit user messages can be queued while
   an agent works, with visible delivery state, bounded count/text/attachment budgets and one coalesced follow-up.
+- Added lifecycle-aware Work projections (`working`, `waiting`, `no-signal`, `dead`) with waiting-on-human
+  exemptions, bounded repeated-identical effect alerts and visible recovery in Work / Needs You.
 
 ### Changed
 
@@ -60,6 +62,9 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Lifecycle detection is advisory and never kills a provider solely because a timer elapsed. Real provider
+  approvals/questions own a separate attention state and are exempt from silence/dead thresholds; ordinary
+  heartbeats stay process-local so the watchdog does not amplify durable Workspace writes.
 - Busy steering uses canonical owner-local transcript state rather than a second queue. The selected batch is
   atomically claimed as `dispatching` before external provider work; queued, dispatching and failed steering
   rows are excluded from unrelated provider context. Ambiguous crash/reload state fails closed instead of

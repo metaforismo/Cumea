@@ -40,6 +40,7 @@ import {
   sanitizeRemoteSsePayload,
 } from "./mobile.ts";
 import { PairingStore } from "./pairing.ts";
+import { LifecycleWatchdog, type RunLifecycleAlert, type RunLifecycleProjection } from "./lifecycle-watchdog.ts";
 import { SessionFreshnessStore } from "./session-freshness.ts";
 import { mentionedBots, parseBotAvatar, Store, type Message } from "./store.ts";
 import {
@@ -193,6 +194,7 @@ let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
 const store = new Store(() => bootSelection, { messageSearch: true, transcripts: true });
 const sessionFreshness = new SessionFreshnessStore(DATA_DIR);
 const workspace = new WorkspaceStore();
+const lifecycleWatchdog = new LifecycleWatchdog();
 const pairing = new PairingStore();
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
@@ -309,6 +311,23 @@ function broadcastWorkspace() {
   broadcast({ kind: "workspace", workspace: publicWorkspace() });
 }
 
+
+function syncLifecycleProjection(value: RunLifecycleProjection | null) {
+  if (!value) return;
+  if (workspace.setRunLifecycle(value.runId, value)) broadcastWorkspace();
+}
+
+function surfaceLifecycleAlert(alert: RunLifecycleAlert | null) {
+  if (!alert) return;
+  if (workspace.markLifecycleAttention(alert.runId, alert)) broadcastWorkspace();
+}
+
+function signalLifecycle(threadId: string) {
+  const before = lifecycleWatchdog.get(threadId);
+  const after = lifecycleWatchdog.signal(threadId);
+  if (before?.state !== after?.state) syncLifecycleProjection(after);
+}
+
 // ── server-side event folding (upstream's ingestion worker, miniature) ──
 // The canonical stream is the source of truth; the persisted transcript
 // and every client view are projections of it.
@@ -329,6 +348,23 @@ bus.subscribe((event: RuntimeEvent) => {
   broadcast({ kind: "runtime", event });
   const bot = store.botByThread(event.threadId);
   if (!bot) return;
+
+  const lifecycleRunId = activeRunByThread.get(event.threadId);
+  if (lifecycleRunId) {
+    if (event.type === "request.opened" && event.requestId) {
+      syncLifecycleProjection(lifecycleWatchdog.openWait(event.threadId, event.requestId, event.summary));
+    } else if (event.type === "request.resolved" && event.requestId) {
+      syncLifecycleProjection(lifecycleWatchdog.resolveWait(event.threadId, event.requestId));
+    } else if (event.type === "item.started" && event.itemType === "tool" && event.title?.trim()) {
+      const before = lifecycleWatchdog.get(event.threadId);
+      const alert = lifecycleWatchdog.recordEffect(event.threadId, event.title);
+      const after = lifecycleWatchdog.get(event.threadId);
+      if (before?.state !== after?.state) syncLifecycleProjection(after);
+      surfaceLifecycleAlert(alert);
+    } else if (event.type !== "turn.completed") {
+      signalLifecycle(event.threadId);
+    }
+  }
 
   const pushMessage = (m: Omit<Message, "id" | "at">) => {
     const message = store.appendMessage(event.threadId, m);
@@ -492,6 +528,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (runId) {
         workspace.completeRun(runId, event.ok, event.stopReason || (event.ok ? undefined : "Provider run failed"));
         activeRunByThread.delete(event.threadId);
+        lifecycleWatchdog.stop(event.threadId);
         broadcastWorkspace();
       }
       const steeringMessageIds = activeSteeringByThread.get(event.threadId);
@@ -732,13 +769,14 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
   if (task) {
     const run = workspace.createRun(task.id);
     runId = run.id;
+    syncLifecycleProjection(lifecycleWatchdog.start(bot.threadId, run.id));
     broadcastWorkspace();
   }
 
   const instance = registry.get(selection.instanceId);
   if (!instance) {
     const message = `provider instance "${selection.instanceId}" is unavailable — pick another model in settings`;
-    if (runId) workspace.completeRun(runId, false, message);
+    if (runId) { workspace.completeRun(runId, false, message); lifecycleWatchdog.stop(bot.threadId); }
     broadcastWorkspace();
     throw Object.assign(new Error(message), { status: 409 });
   }
@@ -871,6 +909,7 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
       if (runId) {
         workspace.completeRun(runId, false, message);
         activeRunByThread.delete(bot.threadId);
+        lifecycleWatchdog.stop(bot.threadId);
         broadcastWorkspace();
       }
       store.patchBot(bot.id, { busy: false });
@@ -918,6 +957,7 @@ async function reloadProviders() {
       if (runId) {
         workspace.completeRun(runId, false, "Providers reloaded while the task was running.");
         activeRunByThread.delete(bot.threadId);
+        lifecycleWatchdog.stop(bot.threadId);
       }
       clearThreadEventState(bot.threadId);
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
@@ -972,6 +1012,23 @@ async function dispatchDueRoutines() {
 
 const routineTimer = setInterval(() => void dispatchDueRoutines(), 30_000);
 routineTimer.unref();
+
+const lifecycleTimer = setInterval(() => {
+  const { projections, alerts } = lifecycleWatchdog.tick();
+  let changed = false;
+  for (const value of projections) {
+    const current = workspace.run(value.runId)?.lifecycle;
+    const semanticChange =
+      !current ||
+      current.state !== value.state ||
+      current.waitingSince !== value.waitingSince ||
+      current.reason !== value.reason;
+    if (semanticChange) changed = workspace.setRunLifecycle(value.runId, value) || changed;
+  }
+  for (const alert of alerts) changed = workspace.markLifecycleAttention(alert.runId, alert) || changed;
+  if (changed) broadcastWorkspace();
+}, 15_000);
+lifecycleTimer.unref();
 const initialRoutineTimer = setTimeout(() => void dispatchDueRoutines(), 1_000);
 initialRoutineTimer.unref();
 
@@ -1698,6 +1755,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         workspace.completeRun(runId, false, "interrupted");
         activeRunByThread.delete(bot.threadId);
       }
+      lifecycleWatchdog.stop(bot.threadId);
       clearThreadEventState(bot.threadId);
       activeSteeringByThread.delete(bot.threadId);
       // Snapshot canonical transcript state while its JSON file is still at
@@ -2103,6 +2161,7 @@ postHarnessReady(LOCAL_PORT);
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     clearInterval(routineTimer);
+    clearInterval(lifecycleTimer);
     clearTimeout(initialRoutineTimer);
     clearTimeout(steeringRecoveryTimer);
     remoteServer?.close();

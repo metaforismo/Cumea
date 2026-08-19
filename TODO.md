@@ -154,9 +154,9 @@ should not bypass the release, security, persistence, or measurement foundations
   - [x] P0.11c — Integrate visible transcript hits into the existing desktop search field, load bounded
     exact-message windows instead of whole threads, highlight and return to latest, add bounded Markdown/JSON
     visible-transcript export, and keep exact navigation/export off the mobile/remote surface.
-- [ ] **P0.12 — Agent lifecycle correctness, liveness and loop protection.** Make long-running work
+- [x] **P0.12 — Agent lifecycle correctness, liveness and loop protection.** Make long-running work
   observable and recoverable without losing explicit user steering or trusting stale provider sessions.
-  - [ ] P0.12a — Add activity-based stall detection with waiting-on-human exemptions, honest working /
+  - [x] P0.12a — Add activity-based stall detection with waiting-on-human exemptions, honest working /
     waiting / no-signal / dead projections, bounded repeated-identical tool/effect detection, and visible
     recovery through Work / Needs You rather than silently killing legitimate long tasks.
   - [x] P0.12b — Persist explicit user messages sent while a bot is busy, mark them visibly queued, bound
@@ -277,3 +277,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-18 | P1.11a | Added a desktop-local bounded Runtime inspector over existing normalized and secret-redacted native thread logs, with Events/Raw lenses, payload clipping, torn-line tolerance, real-harness local/no-store evidence, authenticated mobile denial, and right-slot UI integration. |
 | 2026-08-18 | P0.12c | Added dispatch-based native-session freshness with private per-thread pending/dispatched/invalidated state, A→B→A and unsupported-model rebuilds, provider-reload invalidation, bounded canonical context, shared native cursor refusal, successful-turn confirmation, and fake-Claude rebuild evidence. |
 | 2026-08-19 | P0.12b | Added bounded attended busy-user steering with canonical queued/dispatching/failed delivery state, one-follow-up coalescing, atomic batch claims, at-most-once crash/reload behavior, desktop/mobile Stop+Send controls, and real-harness recovery/no-duplication evidence. |
+| 2026-08-19 | P0.12a | Added activity-based lifecycle projections, explicit waiting-on-human exemption, advisory no-signal/dead recovery, bounded repeated-effect detection, provider-vs-lifecycle attention ownership, semantic-only Workspace persistence, and Work/Needs You recovery UX. P0.12 is complete. |

@@ -110,7 +110,7 @@ export interface SectionRecord {
 export interface RunStep {
   id: string;
   itemId?: string;
-  kind: "tool" | "approval" | "handoff";
+  kind: "tool" | "approval" | "handoff" | "lifecycle";
   title: string;
   status: "running" | "needs_attention" | "completed" | "failed" | "denied";
   startedAt: number;
@@ -154,6 +154,9 @@ export interface RunRecord {
   startedAt: number;
   completedAt?: number;
   error?: string;
+  attentionKind?: "provider" | "lifecycle";
+  lifecycle?: { state: "working" | "waiting" | "no_signal" | "dead"; lastActivityAt: number; waitingSince?: number; reason?: string; repeatCount?: number };
+  lifecycleAlert?: { kind: "no_signal" | "dead" | "repeated_effect"; title: string; observedAt: number; repeatCount?: number };
 }
 
 export type RoutineSchedule =
