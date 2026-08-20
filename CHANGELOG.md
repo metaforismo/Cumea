@@ -7,6 +7,9 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Added verified Codex peer-agent handoff through the existing harness-owned `agents` MCP proxy. Codex
+  bots can now receive `list_bots` / `ask_bot` when collaboration is enabled, using the same recursion and
+  permission boundary as other capable providers. Connected apps and computer MCP remain separately gated.
 - Added a desktop-local safe file viewer for Markdown and DOCX capabilities. Assistant relative file
   citations and managed attachments resolve through opaque host-issued capabilities; the dialog traps
   keyboard focus, closes on Escape and restores focus, renders Markdown only as React text nodes, renders
@@ -99,6 +102,10 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Codex stdio MCP mounting keeps peer-communication secret values out of app-server argv. The command,
+  arguments and environment-variable names are configuration values, while the actual per-boot token stays
+  only in the child environment; the fake app-server contract test verifies the secret never appears in
+  process arguments before `agentsMcp` is advertised.
 - The desktop file viewer never executes document-controlled HTML or uses iframe/embed/object/browser-plugin
   rendering. Relative file controls reject absolute paths, URLs and `..` traversal segments before a request;
   the server repeats the authoritative containment checks. Renderer preview payloads are independently bounded
