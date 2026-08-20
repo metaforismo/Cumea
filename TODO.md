@@ -157,17 +157,23 @@ should not bypass the release, security, persistence, or measurement foundations
   approvals, attachments, Needs You, routines, pairing, and computer degradation, plus packaged
   Electron isolation/launch smoke tests and retained screenshot or visual-history evidence for the
   critical journeys.
-  - [~] P0.09a — Add an app-wide keyboard/focus/selection/reduced-motion baseline and acceptance journey:
-    visible `:focus-visible` state without pointer-only rings, brand selection styling, and reduced-motion
-    handling for panel/pop/scroll transitions while semantic busy indicators remain truthful.
+  - [~] P0.09a — Add an app-wide keyboard/focus/selection/reduced-motion/contrast baseline and acceptance journey:
+    visible `:focus-visible` state without pointer-only rings, brand selection styling, deterministic
+    normal-size text contrast, and reduced-motion handling for panel/pop/scroll transitions while semantic
+    busy indicators remain truthful.
     - [x] P0.09a1 — Land the app-wide interaction stylesheet after component styles, covering native and
       custom keyboard-focusable controls, brand text selection, smooth-scroll suppression, decorative
       panel/pop animation removal, and near-zero transition timing without hiding semantic activity state.
       Keep the baseline under a source-level contract test so later UI refactors cannot silently drop it.
+    - [x] P0.09a1b — Add a dependency-free semantic dark-theme contrast gate: composite alpha foregrounds
+      correctly, require WCAG AA 4.5:1 for the declared normal-size text/action pairs, keep brand fill and
+      accent text as distinct tokens, give solid semantic action fills an explicit foreground, and include
+      mutation tests for the low-contrast values the gate was added to prevent. Run it in root CI on every OS.
     - [ ] P0.09a2 — Record the real-browser acceptance journey: pointer interactions must not gain noisy
       rings, keyboard navigation must retain visible focus across the shell/custom controls, text selection
-      must remain readable, and reduced-motion must suppress panel/pop/scroll motion while busy/waiting
-      state stays understandable. Retain screenshot/visual evidence with the exact candidate commit.
+      must remain readable, the checked semantic text pairs must remain understandable in the rendered UI,
+      and reduced-motion must suppress panel/pop/scroll motion while busy/waiting state stays understandable.
+      Retain screenshot/visual evidence with the exact candidate commit.
 - [ ] **P0.10 — Mobile completion gates.** Implement push delivery for Needs You, deep-link to the
   exact request, background reconciliation, offline/host-offline states, and physical-device
   microphone, VoiceOver, and TalkBack acceptance evidence.
@@ -365,3 +371,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-20 | P0.00a2c1 | Added safe desktop Markdown/DOCX file-link and attachment preview UI over opaque local capabilities, renderer-side projection bounds, dialog keyboard/focus semantics, raw-HTML/path traversal rejection, and explicit PDF/binary download-only degradation pending the PDF.js and browser-journey gates. |
 | 2026-08-20 | P1.08b | Enabled Codex peer-agent handoff through the existing harness-owned agents MCP contract, with capability advertisement only after mounting exists and a fake app-server test proving the per-boot comms token never appears as an argv value. |
 | 2026-08-20 | P1.08c | Enabled Codex local CUA and cloud Box computer tools through the existing verified stdio/proxy contracts, with capability bits, package-closure reuse, and fake app-server evidence that local/Box secret values remain outside argv. |
+| 2026-08-20 | P0.09a1b | Added semantic dark-theme contrast tokens and a dependency-free WCAG regression checker covering alpha compositing, normal-size text on recurring dark surfaces, and explicit foregrounds on solid semantic actions; mutation tests preserve the exact failures that motivated the gate. |

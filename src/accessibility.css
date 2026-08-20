@@ -1,6 +1,26 @@
-/* App-wide interaction baseline.
+/* App-wide interaction and contrast baseline.
    Component-specific motion may remain when it communicates semantic state; this layer removes
-   decorative panel/pop transitions and smooth scrolling for users who request reduced motion. */
+   decorative panel/pop transitions and smooth scrolling for users who request reduced motion.
+
+   These runtime accessibility tokens intentionally come after styles.css. A single blue cannot be
+   both normal-size text on dark cards and a filled control under light text at 4.5:1, so Cumea keeps
+   the brand fill and gives text / filled-action ink their own semantic colors. */
+:root {
+  --color-ink-secondary: #fcfcfcbf;
+  --color-accent-text: #2a9aff;
+  --color-action-ink: #070707;
+}
+
+/* Tailwind's text-accent utility is semantic text in the current shell. Keep the brand accent fill
+   unchanged so buttons/rings/selection do not shift just to repair a text pair. */
+.text-accent {
+  color: var(--color-accent-text) !important;
+}
+
+/* Solid semantic fills need real foreground colors rather than opacity or an assumed white ink. */
+:is(.bg-accent, .bg-success, .bg-danger, .bg-warning):is(.text-white, .text-ink) {
+  color: var(--color-action-ink) !important;
+}
 
 ::selection {
   background-color: color-mix(in srgb, var(--color-accent, #6ea8ff) 35%, transparent);
