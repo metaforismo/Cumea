@@ -7,6 +7,17 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Added an explicit newest-edge contract to the Expo chat surface without replacing its existing paging stack.
+  When the user is reading older history, only canonical message IDs appended after the previously observed
+  latest message accumulate behind a bounded accessible `N new messages` affordance. Initial hydration,
+  prepending older pages, same-ID streaming/settled updates and resnapshot/search-window replacement do not
+  manufacture counts; taps jump to inverted offset zero and normal near-edge following remains automatic.
+- Added the provider-neutral computer backend contract foundation. Computer descriptors now model
+  Private vs Shared scope, independent shell/files/graphical/checkpoint capabilities, honest
+  ready/provisioning/missing/transport-error/unavailable states, bounded public projection, runtime
+  capability-to-primitive conformance, and generation-fenced graphical leases so stale completion cannot
+  release a newer owner. Current local CUA/Box adapter migration, durable run binding, BYO VPS and
+  Team/Project computer product flows remain explicit follow-ups rather than inferred support.
 - Added a deterministic semantic dark-theme WCAG contrast gate. Cumea now separates normal-size
   accent text from the existing brand accent fill, gives solid accent/success/danger/warning actions
   an explicit foreground, composites alpha colors before measurement, and runs mutation-backed
@@ -114,6 +125,11 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Computer capability advertisement is now conformance-checked at runtime: shell requires `exec`, files
+  require both read/write primitives, graphical requires a graphical-session/screenshot primitive, and
+  checkpoints require create/restore. Descriptor/adapter backend-kind drift fails closed. The generic
+  contract deliberately does not claim provider-neutral input control until current CUA/Box adapters are
+  migrated and their control transports receive separate conformance evidence.
 - Codex computer MCP mounting keeps local-daemon and Box credential values out of app-server argv. Only
   the stdio command/arguments and environment-variable names are passed through Codex `-c`; actual CUA /
   Box secrets stay in the child environment. Cloud computer reuse goes through the same `computer-proxy`
