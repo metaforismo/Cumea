@@ -36,6 +36,9 @@ visible team:
   reduced-motion behavior;
 - an app-wide interaction baseline for keyboard-visible focus, branded text selection, reduced-motion
   scrolling, and decorative panel/pop transitions while semantic working/waiting state stays visible;
+- a deterministic dark-theme contrast gate that separates accent text from brand fills, gives solid
+  semantic actions an explicit foreground, composites alpha colors correctly, and checks recurring
+  normal-size text pairs at WCAG AA instead of relying on visual review alone;
 - an agent-first Expo companion for pairing, search, chat, stop, approvals, and routine status;
 - durable tasks, runs, tool steps, handoffs, artifacts, transcripts, configuration, and event logs;
 - a desktop-local Runtime inspector with bounded Events and Raw provider diagnostics for the active agent;
@@ -260,7 +263,8 @@ Ubuntu; and an unsigned macOS arm64 package-layout smoke. Root CI also rejects a
 server `*-proxy.ts`, while the staged-package smoke starts from every declared server process and
 verifies its complete self-contained relative import closure under `Resources/server`. The root suite
 also launches a real local+remote harness to prove that file capabilities stay desktop-local and are
-revoked with their bot.
+revoked with their bot. Root tests also run the dependency-free semantic contrast gate over recurring
+normal-size text/action color pairs so theme regressions fail CI instead of relying on visual review.
 
 A green CI run is not evidence of signing, notarization, native desktop behavior on every OS, or
 physical-device mobile support. See [the release checklist](docs/releasing.md) for the evidence
@@ -292,6 +296,7 @@ required before publishing a Developer Preview.
 | `electron/` | desktop shell, OS-backed credential vault, native permissions, dictation, and local computer use |
 | `apps/mobile/` | Expo Router companion, agent-list home, pairing, chat, approvals, and routines |
 | `scripts/package-runtime-closure.mjs` | release manifest and transitive dependency-closure gate for packaged server processes |
+| `scripts/check-theme-contrast.mjs` | dependency-free semantic WCAG contrast regression gate over the effective dark-theme tokens |
 
 The renderer owns no provider transport. Commands cross the local API, providers emit one canonical
 event stream, and the UI folds that stream into visible conversation state. The desktop sidebar search
@@ -320,7 +325,7 @@ fixed `:5199` UI and `:8799` harness pair described above.
 
 ## Direction
 
-P0.11 and P0.12 are complete, the source-level accessibility baseline and packaged server runtime
+P0.11 and P0.12 are complete, the source-level accessibility/contrast baseline and packaged server runtime
 closure gate are present, and draft #9's safe-file work is now split into explicit review layers.
 P0.00a1 establishes path-free bounded owner-local file capabilities; P0.00a2a adds dependency-free
 bounded Markdown/DOCX semantic parsing; P0.00a2b activates the desktop-local capability routes,
