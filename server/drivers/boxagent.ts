@@ -36,6 +36,17 @@ const MODELS = {
 
 const providerFor = (model: string) => (model.startsWith("gpt") ? "codex" : "claude-code");
 
+// The harness gives host-running providers a Cumea-owned local cwd and this
+// corresponding system hint. A boxAgent runs in a different filesystem, so
+// carrying that hint across the backend boundary would make relative file
+// citations look previewable even though the bytes live on the cloud box.
+export const HOST_FILE_PREVIEW_INSTRUCTION =
+  " When you create a user-facing file, write it inside the current working directory and cite it with a relative path such as ./report.md, ./report.pdf, or ./report.docx so Cumea can offer a safe preview.";
+
+export function boxAgentSystemPrompt(system: string | undefined): string | undefined {
+  return system?.replaceAll(HOST_FILE_PREVIEW_INSTRUCTION, "");
+}
+
 export interface BoxAgentConfig {
   pollMs: number;
 }
@@ -92,8 +103,8 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
       const model = turn.model || MODELS.default;
 
       const prompt = [
-        turn.system,
-        "You are working on your own cloud computer — its desktop, Chrome, and shell are yours.",
+        boxAgentSystemPrompt(turn.system),
+        "You are working on your own cloud computer — its desktop, Chrome, shell, and filesystem are yours. Host-local Cumea file capabilities do not address files created on this box.",
         "",
         turn.text,
       ]

@@ -281,8 +281,11 @@ export function readStoredAttachmentFile(storedPath: string, displayName: string
 export class FileCapabilityStore {
   private capabilities = new Map<string, FileCapability>();
   private byteCount = 0;
+  private readonly now: () => number;
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(now: () => number = Date.now) {
+    this.now = now;
+  }
 
   private remove(token: string): void {
     const capability = this.capabilities.get(token);

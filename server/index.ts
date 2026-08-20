@@ -11,6 +11,8 @@ import { fileURLToPath } from "node:url";
 import { writeFileAtomic } from "./atomic.ts";
 import { buildDesktopBootstrap } from "./bootstrap.ts";
 import { assertBusySteeringCapacity, coalesceBusySteering, queuedSteering } from "./busy-steering.ts";
+import { buildStructuredPreview } from "./document-preview.ts";
+import { FileCapabilityStore, botWorkspaceDirectory, publicFileCapability, readLocalBotFile, readStoredAttachmentFile, stageBotWorkspaceForDeletion } from "./file-capabilities.ts";
 import {
   localHostAllowed,
   localOriginAllowed,
@@ -196,6 +198,7 @@ const sessionFreshness = new SessionFreshnessStore(DATA_DIR);
 const workspace = new WorkspaceStore();
 const lifecycleWatchdog = new LifecycleWatchdog();
 const pairing = new PairingStore();
+const fileCapabilities = new FileCapabilityStore();
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
 
@@ -720,6 +723,7 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
   const commsDepth = opts.commsDepth ?? 0;
   const attachments = opts.attachments ?? [];
   const selection = { ...bot.modelSelection };
+  const localWorkspace = botWorkspaceDirectory(bot.id);
   const existingUserMessageIds = [...new Set(opts.existingUserMessageIds ?? [])];
   if (existingUserMessageIds.length) {
     const byId = new Map(store.messagesFor(bot.threadId).map((message) => [message.id, message]));
@@ -872,8 +876,10 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
         resumeCursor: turnContext.resumeCursor,
         transcript: turnContext.transcript,
         rebuildContext: turnContext.rebuildContext,
+        cwd: localWorkspace,
         system:
           persona +
+          " When you create a user-facing file, write it inside the current working directory and cite it with a relative path such as ./report.md, ./report.pdf, or ./report.docx so Cumea can offer a safe preview." +
           (integrations.computer && instance.driverKind !== "boxAgent"
             ? " You have your own cloud computer — use the computer tools (screenshot, computer_exec, open_url) whenever browsing or acting on a desktop helps."
             : integrations.localComputer
@@ -1187,6 +1193,7 @@ const SECURITY_HEADERS = {
 const DOCUMENT_CSP = [
   "default-src 'self'",
   "script-src 'self'",
+  "worker-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: https:",
   "connect-src 'self' http://127.0.0.1:8799 http://127.0.0.1:5199 http://localhost:8799 http://localhost:5199 ws://127.0.0.1:5199 ws://localhost:5199",
@@ -1764,9 +1771,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       // later metadata failure must still be able to rebuild the search index.
       const transcriptSnapshot = [...store.messagesFor(bot.threadId)];
       let stagedFiles: StagedFileDeletion | null = null;
+      let stagedBotWorkspace: StagedFileDeletion | null = null;
       let workspaceTransaction: ReturnType<typeof workspace.removeBotDataTransaction> | null = null;
       let botTransaction: ReturnType<typeof store.deleteBotRecordTransaction> | null = null;
       try {
+        stagedBotWorkspace = stageBotWorkspaceForDeletion(bot.id);
         // Same-volume rename is the prepare phase: no bytes are destroyed
         // until both metadata stores have committed, and every path can be
         // restored if either commit fails.
@@ -1783,6 +1792,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         // A purge failure rolls metadata and all remaining quarantined bytes
         // back below. Only after a complete purge may the transcript cache be
         // forgotten and a deletion event be broadcast.
+        stagedBotWorkspace.purge();
         stagedFiles.purge();
         botTransaction.finalize();
       } catch (error) {
@@ -1790,6 +1800,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         for (const rollback of [
           botTransaction?.rollback,
           workspaceTransaction?.rollback,
+          stagedBotWorkspace?.rollback,
           stagedFiles?.rollback,
         ]) {
           if (!rollback) continue;
@@ -1816,6 +1827,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         }
         throw error;
       }
+      fileCapabilities.revokeBot(bot.id);
       try { sessionFreshness.delete(bot.threadId); } catch (error) { console.error("could not remove session freshness metadata", error); }
       broadcast(
         { kind: "bot.deleted", botId: bot.id, ...(operationId ? { operationId } : {}) },
@@ -1823,6 +1835,70 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       );
       broadcastWorkspace();
       return json(res, 200, { ok: true, removed: workspaceTransaction.removed });
+    }
+
+
+    m = path.match(/^\/api\/bots\/([\w-]+)\/files\/resolve$/);
+    if (m && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "file preview capabilities are local-only" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const body = await readBody(req);
+      const capability = fileCapabilities.issue(bot.id, readLocalBotFile(bot.id, body.path));
+      res.setHeader("cache-control", "no-store");
+      return json(res, 200, { file: publicFileCapability(capability) });
+    }
+
+    m = path.match(/^\/api\/attachments\/([\w-]+)\/files\/resolve$/);
+    if (m && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "file preview capabilities are local-only" });
+      const attachment = workspace.attachment(m[1]);
+      if (!attachment) return json(res, 404, { error: "no such attachment" });
+      const bot = store.bot(attachment.botId);
+      if (!bot) return json(res, 404, { error: "attachment owner no longer exists" });
+      const capability = fileCapabilities.issue(
+        bot.id,
+        readStoredAttachmentFile(attachment.storedPath, attachment.name),
+      );
+      res.setHeader("cache-control", "no-store");
+      return json(res, 200, { file: publicFileCapability(capability) });
+    }
+
+    m = path.match(/^\/api\/files\/([A-Za-z0-9_-]{43})\/(preview|download)$/);
+    if (m && method === "GET") {
+      if (surface !== "local") return json(res, 403, { error: "file preview capabilities are local-only" });
+      const capability = fileCapabilities.get(m[1]);
+      if (!capability) return json(res, 404, { error: "file preview expired or was revoked" });
+      const encodedName = encodeURIComponent(capability.name);
+      if (m[2] === "download") {
+        res.writeHead(200, {
+          ...SECURITY_HEADERS,
+          "cache-control": "no-store",
+          "content-type": capability.mime,
+          "content-length": String(capability.bytes.length),
+          "content-disposition": "attachment; filename*=UTF-8''" + encodedName,
+        });
+        return res.end(capability.bytes);
+      }
+      if (capability.kind === "pdf") {
+        res.writeHead(200, {
+          ...SECURITY_HEADERS,
+          "cache-control": "no-store",
+          "content-type": "application/pdf",
+          "content-length": String(capability.bytes.length),
+          "content-disposition": "attachment; filename*=UTF-8''" + encodedName,
+        });
+        return res.end(capability.bytes);
+      }
+      const preview = await buildStructuredPreview(capability.kind, capability.bytes);
+      const data = Buffer.from(JSON.stringify({ preview }));
+      res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        "cache-control": "no-store",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": String(data.length),
+      });
+      return res.end(data);
     }
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/attachments$/);
