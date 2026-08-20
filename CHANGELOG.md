@@ -7,6 +7,10 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Added a deterministic semantic dark-theme WCAG contrast gate. Cumea now separates normal-size
+  accent text from the existing brand accent fill, gives solid accent/success/danger/warning actions
+  an explicit foreground, composites alpha colors before measurement, and runs mutation-backed
+  contrast checks in the cross-platform root test suite rather than relying on visual review alone.
 - Added verified Codex local and cloud computer tools without introducing a new sidecar or dependency.
   Codex can now mount the already-validated Electron-owned local CUA stdio contract on supported macOS
   hosts, or Box cloud computer use through the existing P0.08a release-classified `computer-proxy`.
@@ -79,6 +83,11 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Changed
 
+- Re-audited Cumea `1c61e3da` against Rakazo `f0a2cb20` and OpenMausBot `6b2ca7e0` on 20 August.
+  The refreshed roadmap promotes secure raster-image handling, approval invalidation on cancellation,
+  signed companion distribution evidence, structured provider auth/model-binding checks, Linux installed-
+  runtime/native provenance, additive-only portable imports, and a provider-neutral fenced computer contract.
+  Cumea already has sections and mobile paging/windowing, so those are not duplicated as new feature work.
 - Cloud `boxAgent` turns now explicitly remove the host-local file-preview instruction because their
   filesystem belongs to the cloud box; Cumea no longer implies that a Box-created relative path can be
   opened through the host-local capability surface.
@@ -87,11 +96,10 @@ All notable changes to Cumea are documented here. This project follows
 - Native provider continuation is now dispatch-fresh rather than cursor-presence based. A→B→A routing,
   provider reloads, interrupted dispatches and unsupported in-session model changes rebuild bounded canonical
   conversation context in a fresh native session instead of trusting stale provider state.
-- Re-audited Cumea `ea3d751b` against Rakazo `c3d386d8` and OpenMausBot `70805c0a` after P0.12.
-  Newly explicit gaps are Agent→Conversations separation, owner-local bounded history compaction,
-  steady-state typing/streaming/idle evidence, resilient mobile host-candidate rotation, BYO-VPS, and
-  fenced Team/Private computer sessions. Cumea keeps SQLite/local identity as the default and does not
-  adopt mandatory Better Auth/Postgres, hosted memory, or a Cumea-operated control plane.
+- The earlier post-P0.12 audit promoted Agent→Conversations separation, owner-local bounded history
+  compaction, steady-state typing/streaming/idle evidence, resilient mobile host-candidate rotation,
+  BYO-VPS, and fenced Team/Private computer sessions. Cumea keeps SQLite/local identity as the default
+  and does not adopt mandatory Better Auth/Postgres, hosted memory, or a Cumea-operated control plane.
 - P0.03 now keeps the stable renderer gateway while the packaged harness uses an OS-assigned private
   port. Readiness is published over a versioned exact-PID UtilityProcess message instead of HTTP
   polling/fixed fallback ports. The optional remote listener keeps an independent explicit/default
