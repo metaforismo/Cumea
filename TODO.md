@@ -322,10 +322,11 @@ should not bypass the release, security, persistence, or measurement foundations
   compatible implementations without making a Cumea-managed sandbox or cloud service mandatory.
   Model per-agent private and explicitly shared/team computers separately and report capabilities /
   degradation honestly.
-  - [~] P1.12a — Land the provider-neutral contract foundation (PR #43): explicit private/shared scope,
+  - [x] P1.12a — Land the provider-neutral contract foundation: explicit private/shared scope,
     independent shell/files/graphical/checkpoint capability bits, honest ready/provisioning/missing/
-    transport-error/unavailable states, bounded public projection, and fenced graphical leases with random
-    lease ID + monotonically increasing generation so stale completion cannot release a newer owner.
+    transport-error/unavailable states, bounded public projection, runtime capability-to-primitive conformance,
+    and fenced graphical leases with random lease ID + monotonically increasing generation so stale completion
+    cannot release a newer owner. Keep current CUA/Box adaptation and durable run bindings as later tranches.
   - [ ] P1.12b — Add a user-owned BYO-VPS implementation using a preconfigured SSH alias / Docker transport:
     no app-stored private key, no auto-accepted host key, no public container ports, explicit transport-vs-
     missing states, bounded status/lock timeouts, hardened managed-container verification, disposable-
@@ -415,3 +416,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-20 | P1.08c | Enabled Codex local CUA and cloud Box computer tools through the existing verified stdio/proxy contracts, with capability bits, package-closure reuse, and fake app-server evidence that local/Box secret values remain outside argv. |
 | 2026-08-20 | P0.09a1b | Added semantic dark-theme contrast tokens and a dependency-free WCAG regression checker covering alpha compositing, normal-size text on recurring dark surfaces, and explicit foregrounds on solid semantic actions; mutation tests preserve the exact failures that motivated the gate. |
 | 2026-08-20 | Competitive audit morning refresh | Re-pinned Cumea `1c61e3da`, Rakazo `f0a2cb20`, and OpenMausBot `6b2ca7e0`; promoted secure raster images, cancellation/approval reconciliation, signed mobile distribution, structured provider auth/model-binding, Linux installed-runtime evidence, additive-only imports and provider-neutral fenced computer contracts while explicitly rejecting duplicate sections and mandatory hosted defaults. |
+| 2026-08-20 | P1.12a | Added the provider-neutral computer contract foundation with explicit private/shared scope, independent capabilities, honest transport states, capability-to-primitive runtime conformance and generation-fenced graphical leases; current CUA/Box adapters, durable run bindings, BYO VPS and shared-computer product UI remain separate follow-ups. |
