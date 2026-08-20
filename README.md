@@ -210,8 +210,13 @@ of pretending every provider can do everything. Settings show unsupported switch
 |---|---:|---:|---:|---:|---:|
 | Claude Agent | yes | yes | yes | macOS | yes |
 | Grok / Gemini ACP | yes | yes | not yet | macOS | not yet |
-| Codex app-server | yes | not yet | not yet | not yet | not yet |
+| Codex app-server | yes | yes | not yet | not yet | not yet |
 | Box cloud agent | yes | not yet | not yet | no | yes |
+
+Codex peer handoff uses the same harness-owned `list_bots` / `ask_bot` MCP proxy as the other capable
+runtimes. Cumea passes only the proxy command/args and environment-variable names through Codex's `-c`
+configuration; the per-boot peer-communication token remains in the child environment and never appears
+as an argv value. Connected apps and computer MCP remain separate unverified Codex capabilities.
 
 Switching a conversation between provider instances no longer trusts a cursor merely because it exists.
 Cumea records private per-thread dispatch freshness and resumes a native session only when that instance/model

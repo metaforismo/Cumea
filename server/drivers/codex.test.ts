@@ -104,6 +104,41 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
     expect(turnStart.params.input[0].text).toBe("You are Testy.\n\nlist files");
   });
 
+  it("mounts peer-agent MCP without putting the comms secret in argv", async () => {
+    await create();
+    const dump = join(scratch, "agents.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-agents",
+      text: "ask the researcher",
+      integrations: {
+        agents: {
+          command: process.execPath,
+          args: ["/tmp/cumea-agents-proxy.js"],
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            CUMEA_HARNESS_URL: "http://127.0.0.1:8799",
+            CUMEA_BOT_ID: "captain",
+            CUMEA_THREAD_ID: "t-agents",
+            CUMEA_COMMS_TOKEN: "peer-comms-secret",
+            CUMEA_TURN_DEPTH: "0",
+          },
+        },
+      },
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const argv = seen.argv.join(" ");
+    expect(argv).toContain("mcp_servers.agents.command");
+    expect(argv).toContain("/tmp/cumea-agents-proxy.js");
+    expect(argv).toContain("CUMEA_COMMS_TOKEN");
+    expect(argv).not.toContain("peer-comms-secret");
+    expect(seen.env.CUMEA_COMMS_TOKEN).toBe("peer-comms-secret");
+    expect(instance.adapter.capabilities.agentsMcp).toBe(true);
+  });
+
   it("tries thread/resume with a cursor and reuses the thread id", async () => {
     await create({ mode: "resume" });
     const dump = join(scratch, "dump.json");

@@ -252,6 +252,11 @@ should not bypass the release, security, persistence, or measurement foundations
   Ollama, LM Studio, oMLX, EXO, and compatible endpoints without pretending unsupported tools work.
   - [ ] P1.08a — Add guided provider install/login and official device-code/subscription authentication
     where supported, with clear distinction between CLI subscription auth and API-key billing.
+  - [x] P1.08b — Extend the verified provider capability matrix to Codex peer handoff: mount the existing
+    harness-owned agents stdio MCP contract through app-server `-c` configuration, advertise the capability
+    only after the mount exists, and prove the per-boot comms secret stays in child env rather than argv.
+    Keep Codex connected-app and computer capabilities separate until their transport/proxy contracts have
+    independent tests instead of inferring support from the generic MCP mechanism.
 - [ ] **P1.09 — User-owned always-on host.** Package an optional OCI/VPS deployment with pairing,
   HTTPS guidance, health, backup, controlled updates, device revocation, and no mandatory Cumea
   control plane.
@@ -352,3 +357,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-19 | Draft cleanup | Closed superseded safe-file draft #32 without merge; #9 remains the sole historical extraction ledger until the remaining retained concerns have replacement PRs or reject decisions. |
 | 2026-08-20 | P0.00a2b | Activated desktop-local opaque file capability routes with host-owned attachment resolution, host-provider workspaces, binary download-only behavior, explicit Box/cloud filesystem separation, paired/mobile denial, delete-time capability revocation and real-harness cross-platform evidence. The integration pass also exposed and fixed the P0.00a1 Node 24 strip-only constructor incompatibility instead of hiding it behind the test harness. |
 | 2026-08-20 | P0.00a2c1 | Added safe desktop Markdown/DOCX file-link and attachment preview UI over opaque local capabilities, renderer-side projection bounds, dialog keyboard/focus semantics, raw-HTML/path traversal rejection, and explicit PDF/binary download-only degradation pending the PDF.js and browser-journey gates. |
+| 2026-08-20 | P1.08b | Enabled Codex peer-agent handoff through the existing harness-owned agents MCP contract, with capability advertisement only after mounting exists and a fake app-server test proving the per-boot comms token never appears as an argv value. |
