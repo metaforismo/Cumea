@@ -7,9 +7,13 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Added verified Codex local and cloud computer tools without introducing a new sidecar or dependency.
+  Codex can now mount the already-validated Electron-owned local CUA stdio contract on supported macOS
+  hosts, or Box cloud computer use through the existing P0.08a release-classified `computer-proxy`.
+  Local and cloud share one `computer` MCP name and the harness selects at most one for a turn.
 - Added verified Codex peer-agent handoff through the existing harness-owned `agents` MCP proxy. Codex
   bots can now receive `list_bots` / `ask_bot` when collaboration is enabled, using the same recursion and
-  permission boundary as other capable providers. Connected apps and computer MCP remain separately gated.
+  permission boundary as other capable providers. Connected apps remain separately gated.
 - Added a desktop-local safe file viewer for Markdown and DOCX capabilities. Assistant relative file
   citations and managed attachments resolve through opaque host-issued capabilities; the dialog traps
   keyboard focus, closes on Escape and restores focus, renders Markdown only as React text nodes, renders
@@ -102,8 +106,12 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
-- Codex stdio MCP mounting keeps peer-communication secret values out of app-server argv. The command,
-  arguments and environment-variable names are configuration values, while the actual per-boot token stays
+- Codex computer MCP mounting keeps local-daemon and Box credential values out of app-server argv. Only
+  the stdio command/arguments and environment-variable names are passed through Codex `-c`; actual CUA /
+  Box secrets stay in the child environment. Cloud computer reuse goes through the same `computer-proxy`
+  whose staged-package import closure is already verified by P0.08a.
+- Codex peer-agent MCP mounting keeps the per-boot peer-communication token out of app-server argv. The
+  command, arguments and environment-variable names are configuration values, while the token itself stays
   only in the child environment; the fake app-server contract test verifies the secret never appears in
   process arguments before `agentsMcp` is advertised.
 - The desktop file viewer never executes document-controlled HTML or uses iframe/embed/object/browser-plugin
