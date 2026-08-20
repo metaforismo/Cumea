@@ -1,7 +1,7 @@
 import { extname } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
-export type PreviewFileKind = "markdown" | "pdf" | "docx";
+export type PreviewFileKind = "markdown" | "pdf" | "docx" | "binary";
 
 export type DocumentBlock =
   | { type: "heading"; level: number; text: string }
@@ -457,6 +457,7 @@ export function buildStructuredPreview(
   kind: Exclude<PreviewFileKind, "pdf">,
   bytes: Buffer,
 ): StructuredFilePreview {
+  if (kind === "binary") throw previewError(415, "binary files are download-only");
   if (kind === "markdown") {
     if (bytes.length > MARKDOWN_MAX_BYTES) throw previewError(413, "Markdown preview is limited to 5 MB");
     const text = decodeUtf8(bytes, "Markdown file");
