@@ -7,15 +7,19 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Activated desktop-local opaque file capabilities in the real harness. Host-running providers receive
+  one Cumea-owned per-bot working directory and can cite relative deliverables; the desktop can resolve
+  those paths or authoritative attachment IDs into bounded `no-store` preview/download capabilities.
+  Markdown/DOCX use the existing passive semantic preview, PDF returns only the validated snapshot bytes
+  for the later PDF.js renderer, and unknown/binary files remain download-only.
 - Added dependency-free bounded Markdown/DOCX semantic preview parsing. DOCX now goes through Cumea's
   own fixed ZIP central/local preflight, stored/DEFLATE-only decompression, CRC verification, archive /
   entry / ratio / output budgets, active-content and external-relationship rejection, passive XML
   checks, and a bounded heading/list/paragraph projection before any renderer is allowed to consume it.
-- Added the P0.00a1 safe local-file capability foundation without exposing new routes yet: exact
-  per-bot workspaces, bounded regular-file snapshots, host-owned attachment reads, expiring/revocable
-  path-free capabilities, lightweight Markdown/PDF/DOCX signature classification, rollback-capable
-  workspace quarantine, and cross-platform security tests. HTTP/UI/PDF activation remains split across
-  P0.00a2b/P0.00a2c rather than being inferred from these parser primitives.
+- Added the P0.00a1 safe local-file capability foundation: exact per-bot workspaces, bounded regular-file
+  snapshots, host-owned attachment reads, expiring/revocable path-free capabilities, lightweight
+  Markdown/PDF/DOCX signature classification, rollback-capable workspace quarantine, and cross-platform
+  security tests. Desktop route activation is now complete; rich desktop rendering remains P0.00a2c.
 - Added a fail-closed packaged server runtime-closure gate. The desktop harness and every classified
   server sidecar must exist in staged `Resources/server`; reachable relative runtime imports are
   followed transitively, and source/proxy drift plus missing-entrypoint and missing-dependency cases
@@ -63,6 +67,9 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Changed
 
+- Cloud `boxAgent` turns now explicitly remove the host-local file-preview instruction because their
+  filesystem belongs to the cloud box; Cumea no longer implies that a Box-created relative path can be
+  opened through the host-local capability surface.
 - Closed stale safe-file draft PR #32 without merge after its retained concerns were split into current-main
   replacement tranches. Historical PR #9 is now the only extraction ledger for the remaining old v0.2 work.
 - Native provider continuation is now dispatch-fresh rather than cursor-presence based. A→B→A routing,
@@ -78,16 +85,28 @@ All notable changes to Cumea are documented here. This project follows
   polling/fixed fallback ports. The optional remote listener keeps an independent explicit/default
   port. No startup performance improvement is claimed before fixed-machine evidence exists.
 
+### Fixed
+
+- `FileCapabilityStore` no longer uses a TypeScript parameter property. Once the capability module was
+  imported by the real harness, Node 24 strip-only execution exposed that syntax as unsupported even
+  though typecheck/build and isolated Vitest transpilation had passed. The explicit constructor field
+  restores direct `node server/index.ts` startup and every existing harness-spawn integration suite.
+
 ### Security
 
+- File capability resolution, preview and download remain desktop-local even after a paired device has
+  authenticated successfully. The remote/mobile listener cannot mint or consume those bearer tokens;
+  public capability data contains no host path, attachment resolution starts from a host-owned record,
+  traversal is denied, binary preview fails closed, and successful bot deletion revokes all live
+  workspace/attachment capabilities for that bot.
 - DOCX semantic parsing is fail-closed before decompression: ZIP64, encryption, data descriptors,
   unsupported methods, unsafe/duplicate paths, central/local disagreement, compression bombs, active
   Word parts, DOCTYPE/ENTITY declarations, external relationships, invalid entities, CRC/size mismatch,
   and oversized semantic output are rejected without rendering archive-controlled HTML.
-- Model-cited file paths still cannot trigger renderer reads. The local-file foundation requires
-  lexical and realpath containment inside an exact Cumea-owned directory, rejects final symlinks,
-  snapshots through a checked file descriptor, bounds file/token memory and lifetime, and exposes no
-  host path in its public capability projection. Activation remains a separate review gate.
+- Model-cited file paths cannot trigger arbitrary renderer reads. Local resolution requires lexical and
+  realpath containment inside the exact Cumea-owned bot workspace, rejects final symlinks, snapshots
+  through a checked file descriptor, and bounds file/token memory and lifetime. The desktop viewer still
+  consumes only opaque capability URLs; rich UI activation remains a separate review gate.
 - Package runtime verification rejects unclassified server proxies, missing or empty declared
   entrypoints/dependencies, imports escaping the real staged server root, non-literal dynamic loading,
   and bare package imports under the current no-runtime-`node_modules` server packaging contract.
