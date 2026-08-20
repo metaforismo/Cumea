@@ -80,19 +80,20 @@ local sample data and is not evidence that a provider task ran.
   the UI. Long-lived attachment-heavy agents may therefore reach that quota; the current recovery
   path is deleting the agent after reviewing the impact; that operation removes the agent's files
   and audit data together. Audit-aware storage management is tracked on the roadmap.
-- The safe local-file foundation treats model-cited paths as untrusted. It can snapshot only regular
-  files inside an exact Cumea-owned bot workspace or a host-owned attachment record into bounded,
-  expiring opaque capabilities; host paths are not projected. Markdown remains inert text and DOCX
-  semantic parsing now uses a dependency-free bounded ZIP/XML reader before decompression. New
-  preview/download routes, desktop viewers, and PDF.js rendering remain disabled until P0.00a2b/a2c.
+- Model-cited file paths remain untrusted. The desktop-local harness can now resolve only regular files
+  inside the exact Cumea-owned bot workspace, or a host-owned attachment record, into bounded expiring
+  opaque capabilities; host paths are never projected. Resolve/preview/download capability routes are
+  unavailable to the paired/mobile surface even with a valid device bearer token. Markdown remains inert
+  text, DOCX semantic parsing uses the dependency-free bounded ZIP/XML reader, binary files are
+  download-only, and the desktop file dialog / rich renderer / PDF.js UI remain P0.00a2c work.
 - The desktop harness binds to `127.0.0.1` and rejects state-changing browser requests from foreign
   origins. Remote access is a separate listener, disabled by default.
 - Optional mobile access uses a short-lived, single-use 256-bit pairing secret. Device bearer tokens
   are returned once, stored in SecureStore on mobile, stored only as SHA-256 hashes on the host, and
   can be revoked from the trusted local UI.
 - The remote transcript, workspace, and SSE surfaces use explicit allowlists: hidden bots, provider
-  errors, prompts, reasoning, raw screen frames, configuration, and credential-shaped fields stay
-  local.
+  errors, prompts, reasoning, raw screen frames, configuration, credential-shaped fields, and local
+  file capabilities stay local.
 - A remotely reachable host requires HTTPS terminated by the user's reverse proxy, secure tunnel,
   or private-network gateway. The raw Node HTTP listener must not be exposed to the public internet.
 - Remote computer preview is off by default. If explicitly enabled, it exposes only the latest
@@ -219,6 +220,12 @@ While an agent is already working, desktop and paired mobile keep the composer u
 
 Tracked Work runs now expose honest lifecycle state. Provider questions/approvals are explicitly `waiting` and exempt from silence timers; `no-signal` / `dead` are advisory observations and never auto-kill a provider. Repeated-identical tool/effect sequences surface through Work / Needs You so the user can steer or stop the current turn. See [agent lifecycle watchdog](docs/agent-lifecycle.md).
 
+Host-running provider turns receive an owner-local per-bot working directory. Agents are instructed to
+write user-facing deliverables there and cite relative paths such as `./report.md`; the local harness can
+turn those paths into opaque file capabilities without disclosing the host path. `boxAgent` runs in a
+separate cloud filesystem, so Cumea strips that host-local promise from Box turns rather than pretending
+a cloud file is locally previewable. See [local file capability routes](docs/file-capability-routes.md).
+
 “Teach as routine” currently captures a completed bot task and its prompt; it does not yet record a
 human clicking through an arbitrary desktop workflow. Scheduled routines run while the Cumea
 harness is running. Laptop-off execution therefore works only when that harness and its configured
@@ -240,8 +247,9 @@ The CI matrix runs root type checking and tests on macOS, Ubuntu, and Windows; p
 harness builds plus an SBOM on Ubuntu; Expo JavaScript and independently locked landing builds on
 Ubuntu; and an unsigned macOS arm64 package-layout smoke. Root CI also rejects an unclassified
 server `*-proxy.ts`, while the staged-package smoke starts from every declared server process and
-verifies its complete self-contained relative import closure under `Resources/server`. See
-[packaged server runtime closure](docs/package-runtime-closure.md).
+verifies its complete self-contained relative import closure under `Resources/server`. The root suite
+also launches a real local+remote harness to prove that file capabilities stay desktop-local and are
+revoked with their bot.
 
 A green CI run is not evidence of signing, notarization, native desktop behavior on every OS, or
 physical-device mobile support. See [the release checklist](docs/releasing.md) for the evidence
@@ -256,8 +264,8 @@ required before publishing a Developer Preview.
 | `server/pairing.ts` | expiring one-time pairing sessions, hashed device tokens, and revocation |
 | `server/mobile.ts` | allowlisted mobile bot/message projections and sanitized remote SSE events |
 | `server/workspace.ts` | durable sections, attachments, tasks, runs, artifacts, and schedules |
-| `server/file-capabilities.ts` | bounded owner-local workspace/attachment snapshots and opaque path-free read capabilities; not exposed to the renderer until P0.00a2b |
-| `server/document-preview.ts` | dependency-free bounded Markdown/DOCX semantic parser over passive structured output; no HTTP/renderer activation yet |
+| `server/file-capabilities.ts` | bounded owner-local workspace/attachment snapshots and opaque path-free read capabilities used by desktop-local resolve/preview/download routes |
+| `server/document-preview.ts` | dependency-free bounded Markdown/DOCX semantic parser used by the local preview route; desktop rich rendering remains separate |
 | `server/message-search-index.ts` | owner-local derived SQLite/WAL transcript search projection with legacy-file fingerprints and canonical-revision reconciliation |
 | `server/turn-context.ts` | bounded canonical context rebuild and native-session resume decision |
 | `server/session-freshness.ts` | private owner-local per-thread pending/dispatched/invalidated provider-session state |
@@ -302,13 +310,14 @@ fixed `:5199` UI and `:8799` harness pair described above.
 P0.11 and P0.12 are complete, the source-level accessibility baseline and packaged server runtime
 closure gate are present, and draft #9's safe-file work is now split into explicit review layers.
 P0.00a1 establishes path-free bounded owner-local file capabilities; P0.00a2a adds dependency-free
-bounded Markdown/DOCX semantic parsing. P0.00a2b still owns provider workspace/runtime route activation,
-and P0.00a2c owns the desktop file dialog, PDF.js, package evidence and browser acceptance. Superseded
-safe-file draft #32 is closed; #9 remains the single historical extraction ledger. The immediate
-priorities remain **finishing focused draft-#9 extraction, steady-state renderer/thread scaling,
-resilient mobile completion, conversation/memory separation, signed distribution and real-journey
-evidence, and a pluggable user-owned computer contract**. P0.09a remains open until the exact browser
-journey records keyboard focus, selection readability, and reduced-motion behavior.
+bounded Markdown/DOCX semantic parsing; **P0.00a2b now activates the desktop-local capability routes,
+provider workspace semantics and paired/mobile denial**. P0.00a2c remains the final safe-file tranche:
+desktop file links/dialog, inert Markdown/DOCX rendering, bounded PDF.js, package evidence and browser
+acceptance. Superseded safe-file draft #32 is closed; #9 remains the historical extraction ledger.
+The immediate priorities remain **finishing focused draft-#9 extraction, steady-state renderer/thread
+scaling, resilient mobile completion, conversation/memory separation, signed distribution and
+real-journey evidence, and a pluggable user-owned computer contract**. P0.09a remains open until the
+exact browser journey records keyboard focus, selection readability, and reduced-motion behavior.
 
 The current competitive audit is pinned to Cumea `ea3d751b`, Rakazo `c3d386d8`, and OpenMausBot
 `70805c0a`. It adapts conversation reset into multi-conversation agents, hosted-memory compaction into an
@@ -321,6 +330,8 @@ agent-list-first mobile identity instead of replacing them with a hosted archite
 
 See [ROADMAP.md](ROADMAP.md) for the ordered backlog,
 [the safe local file preview security boundary](docs/file-preview-security.md),
+[local file capability routes](docs/file-capability-routes.md),
+[packaged server runtime closure](docs/package-runtime-closure.md),
 [the 2026-08-19 Rakazo/OpenMaus engineering audit](docs/competitive-audit-2026-08-19.md) for the latest
 `adopt / adapt / reject` decisions, [the 2026-08-18 audit](docs/competitive-audit-2026-08-18.md) for the
 previous pin, and [docs/UPSTREAM.md](docs/UPSTREAM.md) for the earlier upstream issue/PR audit.
