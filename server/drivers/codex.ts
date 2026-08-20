@@ -65,6 +65,30 @@ const QUESTION_TIMEOUT_NOTE = "No answer was given — use your best judgment.";
 const DENY_TIMEOUT_NOTE =
   "Cumea: nobody answered this permission request in time. Skip this action and finish what you can without it.";
 
+type StdioMcpServer = { command: string; args: string[]; env: Record<string, string> };
+
+/**
+ * Mount one stdio MCP server into Codex without putting credential values in
+ * argv. Codex reads only the allowlisted variable names from its environment;
+ * process listings and native argument diagnostics therefore never contain
+ * the peer-comms token itself.
+ */
+function mountStdioMcpServer(
+  appServerArgs: string[],
+  env: Record<string, string | undefined>,
+  name: string,
+  server: StdioMcpServer,
+): void {
+  Object.assign(env, server.env);
+  const prefix = `mcp_servers.${name}`;
+  appServerArgs.push(
+    "-c", `${prefix}.command=${JSON.stringify(server.command)}`,
+    "-c", `${prefix}.args=${JSON.stringify(server.args)}`,
+    "-c", `${prefix}.env_vars=${JSON.stringify(Object.keys(server.env))}`,
+    "-c", `${prefix}.default_tools_approval_mode="auto"`,
+  );
+}
+
 export const CodexDriver: ProviderDriver<CodexConfig> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "Codex", supportsMultipleInstances: true },
@@ -103,7 +127,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // billing to pay-as-you-go (agentcal)
       delete env.OPENAI_API_KEY;
 
-      const child = spawn(config.cli, ["app-server"], {
+      const appServerArgs = ["app-server"];
+      if (turn.integrations?.agents) {
+        mountStdioMcpServer(appServerArgs, env, "agents", turn.integrations.agents);
+      }
+
+      const child = spawn(config.cli, appServerArgs, {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],
@@ -401,7 +430,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
-        capabilities: { sessionModelSwitch: "unsupported" },
+        capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
         respondToRequest: async (threadId, requestId, decision) => {
