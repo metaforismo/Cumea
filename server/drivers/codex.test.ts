@@ -139,6 +139,64 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
     expect(instance.adapter.capabilities.agentsMcp).toBe(true);
   });
 
+  it("mounts the validated local CUA stdio contract without leaking its env values in argv", async () => {
+    await create();
+    const dump = join(scratch, "local-computer.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-local-computer",
+      text: "open the browser",
+      integrations: {
+        localComputer: {
+          command: process.execPath,
+          args: ["/tmp/cua-mcp.js", "--stdio"],
+          env: {
+            CUA_CONNECTION_TOKEN: "local-cua-secret",
+            CUA_CONNECTION_PORT: "49152",
+          },
+        },
+      },
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const argv = seen.argv.join(" ");
+    expect(argv).toContain("mcp_servers.computer.command");
+    expect(argv).toContain("/tmp/cua-mcp.js");
+    expect(argv).toContain("CUA_CONNECTION_TOKEN");
+    expect(argv).not.toContain("local-cua-secret");
+    expect(seen.env.CUA_CONNECTION_TOKEN).toBe("local-cua-secret");
+    expect(seen.env.CUA_CONNECTION_PORT).toBe("49152");
+    expect(instance.adapter.capabilities.localComputerMcp).toBe(true);
+  });
+
+  it("mounts the packaged cloud computer proxy with Box credentials only in child env", async () => {
+    await create();
+    const dump = join(scratch, "cloud-computer.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-cloud-computer",
+      text: "inspect the cloud desktop",
+      integrations: {
+        computer: { boxId: "box-codex-1", token: "box-token-secret" },
+      },
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const argv = seen.argv.join(" ");
+    expect(argv).toContain("mcp_servers.computer.command");
+    expect(argv).toMatch(/computer-proxy\.(?:ts|js)/);
+    expect(argv).toContain("CUMEA_BOX_TOKEN");
+    expect(argv).not.toContain("box-token-secret");
+    expect(seen.env.CUMEA_BOX_ID).toBe("box-codex-1");
+    expect(seen.env.CUMEA_BOX_TOKEN).toBe("box-token-secret");
+    expect(seen.env.ELECTRON_RUN_AS_NODE).toBe("1");
+    expect(instance.adapter.capabilities.cloudComputerMcp).toBe(true);
+  });
+
   it("tries thread/resume with a cursor and reuses the thread id", async () => {
     await create({ mode: "resume" });
     const dump = join(scratch, "dump.json");
