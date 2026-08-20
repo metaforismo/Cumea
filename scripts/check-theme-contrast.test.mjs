@@ -9,7 +9,8 @@ import {
 } from "./check-theme-contrast.mjs";
 
 test("composites alpha foreground colors before applying WCAG contrast", () => {
-  assert.ok(Math.abs(contrastRatio("#fcfcfcbf", "#5a5a5a") - 4.607) < 0.01);
+  // 0xbf alpha is 191/255, not 0.75 exactly; preserve the exact sRGB result.
+  assert.ok(Math.abs(contrastRatio("#fcfcfcbf", "#5a5a5a") - 4.623) < 0.005);
 });
 
 test("later accessibility tokens extend the inherited base theme", () => {
