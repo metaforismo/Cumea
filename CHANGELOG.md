@@ -7,6 +7,10 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Hardened editable on-device macOS dictation without introducing cloud speech fallback. The composer
+  preflights microphone permission, maps the existing Swift helper's public failure vocabulary to actionable
+  recovery, keeps partial/final transcript text editable, stops listening on typing/send/Escape/agent switch,
+  exposes microphone pressed state accessibly, and runs speech protocol/session contracts in root CI on every OS.
 - Added an explicit newest-edge contract to the Expo chat surface without replacing its existing paging stack.
   When the user is reading older history, only canonical message IDs appended after the previously observed
   latest message accumulate behind a bounded accessible `N new messages` affordance. Initial hydration,
@@ -125,6 +129,11 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Native desktop speech helper output is now an explicit bounded NDJSON trust boundary. Non-empty malformed,
+  ambiguous, oversized, or helper-declared failure output closes the decoder; native stderr/private exception
+  details are never projected. A dependency-free session manager invalidates producer identity before Stop or
+  replacement, settles terminal state once, kills failed helpers best-effort, and rejects stdout/close/error
+  queued from stale sessions so an old helper cannot mutate a newer composer.
 - Computer capability advertisement is now conformance-checked at runtime: shell requires `exec`, files
   require both read/write primitives, graphical requires a graphical-session/screenshot primitive, and
   checkpoints require create/restore. Descriptor/adapter backend-kind drift fails closed. The generic

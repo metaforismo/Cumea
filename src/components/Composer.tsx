@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, FileText, Loader2, Mic, Plus, Square, X } from "lucide-react";
 import { api, uploadAttachment, useStore, type AttachmentRef, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { speechIssueFor, type SpeechIssue } from "@/lib/speech";
 import { CumeaAvatar } from "./Avatar";
 import { avatarForBot } from "@/lib/mote";
 
@@ -27,7 +28,7 @@ export function Composer({ bot }: { bot: Bot }) {
   const { state, dispatch, sendMessage } = useStore();
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
-  const [speechError, setSpeechError] = useState<string | null>(null);
+  const [speechError, setSpeechError] = useState<SpeechIssue | null>(null);
   const [caret, setCaret] = useState(0);
   const [highlight, setHighlight] = useState(0);
   const [dismissedAt, setDismissedAt] = useState<number | null>(null); // Esc'd this @
@@ -235,8 +236,8 @@ export function Composer({ bot }: { bot: Bot }) {
     api(`/api/attachments/${attachment.id}`, { method: "DELETE" }).catch(() => {});
   };
 
-  // native dictation: partials stream into the input while the Swift
-  // helper runs; the final transcript stays in the box, ready to edit/send
+  // Native dictation: partials stream into the input while the Swift helper
+  // runs; the final transcript stays in the box, ready to edit/send.
   useEffect(() => {
     if (!recording) return;
     const bridge = window.cumea;
@@ -244,23 +245,44 @@ export function Composer({ bot }: { bot: Bot }) {
       setRecording(false);
       return;
     }
+
+    let cancelled = false;
     setSpeechError(null);
     const offTranscript = bridge.onSpeechTranscript((line) => {
+      if (cancelled) return;
       if (typeof line.text === "string") {
         const base = baseText.current;
         setText(base ? `${base} ${line.text}` : line.text);
       }
     });
-    const offEnd = bridge.onSpeechEnd(({ code }) => {
+    const offEnd = bridge.onSpeechEnd(({ code, reason }) => {
+      if (cancelled) return;
       setRecording(false);
-      if (code === 1) {
-        setSpeechError(
-          "Dictation needs Microphone + Speech Recognition access — System Settings → Privacy & Security.",
-        );
-      }
+      setSpeechError(speechIssueFor(reason, code));
     });
-    void bridge.speechStart();
+
+    void (async () => {
+      try {
+        const microphoneGranted = await bridge.permRequestMic();
+        if (cancelled) return;
+        if (!microphoneGranted) {
+          setSpeechError({
+            message: "Microphone access is off. Allow Cumea to hear dictation in System Settings.",
+            settingsPane: "mic",
+          });
+          setRecording(false);
+          return;
+        }
+        await bridge.speechStart();
+      } catch {
+        if (cancelled) return;
+        setSpeechError({ message: "Cumea couldn’t start dictation. Please try again." });
+        setRecording(false);
+      }
+    })();
+
     return () => {
+      cancelled = true;
       offTranscript();
       offEnd();
       void bridge.speechStop();
@@ -269,11 +291,11 @@ export function Composer({ bot }: { bot: Bot }) {
 
   const toggleMic = () => {
     if (!window.cumea) {
-      setSpeechError("Voice input needs the desktop app — run pnpm dev:desktop.");
+      setSpeechError({ message: "Voice input needs the desktop app — run pnpm dev:desktop." });
       return;
     }
     if (window.cumea.platform !== "darwin") {
-      setSpeechError("On-device voice dictation is currently available on macOS only.");
+      setSpeechError({ message: "Native voice dictation is currently available on macOS only." });
       return;
     }
     baseText.current = text.trim();
@@ -285,8 +307,20 @@ export function Composer({ bot }: { bot: Bot }) {
   return (
     <div className="px-5 pb-5 pt-2">
       {speechError && (
-        <div className="mx-auto mb-2 max-w-[900px] rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
-          {speechError}
+        <div
+          role="alert"
+          className="mx-auto mb-2 flex max-w-[900px] items-center gap-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning"
+        >
+          <span className="min-w-0 flex-1">{speechError.message}</span>
+          {speechError.settingsPane && window.cumea ? (
+            <button
+              type="button"
+              onClick={() => void window.cumea?.permOpenSettings(speechError.settingsPane!)}
+              className="shrink-0 rounded-md border border-warning/30 px-2 py-1 font-medium hover:bg-warning/10"
+            >
+              Open Settings
+            </button>
+          ) : null}
         </div>
       )}
       {attachmentError && (
@@ -359,6 +393,7 @@ export function Composer({ bot }: { bot: Bot }) {
           rows={1}
           value={text}
           onChange={(e) => {
+            if (recording) setRecording(false);
             setText(e.target.value);
             const nextCaret = e.target.selectionStart ?? e.target.value.length;
             setCaret(nextCaret);
@@ -442,6 +477,7 @@ export function Composer({ bot }: { bot: Bot }) {
             )}
             title={recording ? "Stop dictation (Esc)" : "Dictate"}
             aria-label={recording ? "Stop dictation" : "Start dictation"}
+            aria-pressed={recording}
           >
             <Mic size={18} />
           </button>

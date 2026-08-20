@@ -76,9 +76,16 @@ should not bypass the release, security, persistence, or measurement foundations
       bytes/pixels/decoded memory, reject SVG from the image renderer, serve only host-owned opaque capabilities,
       advertise provider `images` capability only after that engine can consume the attachment, and keep animated
       formats download-only until explicit animation/decode budgets exist.
-  - [ ] P0.00b — Re-port editable native dictation from #9 as an explicit platform capability with
-    permission/error states, idempotent session cleanup, user-editable interim/final text, typing-while-listening
-    cancellation, explicit platform state, and no silent cloud speech fallback.
+  - [~] P0.00b — Complete native dictation as explicit platform capabilities with bounded lifecycle/error
+    semantics, user-editable interim/final text, and no silent cloud speech fallback.
+    - [x] P0.00b1 — Harden desktop/macOS dictation around the existing on-device Swift helper: bounded NDJSON
+      public projection, malformed/ambiguous/oversized fail-closed behavior, dependency-free one-helper session
+      lifecycle, stale-producer fencing, exactly-once settlement, idempotent stop/replacement, verified native
+      failure taxonomy with exact System Settings recovery, editable partial/final transcript, typing/send/Escape/
+      agent-switch cleanup, `aria-pressed`, shared bridge types, and cross-platform protocol/session contract tests.
+    - [ ] P0.00b2 — Add Expo iOS/Android native dictation with the same permission/error and editable-text
+      semantics, explicit stop/edit/session cleanup, no cloud fallback, native compatibility builds, and physical-
+      device microphone/VoiceOver/TalkBack evidence. Expo JS export alone is not native dictation evidence.
   - [x] P0.00c — Keep the current mobile paging/inverted FlatList/windowing/anchored prepend, and extract only
     the still-useful historical delta from #9: do not auto-scroll when the user is reading older messages,
     count only actually appended canonical message IDs behind an accessible bounded `N new` affordance, and
@@ -420,3 +427,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-20 | Competitive audit morning refresh | Re-pinned Cumea `1c61e3da`, Rakazo `f0a2cb20`, and OpenMausBot `6b2ca7e0`; promoted secure raster images, cancellation/approval reconciliation, signed mobile distribution, structured provider auth/model-binding, Linux installed-runtime evidence, additive-only imports and provider-neutral fenced computer contracts while explicitly rejecting duplicate sections and mandatory hosted defaults. |
 | 2026-08-20 | P1.12a | Added the provider-neutral computer contract foundation with explicit private/shared scope, independent capabilities, honest transport states, capability-to-primitive runtime conformance and generation-fenced graphical leases; current CUA/Box adapters, durable run bindings, BYO VPS and shared-computer product UI remain separate follow-ups. |
 | 2026-08-20 | P0.00c | Completed the remaining mobile draft-#9 scroll extraction without replacing the current paging stack: appended message IDs accumulate behind a bounded accessible `N new` affordance while history reading stays anchored; hydration, prepend, same-ID streaming updates and resnapshot replacement do not create false counts. |
+| 2026-08-20 | P0.00b1 | Hardened desktop/macOS native dictation with bounded fail-closed NDJSON projection, dependency-free one-helper lifecycle fencing, exactly-once settlement, idempotent stop/replacement, verified permission/error recovery, editable transcript semantics and cross-platform protocol/session tests; mobile native dictation remains P0.00b2. |
