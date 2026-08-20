@@ -1,4 +1,6 @@
 // The narrow bridge the Electron preload exposes. Absent in the browser.
+import type { SpeechEndReason } from "@/lib/speech";
+
 export {};
 
 declare global {
@@ -55,11 +57,13 @@ declare global {
       cuaOpenSettings(permission: "accessibility" | "screenRecording"): Promise<boolean>;
       screenFrame(): Promise<string | null>;
       speechStart(): Promise<void>;
-      speechStop(): Promise<void>;
+      speechStop(): Promise<{ stopped: boolean }>;
       onSpeechTranscript(
-        cb: (line: { partial?: boolean; text?: string; error?: string }) => void,
+        cb: (line: { partial: boolean; text: string }) => void,
       ): () => void;
-      onSpeechEnd(cb: (info: { code: number | null }) => void): () => void;
+      onSpeechEnd(
+        cb: (info: { code: number | null; reason?: SpeechEndReason }) => void,
+      ): () => void;
       /** {mic} TCC status: granted|denied|not-determined|unknown. Screen
        * status is deliberately absent — macOS 15+ caches it per-process,
        * so it lies for the whole session after a grant. */

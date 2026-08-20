@@ -1,70 +1,50 @@
-// Speech helper lifecycle, main-process side. The Swift helper is spawned
-// from HERE (never the harness server) so the Microphone + Speech
-// Recognition permission prompts attribute to the app. Compiled lazily on
-// first use; each recording session is one helper process.
+// Electron/Swift adapter for native macOS dictation. The lifecycle itself is
+// dependency-free in speech-session.mjs so replacement/stop/error semantics
+// are exercised on every CI OS.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app } from "electron";
+import { createSpeechSessionManager } from "./speech-session.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(__dirname, "resources", "speech-helper.swift");
-// packaged: the helper ships pre-built + signed in Resources (a signed app
-// bundle must never be written into — lazy compile would break the seal)
+// Packaged: the helper ships pre-built + signed in Resources (a signed app
+// bundle must never be written into — lazy compile would break the seal).
 const BIN = app.isPackaged
   ? path.join(process.resourcesPath, "speech-helper")
   : path.join(__dirname, "resources", "speech-helper");
 
-let child = null;
+function send(win, channel, value) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+  win.webContents.send(channel, value);
+}
 
 function ensureBuilt() {
-  if (app.isPackaged) return; // pre-built at package time
+  if (app.isPackaged) return;
   const stale = !existsSync(BIN) || statSync(BIN).mtimeMs < statSync(SRC).mtimeMs;
   if (!stale) return;
-  // Xcode CLT required; ~2s once, then cached until the source changes
   execFileSync("swiftc", ["-O", SRC, "-o", BIN], { stdio: "pipe", timeout: 120_000 });
 }
 
-export function startSpeech(win) {
-  stopSpeech();
-  if (process.platform !== "darwin") {
-    if (!win.isDestroyed()) win.webContents.send("speech:end", { code: 1 });
-    return;
-  }
-  ensureBuilt();
-  const proc = spawn(BIN, [], { stdio: ["ignore", "pipe", "pipe"] });
-  child = proc;
+function spawnHelper() {
+  // Helper stderr is intentionally ignored. Native/compiler details never
+  // cross into renderer state, and ignoring it avoids a backpressure pipe.
+  return spawn(BIN, [], { stdio: ["ignore", "pipe", "ignore"] });
+}
 
-  let buf = "";
-  proc.stdout.on("data", (chunk) => {
-    buf += chunk;
-    let nl;
-    while ((nl = buf.indexOf("\n")) !== -1) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line) continue;
-      try {
-        if (!win.isDestroyed()) win.webContents.send("speech:transcript", JSON.parse(line));
-      } catch {
-        /* non-JSON noise on stdout — ignore */
-      }
-    }
-  });
-  proc.on("close", (code) => {
-    if (child === proc) child = null;
-    if (!win.isDestroyed()) win.webContents.send("speech:end", { code });
-  });
-  proc.on("error", () => {
-    if (child === proc) child = null;
-    if (!win.isDestroyed()) win.webContents.send("speech:end", { code: 1 });
-  });
+const sessions = createSpeechSessionManager({
+  platform: process.platform,
+  ensureBuilt,
+  spawnHelper,
+  send,
+});
+
+export function startSpeech(win) {
+  return sessions.start(win);
 }
 
 export function stopSpeech() {
-  if (!child) return;
-  try {
-    child.kill("SIGTERM");
-  } catch {}
-  child = null;
+  return sessions.stop();
 }
