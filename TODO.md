@@ -71,10 +71,18 @@ should not bypass the release, security, persistence, or measurement foundations
         file citations/attachments, initial dialog focus, Tab containment, Escape close + focus restoration,
         readable text selection, reduced-motion behavior, safe error/retry/download states, and absence of
         iframe/embed/object/file:// rendering. Retain screenshot/visual evidence for the exact candidate commit.
+    - [ ] P0.00a2d — Add a secure first-class raster-image path instead of treating images as generic binary:
+      accept only deliberately supported raster formats, verify signatures and decoded dimensions, bound encoded
+      bytes/pixels/decoded memory, reject SVG from the image renderer, serve only host-owned opaque capabilities,
+      advertise provider `images` capability only after that engine can consume the attachment, and keep animated
+      formats download-only until explicit animation/decode budgets exist.
   - [ ] P0.00b — Re-port editable native dictation from #9 as an explicit platform capability with
-    permission/error states, user-editable interim text, and no silent cloud speech fallback.
-  - [ ] P0.00c — Re-port the useful mobile paging/anchored-scroll/new-message work from #9 only after
-    reconciling it with the current atomic bootstrap, narrowed SSE projection, and canonical SQLite.
+    permission/error states, idempotent session cleanup, user-editable interim/final text, typing-while-listening
+    cancellation, explicit platform state, and no silent cloud speech fallback.
+  - [ ] P0.00c — Keep the current mobile paging/inverted FlatList/windowing/anchored prepend, and extract only
+    the still-useful historical delta from #9: do not auto-scroll when the user is reading older messages,
+    count incoming messages behind an accessible `N new` affordance, and jump/reset only on explicit action or
+    while already near the newest edge. Reconcile with atomic bootstrap, narrowed SSE and canonical SQLite.
   - [ ] P0.00d — Extract any still-useful Quick-agent, lifecycle and release-evidence work into separate
     current-main PRs; close the historical draft once every retained concern has a replacement or an
     explicit reject decision. Draft #32 is already closed as superseded; #9 is the only historical ledger.
@@ -113,7 +121,7 @@ should not bypass the release, security, persistence, or measurement foundations
     and defer CUA SDK/TCC/socket work until first use.
   - [x] P0.03b — Move packaged Electron harnesses to `CUMEA_PORT=0`, publish the actual bound
     port over a versioned UtilityProcess parent/child readiness message, remove HTTP readiness polling
-    and fixed private fallback ports, validate the private local listener Host/origin contract, and
+    and fixed private fallback ports, validate the private local listener Host/origin boundary, and
     keep remote/mobile listener port semantics independent of the local ephemeral port.
   - [ ] P0.03c — Re-run matching packaged performance scenarios on the fixed-machine evidence gate and
     record startup trade-offs without attributing hosted-runner variance to the code change.
@@ -132,8 +140,9 @@ should not bypass the release, security, persistence, or measurement foundations
   panels, defer Markdown / syntax work until messages settle, and cache settled rendering by content
   hash instead of re-highlighting unchanged code during every stream tick.
   - [ ] P0.05a — Extend packaged performance evidence beyond launch: measure keydown→paint typing,
-    real reducer/SSE streaming, settings paint/settle, and idle CPU/working-set memory on bounded
-    transcripts. Keep runtime numbers informational until the fixed-Mac gate exists.
+    real reducer/SSE streaming, settings paint/settle, idle CPU/working-set memory and mounted-row/render-work
+    counts on bounded 100/1,000/larger transcript fixtures. Keep runtime numbers informational until the
+    fixed-Mac gate exists.
 - [ ] **P0.06 — Desktop conversation paging and scroll contract.** Load bounded pages, window long
   transcripts, preserve the reading position while prepending history, auto-follow only near the end,
   expose jump-to-latest / show-earlier affordances, and render very long user messages cheaply without
@@ -153,6 +162,11 @@ should not bypass the release, security, persistence, or measurement foundations
     tests fail on omitted entrypoints/dependencies, path escape, non-literal loading, or bare package
     imports under the current no-runtime-`node_modules` contract. Signed sidecar execution remains
     part of P0.08/P0.09 rather than being inferred from this structure gate.
+  - [ ] P0.08b — Add Linux installed-runtime/native-control evidence before any Linux local-computer claim:
+    pinned native-driver source/archive/member hashes, member name/type/size preflight, safe extraction,
+    no installed Node/pnpm download dependency, notices/SBOM, explicit absolute external-driver override,
+    bundled-driver start/cleanup smoke, and physical GNOME Xorg/Wayland acceptance with visible/manual
+    Wayland helper setup. Local control stays opt-in and never silently replaces cloud/auto selection.
 - [ ] **P0.09 — Real journey and packaged-shell tests.** Add browser journeys for onboarding, chat,
   approvals, attachments, Needs You, routines, pairing, and computer degradation, plus packaged
   Electron isolation/launch smoke tests and retained screenshot or visual-history evidence for the
@@ -184,6 +198,10 @@ should not bypass the release, security, persistence, or measurement foundations
     edits without losing the device token, and keeps discovery metadata strictly non-authenticating.
   - [ ] P0.10b — Add native Needs You notifications that open the exact request, reconcile current host
     state before showing actions, and never let a stale notification approve an already-resolved ask.
+  - [ ] P0.10c — Add signed companion distribution evidence: deterministic bundle/application IDs,
+    production signing/export/archive configuration, privacy/permission declarations, current-device
+    screenshots, physical-device launch/pairing smoke, and App Store/Play submission readiness checks.
+    Expo JS export remains source evidence only and must never be described as store readiness.
 - [x] **P0.11 — Incremental transcript persistence and local search index.** Replace whole-thread JSON
   rewrite amplification with a versioned owner-local SQLite/WAL message store, lazy verified legacy
   import, per-message insert/update, rollback-aware thread deletion, bounded transcript search, and
@@ -209,7 +227,7 @@ should not bypass the release, security, persistence, or measurement foundations
   - [x] P0.11c — Integrate visible transcript hits into the existing desktop search field, load bounded
     exact-message windows instead of whole threads, highlight and return to latest, add bounded Markdown/JSON
     visible-transcript export, and keep exact navigation/export off the mobile/remote surface.
-- [x] **P0.12 — Agent lifecycle correctness, liveness and loop protection.** Make long-running work
+- [~] **P0.12 — Agent lifecycle correctness, liveness and loop protection.** Make long-running work
   observable and recoverable without losing explicit user steering or trusting stale provider sessions.
   - [x] P0.12a — Add activity-based stall detection with waiting-on-human exemptions, honest working /
     waiting / no-signal / dead projections, bounded repeated-identical tool/effect detection, and visible
@@ -220,6 +238,10 @@ should not bypass the release, security, persistence, or measurement foundations
   - [x] P0.12c — Add dispatch-based engine/session freshness. Record which provider instance last ran the
     thread/task, rebuild bounded canonical context whenever the selected instance is stale, and never
     trust an old resume cursor across A→B→A or provider-reload transitions.
+  - [ ] P0.12d — Reconcile cancellation with pending approvals/effects. Every request belongs to durable
+    conversation/run/effect identity; Stop/cancel/replacement invalidates the exact run's pending requests;
+    stale desktop/Needs You/mobile cards cannot approve a later effect after cancel/restart; resolution is
+    idempotent and cancellation must not manufacture a duplicate external rejection/effect.
 
 ### P1 — Open-source Grok Bot product parity
 
@@ -232,14 +254,26 @@ should not bypass the release, security, persistence, or measurement foundations
 - [ ] **P1.02 — Rooms.** Add multi-agent conversations with mentions, a default responder, everyone /
   mentions-only routing, sender attribution, a shared bulletin, reactions, approvals, clear busy/waiting
   states, and an optional explicitly shared working folder/computer distinct from private agent state.
+  - [ ] P1.02a — Before Room polish, make Room requests/runs durable: approval identity is owned by
+    room/conversation/run rather than the current busy speaker, restart/reconnect reconcile the same object,
+    stale cards are idempotently rejected, and bounded per-turn timeout/recovery releases only the exact
+    stalled run without guessing/retrying uncertain external effects.
 - [ ] **P1.03 — Chief of Staff.** Allow one optional workspace coordinator to plan, delegate to the
   current roster, report real progress, consolidate disagreements, collect approvals, and return one
   final answer without inventing teammate work.
 - [ ] **P1.04 — Message editing and branches.** Support edit-and-rerun, alternate branches, version
   switching, quoting, reactions, stable message links, and moving a branch into a new conversation.
+  - [ ] P1.04a — After stable conversation identity exists, add one optional pinned message per conversation
+    plus an extended reaction palette. Pins resolve by stable message ID and disappear harmlessly when the
+    referenced branch/message is no longer present; reactions reuse the canonical message/effect identity.
 - [ ] **P1.05 — Portable definitions.** Introduce bounded, versioned `.cumea-agent`, `.cumea-team`, and
   `.cumea-routine` manifests that never export transcripts, credentials, host paths, permissions, or
   internal IDs.
+  - [ ] P1.05a — Make import additive-only first: strict field/version allowlist, fresh local IDs,
+    deterministic case-insensitive collision names including hidden objects, re-import as a fresh numbered
+    set, and no file-controlled auto-approval, allow rules, coordinator privilege, peer privilege,
+    connected-app authorization, computer authority, host cwd, credentials, private IDs or destructive
+    replacement/archive targets.
 - [ ] **P1.06 — Explicit memory.** Add personal, agent, project, and conversation scopes with source
   provenance, revision history, confirmation state, priority, expiry, inspection, editing, deletion,
   explicit prompt-load budgets, and user-visible topic/projection views instead of opaque hidden notes.
@@ -269,6 +303,10 @@ should not bypass the release, security, persistence, or measurement foundations
     exist, and prove local-daemon / Box credential values stay in child env rather than app-server argv.
     Do not infer Linux local-control support from this portable driver path; current Cumea local CUA evidence
     remains macOS-only until the separately tracked Linux release/native-control gates are actually proven.
+  - [ ] P1.08d — Add structured provider auth/model-binding evidence: distinguish missing / installed-
+    unauthenticated / ready / transport-error, prefer provider-structured auth signals over brittle output
+    substrings, and prove selected model reaches spawn/session/runtime protocol rather than trusting picker
+    state. Keep subscription/device-code CLI auth visibly distinct from API-key billing.
 - [ ] **P1.09 — User-owned always-on host.** Package an optional OCI/VPS deployment with pairing,
   HTTPS guidance, health, backup, controlled updates, device revocation, and no mandatory Cumea
   control plane.
@@ -279,19 +317,23 @@ should not bypass the release, security, persistence, or measurement foundations
   - [x] P1.11a — Add a desktop-local per-thread **Events / Raw** diagnostics lens over existing `events/`
     and secret-redacted `native/` NDJSON: bounded tail reads, independent stream caps, torn-line tolerance,
     schema validation, folded delta summaries, expandable JSON, live/settled refresh, and no mobile exposure.
-- [ ] **P1.12 — Pluggable user-owned computer backends.** Put local CUA and the existing cloud-computer
+- [~] **P1.12 — Pluggable user-owned computer backends.** Put local CUA and the existing cloud-computer
   path behind one conformance-tested backend contract, then allow optional Docker / E2B / Daytona-
   compatible implementations without making a Cumea-managed sandbox or cloud service mandatory.
   Model per-agent private and explicitly shared/team computers separately and report capabilities /
   degradation honestly.
-  - [ ] P1.12a — Add the backend conformance suite and a user-owned BYO-VPS implementation using a
-    preconfigured SSH alias / Docker transport: no app-stored private key, no auto-accepted host key,
-    no public container ports, explicit transport-vs-missing states, bounded status/lock timeouts,
-    hardened managed-container verification, disposable-filesystem copy, and no SSH alias on mobile.
-  - [ ] P1.12b — Add explicit Team/Project computer scope distinct from Private agent computers. Shared
+  - [~] P1.12a — Land the provider-neutral contract foundation (PR #43): explicit private/shared scope,
+    independent shell/files/graphical/checkpoint capability bits, honest ready/provisioning/missing/
+    transport-error/unavailable states, bounded public projection, and fenced graphical leases with random
+    lease ID + monotonically increasing generation so stale completion cannot release a newer owner.
+  - [ ] P1.12b — Add a user-owned BYO-VPS implementation using a preconfigured SSH alias / Docker transport:
+    no app-stored private key, no auto-accepted host key, no public container ports, explicit transport-vs-
+    missing states, bounded status/lock timeouts, hardened managed-container verification, disposable-
+    filesystem copy, provider-neutral checkpoint/export/import where possible, and no SSH alias on mobile.
+  - [ ] P1.12c — Add explicit Team/Project computer scope distinct from Private agent computers. Shared
     files and graphical-session capability are separate; each run gets a fenced display/session lease,
     stale claims are rejected, and completion/rollback/takeover release the exact lease deterministically.
-  - [ ] P1.12c — After the generic backend contract is stable, evaluate an explicitly paired user-owned
+  - [ ] P1.12d — After the generic backend contract is stable, evaluate an explicitly paired user-owned
     phone/device backend (for example USB Android) as an agent computer. Keep it separate from the
     companion control surface and require the same capability/permission/lease evidence as other backends.
 
@@ -360,7 +402,7 @@ Every implementation PR must include, where applicable:
 | 2026-08-18 | P1.11a | Added a desktop-local bounded Runtime inspector over existing normalized and secret-redacted native thread logs, with Events/Raw lenses, payload clipping, torn-line tolerance, real-harness local/no-store evidence, authenticated mobile denial, and right-slot UI integration. |
 | 2026-08-18 | P0.12c | Added dispatch-based native-session freshness with private per-thread pending/dispatched/invalidated state, A→B→A and unsupported-model rebuilds, provider-reload invalidation, bounded canonical context, shared native cursor refusal, successful-turn confirmation, and fake-Claude rebuild evidence. |
 | 2026-08-19 | P0.12b | Added bounded attended busy-user steering with canonical queued/dispatching/failed delivery state, one-follow-up coalescing, atomic batch claims, at-most-once crash/reload behavior, desktop/mobile Stop+Send controls, and real-harness recovery/no-duplication evidence. |
-| 2026-08-19 | P0.12a | Added activity-based lifecycle projections, explicit waiting-on-human exemption, advisory no-signal/dead recovery, bounded repeated-effect detection, provider-vs-lifecycle attention ownership, semantic-only Workspace persistence, and Work/Needs You recovery UX. P0.12 is complete. |
+| 2026-08-19 | P0.12a | Added activity-based lifecycle projections, explicit waiting-on-human exemption, advisory no-signal/dead recovery, bounded repeated-effect detection, provider-vs-lifecycle attention ownership, semantic-only Workspace persistence, and Work/Needs You recovery UX. P0.12 reached its original scope. |
 | 2026-08-19 | Competitive audit | Re-pinned Cumea `ea3d751b`, Rakazo `c3d386d8`, and OpenMausBot `70805c0a`; promoted conversation separation, local history compaction, steady-state renderer evidence, resilient companion candidate rotation, BYO-VPS, and fenced Team/Private computer semantics without adopting mandatory hosted identity/control-plane assumptions. |
 | 2026-08-19 | P0.09a1 | Added the app-wide keyboard-focus/selection/reduced-motion interaction baseline after component styles and a contract test that preserves custom-control focus coverage and non-semantic motion suppression; the real-browser acceptance journey remains P0.09a2. |
 | 2026-08-19 | P0.08a | Added the release-critical harness/sidecar manifest, source-proxy drift detection, staged-package transitive import closure, cross-platform mutation tests, and release documentation. Actual signed sidecar execution remains a P0.08/P0.09 evidence gate. |
@@ -372,3 +414,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-20 | P1.08b | Enabled Codex peer-agent handoff through the existing harness-owned agents MCP contract, with capability advertisement only after mounting exists and a fake app-server test proving the per-boot comms token never appears as an argv value. |
 | 2026-08-20 | P1.08c | Enabled Codex local CUA and cloud Box computer tools through the existing verified stdio/proxy contracts, with capability bits, package-closure reuse, and fake app-server evidence that local/Box secret values remain outside argv. |
 | 2026-08-20 | P0.09a1b | Added semantic dark-theme contrast tokens and a dependency-free WCAG regression checker covering alpha compositing, normal-size text on recurring dark surfaces, and explicit foregrounds on solid semantic actions; mutation tests preserve the exact failures that motivated the gate. |
+| 2026-08-20 | Competitive audit morning refresh | Re-pinned Cumea `1c61e3da`, Rakazo `f0a2cb20`, and OpenMausBot `6b2ca7e0`; promoted secure raster images, cancellation/approval reconciliation, signed mobile distribution, structured provider auth/model-binding, Linux installed-runtime evidence, additive-only imports and provider-neutral fenced computer contracts while explicitly rejecting duplicate sections and mandatory hosted defaults. |
