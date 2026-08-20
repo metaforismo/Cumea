@@ -56,9 +56,21 @@ should not bypass the release, security, persistence, or measurement foundations
       have the misleading host-local file instruction stripped; bot deletion stages the local workspace and
       revokes live capabilities. Prove the boundary with a real local+remote harness integration test and keep
       `FileCapabilityStore` compatible with Node 24 strip-only TypeScript execution.
-    - [ ] P0.00a2c — Add the safe desktop file dialog/links, inert Markdown/DOCX rendering, bounded PDF.js
-      worker/canvas rendering, dependency notices/SBOM/package evidence, keyboard/focus behavior, and the
-      exact real-browser acceptance journey. Keep raw HTML/script execution impossible.
+    - [~] P0.00a2c — Complete the desktop safe-file viewer in separately reviewable UI/runtime/evidence gates.
+      - [x] P0.00a2c1 — Add the desktop file-link/dialog surface without new runtime dependencies: replace
+        ad-hoc bot Markdown with a React-node-only renderer, turn only bounded relative Markdown/PDF/DOCX
+        citations and host-owned attachments into capability requests, render Markdown inertly and DOCX only
+        from the bounded semantic projection, validate preview shape/size again in the renderer, trap/restore
+        dialog focus, close on Escape, and keep PDF/unknown binary capabilities download-only. Tests must prove
+        raw HTML stays text and traversal/absolute/file-URL paths never become file controls.
+      - [ ] P0.00a2c2 — Add bounded PDF.js worker/canvas rendering with no browser plugin/iframe fallback,
+        lazy-load it only when a PDF is opened, pin and review the dependency, update notices/SBOM/package
+        evidence, cap pages/scale/render memory, revoke object/worker resources on close, and keep malformed /
+        oversized PDFs fail-closed with download still available.
+      - [ ] P0.00a2c3 — Record the exact real-browser file-viewer acceptance journey: keyboard activation of
+        file citations/attachments, initial dialog focus, Tab containment, Escape close + focus restoration,
+        readable text selection, reduced-motion behavior, safe error/retry/download states, and absence of
+        iframe/embed/object/file:// rendering. Retain screenshot/visual evidence for the exact candidate commit.
   - [ ] P0.00b — Re-port editable native dictation from #9 as an explicit platform capability with
     permission/error states, user-editable interim text, and no silent cloud speech fallback.
   - [ ] P0.00c — Re-port the useful mobile paging/anchored-scroll/new-message work from #9 only after
@@ -339,3 +351,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-19 | P0.00a2a | Replaced the draft's JSZip DOCX path with a dependency-free bounded central-directory/DEFLATE/CRC/XML semantic parser and adversarial tests; routes, renderer and PDF.js remain separate gates. |
 | 2026-08-19 | Draft cleanup | Closed superseded safe-file draft #32 without merge; #9 remains the sole historical extraction ledger until the remaining retained concerns have replacement PRs or reject decisions. |
 | 2026-08-20 | P0.00a2b | Activated desktop-local opaque file capability routes with host-owned attachment resolution, host-provider workspaces, binary download-only behavior, explicit Box/cloud filesystem separation, paired/mobile denial, delete-time capability revocation and real-harness cross-platform evidence. The integration pass also exposed and fixed the P0.00a1 Node 24 strip-only constructor incompatibility instead of hiding it behind the test harness. |
+| 2026-08-20 | P0.00a2c1 | Added safe desktop Markdown/DOCX file-link and attachment preview UI over opaque local capabilities, renderer-side projection bounds, dialog keyboard/focus semantics, raw-HTML/path traversal rejection, and explicit PDF/binary download-only degradation pending the PDF.js and browser-journey gates. |
