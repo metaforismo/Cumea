@@ -49,9 +49,13 @@ should not bypass the release, security, persistence, or measurement foundations
       Markdown/DOCX parser: fixed ZIP central/local preflight, stored/DEFLATE only, size/entry/ratio/output
       budgets, CRC verification, active-content/external-relationship/XML-entity rejection, and a small
       heading/list/paragraph projection capped at 5,000 blocks / 2,000,000 characters.
-    - [ ] P0.00a2b — Activate the capability boundary through local-only resolve/preview/download routes,
-      assign the exact bot workspace as provider `cwd`, revoke/stage it with bot deletion, and prove that
-      a model-cited path or remote/mobile request cannot bypass the owner-local capability issuer.
+    - [x] P0.00a2b — Activate the capability boundary through desktop-local resolve/preview/download routes:
+      host-running providers receive the exact per-bot owner-local `cwd` and cite relative deliverables;
+      attachments resolve only from host-owned attachment IDs; binary files are download-only; paired/mobile
+      clients cannot resolve, preview, or download capabilities even with a valid bearer token; Box/cloud turns
+      have the misleading host-local file instruction stripped; bot deletion stages the local workspace and
+      revokes live capabilities. Prove the boundary with a real local+remote harness integration test and keep
+      `FileCapabilityStore` compatible with Node 24 strip-only TypeScript execution.
     - [ ] P0.00a2c — Add the safe desktop file dialog/links, inert Markdown/DOCX rendering, bounded PDF.js
       worker/canvas rendering, dependency notices/SBOM/package evidence, keyboard/focus behavior, and the
       exact real-browser acceptance journey. Keep raw HTML/script execution impossible.
@@ -334,3 +338,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-19 | P0.00a1 | Extracted the safe owner-local file capability/workspace foundation from draft #9 with bounded snapshots, no host-path projection, expiry/revocation, signature checks, delete quarantine rollback, cross-platform tests, and a written security contract. HTTP/UI/PDF/DOCX activation remains P0.00a2. |
 | 2026-08-19 | P0.00a2a | Replaced the draft's JSZip DOCX path with a dependency-free bounded central-directory/DEFLATE/CRC/XML semantic parser and adversarial tests; routes, renderer and PDF.js remain separate gates. |
 | 2026-08-19 | Draft cleanup | Closed superseded safe-file draft #32 without merge; #9 remains the sole historical extraction ledger until the remaining retained concerns have replacement PRs or reject decisions. |
+| 2026-08-20 | P0.00a2b | Activated desktop-local opaque file capability routes with host-owned attachment resolution, host-provider workspaces, binary download-only behavior, explicit Box/cloud filesystem separation, paired/mobile denial, delete-time capability revocation and real-harness cross-platform evidence. The integration pass also exposed and fixed the P0.00a1 Node 24 strip-only constructor incompatibility instead of hiding it behind the test harness. |
