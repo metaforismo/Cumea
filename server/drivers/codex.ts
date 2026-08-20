@@ -10,7 +10,10 @@
 // resumeCursor is the codex thread id; a later turn tries thread/resume
 // and falls back to a fresh thread/start.
 import { spawn, execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type {
   DriverCreateInput,
@@ -46,6 +49,17 @@ export interface CodexConfig {
 
 const DEFAULT_RPC_TIMEOUT_MS = 60_000;
 
+// Proxy entry files live next to server/drivers as .ts in source/dev and .js
+// in the compiled dist-server packaged by Electron. P0.08a classifies and
+// verifies computer-proxy as a release-critical sidecar, so Codex reuses the
+// same entrypoint instead of creating a second computer bridge.
+const proxyPath = (basename: string) => {
+  const ts = join(dirname(fileURLToPath(import.meta.url)), "..", `${basename}.ts`);
+  return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
+};
+const COMPUTER_PROXY_PATH = proxyPath("computer-proxy");
+const NODE_ENV_FLAG = { ELECTRON_RUN_AS_NODE: "1" };
+
 function decodeConfig(raw: unknown): CodexConfig {
   const o = (raw ?? {}) as Record<string, unknown>;
   if (
@@ -71,7 +85,7 @@ type StdioMcpServer = { command: string; args: string[]; env: Record<string, str
  * Mount one stdio MCP server into Codex without putting credential values in
  * argv. Codex reads only the allowlisted variable names from its environment;
  * process listings and native argument diagnostics therefore never contain
- * the peer-comms token itself.
+ * peer, cloud-computer, or local-daemon secret values.
  */
 function mountStdioMcpServer(
   appServerArgs: string[],
@@ -130,6 +144,22 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const appServerArgs = ["app-server"];
       if (turn.integrations?.agents) {
         mountStdioMcpServer(appServerArgs, env, "agents", turn.integrations.agents);
+      }
+      if (turn.integrations?.computer) {
+        mountStdioMcpServer(appServerArgs, env, "computer", {
+          command: process.execPath,
+          args: [COMPUTER_PROXY_PATH],
+          env: {
+            ...NODE_ENV_FLAG,
+            CUMEA_BOX_ID: turn.integrations.computer.boxId,
+            CUMEA_BOX_TOKEN: turn.integrations.computer.token,
+          },
+        });
+      } else if (turn.integrations?.localComputer) {
+        // The Electron-owned CUA daemon arrives as an already-validated stdio
+        // MCP spawn contract. Cloud and local intentionally share the same MCP
+        // name so the model sees one computer tool surface at a time.
+        mountStdioMcpServer(appServerArgs, env, "computer", turn.integrations.localComputer);
       }
 
       const child = spawn(config.cli, appServerArgs, {
@@ -430,7 +460,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
-        capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true },
+        capabilities: {
+          sessionModelSwitch: "unsupported",
+          agentsMcp: true,
+          localComputerMcp: true,
+          cloudComputerMcp: true,
+        },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
         respondToRequest: async (threadId, requestId, decision) => {
