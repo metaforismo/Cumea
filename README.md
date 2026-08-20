@@ -245,10 +245,6 @@ provider runtime remain online on the user's own authenticated host.
 ## Verify a change
 
 ```sh
-git clone https://github.com/metaforismo/Cumea.git
-```
-
-```sh
 pnpm typecheck
 pnpm test
 pnpm build
