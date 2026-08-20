@@ -80,12 +80,15 @@ local sample data and is not evidence that a provider task ran.
   the UI. Long-lived attachment-heavy agents may therefore reach that quota; the current recovery
   path is deleting the agent after reviewing the impact; that operation removes the agent's files
   and audit data together. Audit-aware storage management is tracked on the roadmap.
-- Model-cited file paths remain untrusted. The desktop-local harness can now resolve only regular files
-  inside the exact Cumea-owned bot workspace, or a host-owned attachment record, into bounded expiring
-  opaque capabilities; host paths are never projected. Resolve/preview/download capability routes are
-  unavailable to the paired/mobile surface even with a valid device bearer token. Markdown remains inert
-  text, DOCX semantic parsing uses the dependency-free bounded ZIP/XML reader, binary files are
-  download-only, and the desktop file dialog / rich renderer / PDF.js UI remain P0.00a2c work.
+- Model-cited file paths remain untrusted. The desktop-local harness resolves only regular files inside
+  the exact Cumea-owned bot workspace, or a host-owned attachment record, into bounded expiring opaque
+  capabilities; host paths are never projected. Resolve/preview/download capability routes are unavailable
+  to the paired/mobile surface even with a valid device bearer token. The desktop can now open relative
+  Markdown/DOCX citations and managed attachments in a focus-contained dialog: Markdown is rendered only
+  as React text nodes and DOCX only from the dependency-free bounded semantic block projection. The renderer
+  validates that projection again before mounting it. PDF and unknown binary capabilities remain download-only
+  until the separate bounded PDF.js worker/canvas gate lands; no iframe/embed/object or `file://` document
+  path is used.
 - The desktop harness binds to `127.0.0.1` and rejects state-changing browser requests from foreign
   origins. Remote access is a separate listener, disabled by default.
 - Optional mobile access uses a short-lived, single-use 256-bit pairing secret. Device bearer tokens
@@ -260,12 +263,14 @@ required before publishing a Developer Preview.
 | Path | Responsibility |
 |---|---|
 | `src/` | React desktop UI and client-side state folding |
+| `src/components/SafeMarkdown.tsx` | deliberately small React-node-only Markdown surface with bounded relative file-citation controls and no raw HTML execution |
+| `src/components/FileViewer.tsx` | desktop-local capability dialog for inert Markdown and bounded semantic DOCX; PDF/binary stay download-only until their explicit gates |
 | `server/index.ts` | loopback HTTP/SSE harness and turn orchestration |
 | `server/pairing.ts` | expiring one-time pairing sessions, hashed device tokens, and revocation |
 | `server/mobile.ts` | allowlisted mobile bot/message projections and sanitized remote SSE events |
 | `server/workspace.ts` | durable sections, attachments, tasks, runs, artifacts, and schedules |
 | `server/file-capabilities.ts` | bounded owner-local workspace/attachment snapshots and opaque path-free read capabilities used by desktop-local resolve/preview/download routes |
-| `server/document-preview.ts` | dependency-free bounded Markdown/DOCX semantic parser used by the local preview route; desktop rich rendering remains separate |
+| `server/document-preview.ts` | dependency-free bounded Markdown/DOCX semantic parser used by the local preview route and inert desktop viewer |
 | `server/message-search-index.ts` | owner-local derived SQLite/WAL transcript search projection with legacy-file fingerprints and canonical-revision reconciliation |
 | `server/turn-context.ts` | bounded canonical context rebuild and native-session resume decision |
 | `server/session-freshness.ts` | private owner-local per-thread pending/dispatched/invalidated provider-session state |
@@ -310,10 +315,11 @@ fixed `:5199` UI and `:8799` harness pair described above.
 P0.11 and P0.12 are complete, the source-level accessibility baseline and packaged server runtime
 closure gate are present, and draft #9's safe-file work is now split into explicit review layers.
 P0.00a1 establishes path-free bounded owner-local file capabilities; P0.00a2a adds dependency-free
-bounded Markdown/DOCX semantic parsing; **P0.00a2b now activates the desktop-local capability routes,
-provider workspace semantics and paired/mobile denial**. P0.00a2c remains the final safe-file tranche:
-desktop file links/dialog, inert Markdown/DOCX rendering, bounded PDF.js, package evidence and browser
-acceptance. Superseded safe-file draft #32 is closed; #9 remains the historical extraction ledger.
+bounded Markdown/DOCX semantic parsing; P0.00a2b activates the desktop-local capability routes,
+provider workspace semantics and paired/mobile denial. **P0.00a2c1 adds the safe desktop Markdown/DOCX
+file-link/dialog surface without adding PDF runtime code.** P0.00a2c2 remains the bounded PDF.js +
+notice/SBOM/package gate, and P0.00a2c3 remains the real-browser keyboard/focus/reduced-motion acceptance
+gate. Superseded safe-file draft #32 is closed; #9 remains the historical extraction ledger.
 The immediate priorities remain **finishing focused draft-#9 extraction, steady-state renderer/thread
 scaling, resilient mobile completion, conversation/memory separation, signed distribution and
 real-journey evidence, and a pluggable user-owned computer contract**. P0.09a remains open until the
