@@ -7,6 +7,11 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Added a desktop-local safe file viewer for Markdown and DOCX capabilities. Assistant relative file
+  citations and managed attachments resolve through opaque host-issued capabilities; the dialog traps
+  keyboard focus, closes on Escape and restores focus, renders Markdown only as React text nodes, renders
+  DOCX only from the bounded semantic block projection, and validates that projection again before mounting
+  it. PDF and unknown binary capabilities remain download-only until the separate PDF.js gate lands.
 - Activated desktop-local opaque file capabilities in the real harness. Host-running providers receive
   one Cumea-owned per-bot working directory and can cite relative deliverables; the desktop can resolve
   those paths or authoritative attachment IDs into bounded `no-store` preview/download capabilities.
@@ -94,6 +99,11 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- The desktop file viewer never executes document-controlled HTML or uses iframe/embed/object/browser-plugin
+  rendering. Relative file controls reject absolute paths, URLs and `..` traversal segments before a request;
+  the server repeats the authoritative containment checks. Renderer preview payloads are independently bounded
+  by kind, block count, total text and warning sizes, and capability URLs are reconstructed only from the opaque
+  token rather than accepting a host path or arbitrary URL from the response.
 - File capability resolution, preview and download remain desktop-local even after a paired device has
   authenticated successfully. The remote/mobile listener cannot mint or consume those bearer tokens;
   public capability data contains no host path, attachment resolution starts from a host-owned record,
@@ -105,8 +115,8 @@ All notable changes to Cumea are documented here. This project follows
   and oversized semantic output are rejected without rendering archive-controlled HTML.
 - Model-cited file paths cannot trigger arbitrary renderer reads. Local resolution requires lexical and
   realpath containment inside the exact Cumea-owned bot workspace, rejects final symlinks, snapshots
-  through a checked file descriptor, and bounds file/token memory and lifetime. The desktop viewer still
-  consumes only opaque capability URLs; rich UI activation remains a separate review gate.
+  through a checked file descriptor, and bounds file/token memory and lifetime. The desktop viewer consumes
+  only opaque capability URLs; PDF remains download-only until the dedicated bounded PDF.js gate.
 - Package runtime verification rejects unclassified server proxies, missing or empty declared
   entrypoints/dependencies, imports escaping the real staged server root, non-literal dynamic loading,
   and bare package imports under the current no-runtime-`node_modules` server packaging contract.
