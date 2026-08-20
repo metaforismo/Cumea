@@ -10,7 +10,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "export": "expo export --platform all",
-    "test": "node --experimental-strip-types --test src/state/chat-state.test.mjs",
+    "test": "node --experimental-strip-types --test src/state/chat-state.test.mjs src/state/new-message-scroll.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -26,7 +26,7 @@
     "expo-router": "~57.0.12",
     "expo-secure-store": "~57.0.1",
     "expo-splash-screen": "~57.0.6",
-    "expo-status-bar": "~57.0.1",
+    "expo-status-bar": "~57.0.2",
     "expo-system-ui": "~57.0.2",
     "react": "19.2.3",
     "react-native": "0.86.2",
