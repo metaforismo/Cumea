@@ -1,5 +1,15 @@
-import { useCallback, useEffect, useMemo } from "react";
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Text, View, type ListRenderItem } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Text,
+  View,
+  type ListRenderItem,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ChatComposer } from "@/components/chat-composer";
@@ -7,6 +17,14 @@ import { MessageBubble, StreamingBubble } from "@/components/message-bubble";
 import { MoteAvatar } from "@/components/mote-avatar";
 import { PressableScale } from "@/components/pressable-scale";
 import type { ChatMessage } from "@/host/types";
+import {
+  MAX_HIDDEN_NEWER_COUNT,
+  acknowledgeNewest,
+  initialNewMessageScrollState,
+  observeMessageIds,
+  updateNewestEdge,
+  type NewMessageScrollState,
+} from "@/state/new-message-scroll";
 import { useCumea } from "@/state/cumea-store";
 import { theme } from "@/theme";
 
@@ -30,10 +48,21 @@ export default function AgentChatScreen() {
   const { state, actions } = useCumea();
   const agent = state.agents.find((candidate) => candidate.id === agentId);
   const messages = state.messages[agentId] ?? EMPTY_MESSAGES;
+  const messageIds = useMemo(() => messages.map((message) => message.id), [messages]);
   const paging = state.messagePaging[agentId];
   const working = agent?.presence === "working";
   const stream = state.streaming[agentId] ?? "";
+  const listRef = useRef<FlatList<ChatMessage>>(null);
+  const scrollAgentIdRef = useRef(agentId);
+  const scrollStateRef = useRef<NewMessageScrollState>(initialNewMessageScrollState(messageIds));
+  const [hiddenNewerCount, setHiddenNewerCount] = useState(0);
   const reversedMessages = useMemo(() => [...messages].reverse(), [messages]);
+
+  const applyScrollState = useCallback((next: NewMessageScrollState) => {
+    scrollStateRef.current = next;
+    setHiddenNewerCount((current) => current === next.hiddenNewerCount ? current : next.hiddenNewerCount);
+  }, []);
+
   const renderMessage = useCallback<ListRenderItem<ChatMessage>>(
     ({ item }) => <MessageBubble message={item} />,
     [],
@@ -52,6 +81,29 @@ export default function AgentChatScreen() {
     if (agent?.unread) actions.markRead(agentId);
   }, [actions, agent?.unread, agentId]);
 
+  useEffect(() => {
+    if (scrollAgentIdRef.current !== agentId) {
+      scrollAgentIdRef.current = agentId;
+      applyScrollState(initialNewMessageScrollState(messageIds));
+      return;
+    }
+
+    const observation = observeMessageIds(scrollStateRef.current, messageIds);
+    applyScrollState(observation.state);
+    if (observation.shouldJumpToNewest) {
+      requestAnimationFrame(() => listRef.current?.scrollToOffset({ offset: 0, animated: false }));
+    }
+  }, [agentId, applyScrollState, messageIds]);
+
+  const updateNewestEdgeFromScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    applyScrollState(updateNewestEdge(scrollStateRef.current, event.nativeEvent.contentOffset.y));
+  }, [applyScrollState]);
+
+  const jumpToNewest = useCallback(() => {
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+    applyScrollState(acknowledgeNewest(scrollStateRef.current));
+  }, [applyScrollState]);
+
   if (!agent) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: theme.background, alignItems: "center", justifyContent: "center", gap: 14, padding: 26 }}>
@@ -62,6 +114,13 @@ export default function AgentChatScreen() {
       </SafeAreaView>
     );
   }
+
+  const visibleNewerCount = hiddenNewerCount >= MAX_HIDDEN_NEWER_COUNT
+    ? `${MAX_HIDDEN_NEWER_COUNT}+`
+    : String(hiddenNewerCount);
+  const newerAccessibilityCount = hiddenNewerCount >= MAX_HIDDEN_NEWER_COUNT
+    ? `${MAX_HIDDEN_NEWER_COUNT} or more new messages`
+    : `${hiddenNewerCount} new ${hiddenNewerCount === 1 ? "message" : "messages"}`;
 
   return (
     <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: theme.background }}>
@@ -105,6 +164,7 @@ export default function AgentChatScreen() {
 
       <KeyboardAvoidingView behavior={process.env.EXPO_OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <FlatList
+          ref={listRef}
           inverted
           data={reversedMessages}
           keyExtractor={(message) => message.id}
@@ -126,6 +186,8 @@ export default function AgentChatScreen() {
           maintainVisibleContentPosition={MAINTAIN_VISIBLE_CONTENT_POSITION}
           onEndReached={loadOlder}
           onEndReachedThreshold={0.2}
+          onScroll={updateNewestEdgeFromScroll}
+          scrollEventThrottle={80}
           keyboardDismissMode={process.env.EXPO_OS === "ios" ? "interactive" : "on-drag"}
           keyboardShouldPersistTaps="handled"
           automaticallyAdjustKeyboardInsets={false}
@@ -149,6 +211,33 @@ export default function AgentChatScreen() {
             </View>
           )}
         />
+        {hiddenNewerCount > 0 ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel={`${newerAccessibilityCount}. Jump to latest.`}
+            accessibilityLiveRegion="polite"
+            onPress={jumpToNewest}
+            style={{
+              position: "absolute",
+              alignSelf: "center",
+              bottom: 78,
+              minHeight: 42,
+              justifyContent: "center",
+              borderRadius: 21,
+              backgroundColor: theme.accent,
+              paddingHorizontal: 16,
+              shadowColor: "#000",
+              shadowOpacity: 0.25,
+              shadowRadius: 12,
+              shadowOffset: { width: 0, height: 5 },
+              elevation: 5,
+            }}
+          >
+            <Text style={{ color: theme.background, fontSize: 13, fontWeight: "800" }}>
+              {visibleNewerCount} new {hiddenNewerCount === 1 ? "message" : "messages"} ↓
+            </Text>
+          </PressableScale>
+        ) : null}
         <ChatComposer
           agentName={agent.name}
           working={working}

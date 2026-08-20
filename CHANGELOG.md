@@ -7,6 +7,11 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Added an explicit newest-edge contract to the Expo chat surface without replacing its existing paging stack.
+  When the user is reading older history, only canonical message IDs appended after the previously observed
+  latest message accumulate behind a bounded accessible `N new messages` affordance. Initial hydration,
+  prepending older pages, same-ID streaming/settled updates and resnapshot/search-window replacement do not
+  manufacture counts; taps jump to inverted offset zero and normal near-edge following remains automatic.
 - Added the provider-neutral computer backend contract foundation. Computer descriptors now model
   Private vs Shared scope, independent shell/files/graphical/checkpoint capabilities, honest
   ready/provisioning/missing/transport-error/unavailable states, bounded public projection, runtime

@@ -10,7 +10,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "export": "expo export --platform all",
-    "test": "node --experimental-strip-types --test src/state/chat-state.test.mjs",
+    "test": "node --experimental-strip-types --test src/state/chat-state.test.mjs src/state/new-message-scroll.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

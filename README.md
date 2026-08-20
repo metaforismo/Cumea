@@ -59,7 +59,12 @@ Mobile does not run providers on the phone and Cumea does not supply a managed V
 continue after a laptop is closed, the user must keep the same Cumea harness running on an
 authenticated machine they control. The mobile client consumes a narrowed authenticated SSE stream,
 reconciles a fresh bootstrap snapshot after each connection, pauses in the background, and reconnects
-unexpected closures with bounded backoff.
+unexpected closures with bounded backoff. Its chat surface already uses bounded paging, an inverted
+`FlatList`, `maintainVisibleContentPosition`, and render-window limits. When the user is reading older
+history, newly appended message IDs now leave the viewport anchored and accumulate behind a bounded,
+accessible `N new messages` affordance; the list jumps to the newest edge only when the user asks or
+was already near that edge. Initial hydration, history prepend, streaming updates to the same message,
+and resnapshot/search-window replacement never manufacture a new-message count.
 
 The desktop uses a separate local-only bootstrap contract: one bounded snapshot carries the agent
 index, selected transcript page, engine/configuration status, workspace projection, Needs You count,
@@ -295,7 +300,7 @@ required before publishing a Developer Preview.
 | `server/harness/` | provider registry and event bus |
 | `server/thread-inspector.ts` | bounded owner-local Runtime/Raw diagnostic projection over existing per-thread logs |
 | `electron/` | desktop shell, OS-backed credential vault, native permissions, dictation, and local computer use |
-| `apps/mobile/` | Expo Router companion, agent-list home, pairing, chat, approvals, and routines |
+| `apps/mobile/` | Expo Router companion, agent-list home, pairing, paged chat with anchored history/new-message affordance, approvals, and routines |
 | `scripts/package-runtime-closure.mjs` | release manifest and transitive dependency-closure gate for packaged server processes |
 | `scripts/check-theme-contrast.mjs` | dependency-free semantic WCAG contrast regression gate over the effective dark-theme tokens |
 
@@ -332,7 +337,9 @@ is split into explicit review layers. P0.00a1 establishes path-free bounded owne
 P0.00a2a adds dependency-free bounded Markdown/DOCX semantic parsing; P0.00a2b activates the desktop-local
 capability routes, provider workspace semantics and paired/mobile denial; P0.00a2c1 adds the safe desktop
 Markdown/DOCX file-link/dialog surface. PDF/browser evidence and a first-class secure raster path remain open.
-Superseded safe-file draft #32 is closed; #9 remains the historical extraction ledger.
+Superseded safe-file draft #32 is closed; #9 remains the historical extraction ledger. **P0.00c is now complete:**
+the current mobile paging/windowing stack preserves the user's reading position and exposes bounded new-message
+navigation without copying the historical draft wholesale.
 
 P1.12a now establishes a provider-neutral computer foundation with explicit Private/Shared scope,
 independent shell/files/graphical/checkpoint capability bits, runtime capability-to-primitive conformance,
@@ -340,11 +347,11 @@ honest availability states and fenced graphical leases. **This is not yet a clai
 Box run through that abstraction**: adapter migration, BYO VPS, Team/Project scope and durable run/takeover
 integration remain separate P1.12 tranches.
 
-The immediate priorities are **mobile new-message behavior, dictation hardening, secure raster/PDF viewer
-completion, approval-cancel reconciliation, steady-state renderer/thread scaling, Agent→Conversations,
-resilient mobile discovery/push/distribution evidence, provider onboarding/model-binding, and current-computer
-adapter/BYO-VPS work on the new contract**. P0.09a remains open until the exact browser journey records keyboard
-focus, selection readability, semantic contrast and reduced-motion behavior.
+The immediate priorities are **dictation hardening, secure raster/PDF viewer completion,
+approval-cancel reconciliation, steady-state renderer/thread scaling, Agent→Conversations, resilient mobile
+discovery/push/distribution evidence, provider onboarding/model-binding, and current-computer adapter/BYO-VPS
+work on the new contract**. P0.09a remains open until the exact browser journey records keyboard focus,
+selection readability, semantic contrast and reduced-motion behavior.
 
 The current competitive audit is pinned to Cumea `1c61e3da`, Rakazo `f0a2cb20`, and OpenMausBot
 `6b2ca7e0`. It records the latest UI/UX, performance, secure-image, cancellation/approval, provider-auth,

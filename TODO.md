@@ -79,10 +79,12 @@ should not bypass the release, security, persistence, or measurement foundations
   - [ ] P0.00b — Re-port editable native dictation from #9 as an explicit platform capability with
     permission/error states, idempotent session cleanup, user-editable interim/final text, typing-while-listening
     cancellation, explicit platform state, and no silent cloud speech fallback.
-  - [ ] P0.00c — Keep the current mobile paging/inverted FlatList/windowing/anchored prepend, and extract only
+  - [x] P0.00c — Keep the current mobile paging/inverted FlatList/windowing/anchored prepend, and extract only
     the still-useful historical delta from #9: do not auto-scroll when the user is reading older messages,
-    count incoming messages behind an accessible `N new` affordance, and jump/reset only on explicit action or
-    while already near the newest edge. Reconcile with atomic bootstrap, narrowed SSE and canonical SQLite.
+    count only actually appended canonical message IDs behind an accessible bounded `N new` affordance, and
+    jump/reset only on explicit action or while already near the newest edge. Initial hydration, history prepend,
+    same-ID streaming updates and resnapshot/search-window replacement never manufacture a new-message count.
+    The state machine is covered independently from React Native and the mobile manifest remains lockfile-clean.
   - [ ] P0.00d — Extract any still-useful Quick-agent, lifecycle and release-evidence work into separate
     current-main PRs; close the historical draft once every retained concern has a replacement or an
     explicit reject decision. Draft #32 is already closed as superseded; #9 is the only historical ledger.
@@ -121,7 +123,7 @@ should not bypass the release, security, persistence, or measurement foundations
     and defer CUA SDK/TCC/socket work until first use.
   - [x] P0.03b — Move packaged Electron harnesses to `CUMEA_PORT=0`, publish the actual bound
     port over a versioned UtilityProcess parent/child readiness message, remove HTTP readiness polling
-    and fixed private fallback ports, validate the private local listener Host/origin boundary, and
+    and fixed private fallback ports, validate the private local listener Host/origin contract, and
     keep remote/mobile listener port semantics independent of the local ephemeral port.
   - [ ] P0.03c — Re-run matching packaged performance scenarios on the fixed-machine evidence gate and
     record startup trade-offs without attributing hosted-runner variance to the code change.
@@ -417,3 +419,4 @@ Every implementation PR must include, where applicable:
 | 2026-08-20 | P0.09a1b | Added semantic dark-theme contrast tokens and a dependency-free WCAG regression checker covering alpha compositing, normal-size text on recurring dark surfaces, and explicit foregrounds on solid semantic actions; mutation tests preserve the exact failures that motivated the gate. |
 | 2026-08-20 | Competitive audit morning refresh | Re-pinned Cumea `1c61e3da`, Rakazo `f0a2cb20`, and OpenMausBot `6b2ca7e0`; promoted secure raster images, cancellation/approval reconciliation, signed mobile distribution, structured provider auth/model-binding, Linux installed-runtime evidence, additive-only imports and provider-neutral fenced computer contracts while explicitly rejecting duplicate sections and mandatory hosted defaults. |
 | 2026-08-20 | P1.12a | Added the provider-neutral computer contract foundation with explicit private/shared scope, independent capabilities, honest transport states, capability-to-primitive runtime conformance and generation-fenced graphical leases; current CUA/Box adapters, durable run bindings, BYO VPS and shared-computer product UI remain separate follow-ups. |
+| 2026-08-20 | P0.00c | Completed the remaining mobile draft-#9 scroll extraction without replacing the current paging stack: appended message IDs accumulate behind a bounded accessible `N new` affordance while history reading stays anchored; hydration, prepend, same-ID streaming updates and resnapshot replacement do not create false counts. |
