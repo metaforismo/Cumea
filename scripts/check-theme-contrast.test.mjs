@@ -12,16 +12,18 @@ test("composites alpha foreground colors before applying WCAG contrast", () => {
   assert.ok(Math.abs(contrastRatio("#fcfcfcbf", "#5a5a5a") - 4.607) < 0.01);
 });
 
-test("later accessibility overrides win over base theme declarations", () => {
+test("later accessibility tokens extend the inherited base theme", () => {
   const tokens = parseThemeTokens([
     ":root { --color-accent: #1084fe; --color-card: #262626; }",
-    ":root { --color-accent: #2a9aff; }",
+    ":root { --color-accent-text: #2a9aff; --color-action-ink: #070707; }",
   ]);
-  assert.equal(tokens.get("accent"), "#2a9aff");
+  assert.equal(tokens.get("accent"), "#1084fe");
+  assert.equal(tokens.get("accent-text"), "#2a9aff");
+  assert.equal(tokens.get("action-ink"), "#070707");
   assert.equal(tokens.get("card"), "#262626");
 });
 
-test("the gate catches the two low-contrast token values it was added to prevent", () => {
+test("the gate catches the old secondary/accent assumptions and light ink on solid semantic fills", () => {
   const css = `
     :root {
       --color-app: #070707;
@@ -31,6 +33,8 @@ test("the gate catches the two low-contrast token values it was added to prevent
       --color-ink: #fcfcfc;
       --color-ink-secondary: #fcfcfc99;
       --color-accent: #1084fe;
+      --color-accent-text: #1084fe;
+      --color-action-ink: #fcfcfc;
       --color-success: #38d591;
       --color-danger: #ff5667;
       --color-warning: #ff9800;
@@ -40,9 +44,11 @@ test("the gate catches the two low-contrast token values it was added to prevent
   const uses = failures.map((failure) => failure.use);
   assert.ok(uses.includes("small delivery metadata / user bubble"));
   assert.ok(uses.includes("normal accent text / card"));
+  assert.ok(uses.includes("small label / solid accent action"));
+  assert.ok(uses.includes("small label / solid danger action"));
 });
 
-test("the accessible overrides satisfy every declared semantic pair", () => {
+test("the accessible semantic split satisfies every declared pair without changing the accent fill", () => {
   const css = `
     :root {
       --color-app: #070707;
@@ -51,7 +57,9 @@ test("the accessible overrides satisfy every declared semantic pair", () => {
       --color-bubble-user: #5a5a5a;
       --color-ink: #fcfcfc;
       --color-ink-secondary: #fcfcfcbf;
-      --color-accent: #2a9aff;
+      --color-accent: #1084fe;
+      --color-accent-text: #2a9aff;
+      --color-action-ink: #070707;
       --color-success: #38d591;
       --color-danger: #ff5667;
       --color-warning: #ff9800;
