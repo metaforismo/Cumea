@@ -1,6 +1,14 @@
-/* App-wide interaction baseline.
+/* App-wide interaction and contrast baseline.
    Component-specific motion may remain when it communicates semantic state; this layer removes
-   decorative panel/pop transitions and smooth scrolling for users who request reduced motion. */
+   decorative panel/pop transitions and smooth scrolling for users who request reduced motion.
+
+   These two runtime token overrides intentionally come after styles.css. They preserve Cumea's
+   dark hierarchy while keeping normal-size accent and secondary text above WCAG AA on the darkest
+   recurring content surfaces, including cards and user bubbles. */
+:root {
+  --color-ink-secondary: #fcfcfcbf;
+  --color-accent: #2a9aff;
+}
 
 ::selection {
   background-color: color-mix(in srgb, var(--color-accent, #6ea8ff) 35%, transparent);
