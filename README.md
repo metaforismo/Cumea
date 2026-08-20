@@ -283,6 +283,7 @@ required before publishing a Developer Preview.
 | `server/workspace.ts` | durable sections, attachments, tasks, runs, artifacts, and schedules |
 | `server/file-capabilities.ts` | bounded owner-local workspace/attachment snapshots and opaque path-free read capabilities used by desktop-local resolve/preview/download routes |
 | `server/document-preview.ts` | dependency-free bounded Markdown/DOCX semantic parser used by the local preview route and inert desktop viewer |
+| `server/computer-backend.ts` | provider-neutral computer scope/capability contract plus runtime conformance checks and fenced graphical leases; current CUA/Box adaptation remains a follow-up |
 | `server/message-search-index.ts` | owner-local derived SQLite/WAL transcript search projection with legacy-file fingerprints and canonical-revision reconciliation |
 | `server/turn-context.ts` | bounded canonical context rebuild and native-session resume decision |
 | `server/session-freshness.ts` | private owner-local per-thread pending/dispatched/invalidated provider-session state |
@@ -325,19 +326,25 @@ fixed `:5199` UI and `:8799` harness pair described above.
 
 ## Direction
 
-P0.11 and P0.12 are complete, the source-level accessibility/contrast baseline and packaged server runtime
-closure gate are present, and draft #9's safe-file work is now split into explicit review layers.
-P0.00a1 establishes path-free bounded owner-local file capabilities; P0.00a2a adds dependency-free
-bounded Markdown/DOCX semantic parsing; P0.00a2b activates the desktop-local capability routes,
-provider workspace semantics and paired/mobile denial. **P0.00a2c1 adds the safe desktop Markdown/DOCX
-file-link/dialog surface without adding PDF runtime code.** P0.00a2c2 remains the bounded PDF.js +
-notice/SBOM/package gate, and P0.00a2c3 remains the real-browser keyboard/focus/reduced-motion acceptance
-gate. Superseded safe-file draft #32 is closed; #9 remains the historical extraction ledger.
-The immediate priorities are now **mobile new-message behavior, dictation hardening, secure raster/PDF
-viewer completion, approval-cancel reconciliation, steady-state renderer/thread scaling, Agent→Conversations,
-resilient mobile discovery/push/distribution evidence, provider onboarding/model-binding, and the pluggable
-user-owned computer contract**. P0.09a remains open until the exact browser journey records keyboard focus,
-selection readability, semantic contrast and reduced-motion behavior.
+P0.11 is complete, P0.12 is reopened only for approval-cancel reconciliation, and the source-level
+accessibility/contrast baseline plus packaged server runtime closure are present. Draft #9's safe-file work
+is split into explicit review layers. P0.00a1 establishes path-free bounded owner-local file capabilities;
+P0.00a2a adds dependency-free bounded Markdown/DOCX semantic parsing; P0.00a2b activates the desktop-local
+capability routes, provider workspace semantics and paired/mobile denial; P0.00a2c1 adds the safe desktop
+Markdown/DOCX file-link/dialog surface. PDF/browser evidence and a first-class secure raster path remain open.
+Superseded safe-file draft #32 is closed; #9 remains the historical extraction ledger.
+
+P1.12a now establishes a provider-neutral computer foundation with explicit Private/Shared scope,
+independent shell/files/graphical/checkpoint capability bits, runtime capability-to-primitive conformance,
+honest availability states and fenced graphical leases. **This is not yet a claim that current local CUA or
+Box run through that abstraction**: adapter migration, BYO VPS, Team/Project scope and durable run/takeover
+integration remain separate P1.12 tranches.
+
+The immediate priorities are **mobile new-message behavior, dictation hardening, secure raster/PDF viewer
+completion, approval-cancel reconciliation, steady-state renderer/thread scaling, Agent→Conversations,
+resilient mobile discovery/push/distribution evidence, provider onboarding/model-binding, and current-computer
+adapter/BYO-VPS work on the new contract**. P0.09a remains open until the exact browser journey records keyboard
+focus, selection readability, semantic contrast and reduced-motion behavior.
 
 The current competitive audit is pinned to Cumea `1c61e3da`, Rakazo `f0a2cb20`, and OpenMausBot
 `6b2ca7e0`. It records the latest UI/UX, performance, secure-image, cancellation/approval, provider-auth,
@@ -351,6 +358,7 @@ agent-list-first mobile identity instead of replacing them with a hosted archite
 See [ROADMAP.md](ROADMAP.md) for the ordered backlog,
 [the safe local file preview security boundary](docs/file-preview-security.md),
 [local file capability routes](docs/file-capability-routes.md),
+[provider-neutral computer backend contract](docs/computer-backend-contract.md),
 [packaged server runtime closure](docs/package-runtime-closure.md),
 [the 2026-08-20 Rakazo/OpenMaus engineering audit](docs/competitive-audit-2026-08-20.md) for the latest
 `adopt / adapt / reject` decisions, [the 2026-08-19 audit](docs/competitive-audit-2026-08-19.md) for the
