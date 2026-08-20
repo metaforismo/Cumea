@@ -333,26 +333,27 @@ provider workspace semantics and paired/mobile denial. **P0.00a2c1 adds the safe
 file-link/dialog surface without adding PDF runtime code.** P0.00a2c2 remains the bounded PDF.js +
 notice/SBOM/package gate, and P0.00a2c3 remains the real-browser keyboard/focus/reduced-motion acceptance
 gate. Superseded safe-file draft #32 is closed; #9 remains the historical extraction ledger.
-The immediate priorities remain **finishing focused draft-#9 extraction, steady-state renderer/thread
-scaling, resilient mobile completion, conversation/memory separation, signed distribution and
-real-journey evidence, and a pluggable user-owned computer contract**. P0.09a remains open until the
-exact browser journey records keyboard focus, selection readability, and reduced-motion behavior.
+The immediate priorities are now **mobile new-message behavior, dictation hardening, secure raster/PDF
+viewer completion, approval-cancel reconciliation, steady-state renderer/thread scaling, Agent→Conversations,
+resilient mobile discovery/push/distribution evidence, provider onboarding/model-binding, and the pluggable
+user-owned computer contract**. P0.09a remains open until the exact browser journey records keyboard focus,
+selection readability, semantic contrast and reduced-motion behavior.
 
-The current competitive audit is pinned to Cumea `ea3d751b`, Rakazo `c3d386d8`, and OpenMausBot
-`70805c0a`. It adapts conversation reset into multi-conversation agents, hosted-memory compaction into an
-owner-local provenance-first memory contract, Team/Private computer screens into fenced run leases, and
-BYO-VPS / resilient host discovery into user-owned backend and transport contracts. Mandatory hosted
-identity, a Cumea-operated control plane, and hosted memory remain outside the local default.
+The current competitive audit is pinned to Cumea `1c61e3da`, Rakazo `f0a2cb20`, and OpenMausBot
+`6b2ca7e0`. It records the latest UI/UX, performance, secure-image, cancellation/approval, provider-auth,
+mobile-distribution, Linux, voice, portable-definition and computer-runtime deltas. Cumea keeps its
+SQLite/local identity and no-account default; mandatory hosted identity, a Cumea-operated control plane,
+and hosted memory remain outside the local default.
 
-These changes keep Cumea's no-account local-first security model and its Grok-like three-pane desktop /
+These changes keep Cumea's no-account local-first security model and its compact three-pane desktop /
 agent-list-first mobile identity instead of replacing them with a hosted architecture.
 
 See [ROADMAP.md](ROADMAP.md) for the ordered backlog,
 [the safe local file preview security boundary](docs/file-preview-security.md),
 [local file capability routes](docs/file-capability-routes.md),
 [packaged server runtime closure](docs/package-runtime-closure.md),
-[the 2026-08-19 Rakazo/OpenMaus engineering audit](docs/competitive-audit-2026-08-19.md) for the latest
-`adopt / adapt / reject` decisions, [the 2026-08-18 audit](docs/competitive-audit-2026-08-18.md) for the
+[the 2026-08-20 Rakazo/OpenMaus engineering audit](docs/competitive-audit-2026-08-20.md) for the latest
+`adopt / adapt / reject` decisions, [the 2026-08-19 audit](docs/competitive-audit-2026-08-19.md) for the
 previous pin, and [docs/UPSTREAM.md](docs/UPSTREAM.md) for the earlier upstream issue/PR audit.
 
 ## Contributing
