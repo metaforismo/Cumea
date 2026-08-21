@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, AlertTriangle, Loader2, Mic, Monitor } from "lucide-react";
 import { CumeaAvatar } from "./Avatar";
 import { setOnboardingDone } from "@/lib/onboarding";
+import { currentPlatformCapabilities } from "@/lib/platform-capabilities";
 import { startupApi } from "@/lib/startup-api";
 
 // Three-step first-run onboarding: local profile, what's installed
@@ -15,7 +16,7 @@ type InstanceRow = {
   snapshot: { state: "available" | "unavailable"; reason?: string; version?: string | null; authenticated?: boolean };
 };
 
-const hasNativeDictationPermissions = window.cumea?.platform === "darwin";
+const hasNativeDictationPermissions = currentPlatformCapabilities().nativeDictation;
 const hasCuaBridge = Boolean(window.cumea?.cuaStatus);
 
 function StatusRow({
