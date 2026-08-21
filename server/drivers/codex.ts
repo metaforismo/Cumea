@@ -45,9 +45,11 @@ export interface CodexConfig {
   cli: string;
   fullAuto: boolean;
   rpcTimeoutMs: number;
+  approvalTimeoutMs: number;
 }
 
 const DEFAULT_RPC_TIMEOUT_MS = 60_000;
+const DEFAULT_APPROVAL_TIMEOUT_MS = 15 * 60_000;
 
 // Proxy entry files live next to server/drivers as .ts in source/dev and .js
 // in the compiled dist-server packaged by Electron. P0.08a classifies and
@@ -68,10 +70,17 @@ function decodeConfig(raw: unknown): CodexConfig {
   ) {
     throw new Error("codex: rpcTimeoutMs must be an integer between 100 and 300000");
   }
+  if (
+    o.approvalTimeoutMs !== undefined &&
+    (typeof o.approvalTimeoutMs !== "number" || !Number.isInteger(o.approvalTimeoutMs) || o.approvalTimeoutMs < 50)
+  ) {
+    throw new Error("codex: approvalTimeoutMs must be an integer of at least 50");
+  }
   return {
     cli: typeof o.cli === "string" ? o.cli : "codex",
     fullAuto: o.fullAuto === true,
     rpcTimeoutMs: (o.rpcTimeoutMs as number | undefined) ?? DEFAULT_RPC_TIMEOUT_MS,
+    approvalTimeoutMs: (o.approvalTimeoutMs as number | undefined) ?? DEFAULT_APPROVAL_TIMEOUT_MS,
   };
 }
 
@@ -170,7 +179,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       });
 
       const state = { settled: false, lastText: "" };
-      const asks = new Map<string, (behavior: string, message?: string) => void>();
+      const asks = new Map<string, (behavior: string, message?: string, source?: "user" | "timeout" | "shutdown") => void>();
       let nextId = 1;
       const rpcPending = new Map<
         number,
@@ -208,7 +217,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const settle = (ok: boolean, stopReason: string | null) => {
         if (state.settled) return;
         state.settled = true;
-        for (const finish of [...asks.values()]) finish("deny", "Cumea: the turn ended");
+        for (const finish of [...asks.values()]) finish("deny", "Cumea: the turn ended", "shutdown");
         for (const p of rpcPending.values()) {
           clearTimeout(p.timer);
           p.reject(new Error("turn settled"));
@@ -246,7 +255,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         const choices = isQuestion
           ? (params.questions?.[0]?.options ?? []).map((o: any) => o.label).slice(0, 5)
           : undefined;
-        const finish = (behavior: string, message?: string) => {
+        // source mirrors claude.ts: only a real user answer is "user";
+        // timers and shutdown denials render as dismissed, not user-replied
+        const finish = (behavior: string, message?: string, source: "user" | "timeout" | "shutdown" = "user") => {
           if (!asks.delete(requestId)) return;
           clearTimeout(timer);
           if (isQuestion) {
@@ -262,11 +273,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               result: { decision: behavior === "allow" ? (legacy ? "approved" : "accept") : legacy ? "denied" : "decline" },
             });
           }
-          emit({ ...base(threadId, turnId), type: "request.resolved", requestId, behavior, source: "user" });
+          emit({ ...base(threadId, turnId), type: "request.resolved", requestId, behavior, source });
         };
         const timer = setTimeout(
-          () => (isQuestion ? finish("answer", QUESTION_TIMEOUT_NOTE) : finish("deny", DENY_TIMEOUT_NOTE)),
-          15 * 60_000,
+          () => (isQuestion ? finish("answer", QUESTION_TIMEOUT_NOTE, "timeout") : finish("deny", DENY_TIMEOUT_NOTE, "timeout")),
+          config.approvalTimeoutMs,
         );
         timer.unref?.();
         asks.set(requestId, finish);

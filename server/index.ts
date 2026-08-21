@@ -29,6 +29,8 @@ import { stageFilesForDeletion, type StagedFileDeletion } from "./delete-files.t
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { threadEventKey, threadEventPrefix } from "./event-key.ts";
+import { createAnswerGate } from "./request-answer-gate.ts";
+import { dismissOrphanedApprovals } from "./approval-reconciliation.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import {
@@ -336,6 +338,7 @@ function signalLifecycle(threadId: string) {
 // and every client view are projections of it.
 const toolMessageByItem = new Map<string, string>(); // threadId + itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // threadId + requestId -> messageId
+const answerGate = createAnswerGate();
 const activeRunByThread = new Map<string, string>();
 /** Threads whose current turn actually invoked a computer tool. */
 const usedComputerByThread = new Set<string>();
@@ -490,7 +493,10 @@ bus.subscribe((event: RuntimeEvent) => {
           });
           if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
         }
-        if (key) askMessageByRequest.delete(key);
+        if (key) {
+          askMessageByRequest.delete(key);
+          answerGate.settle(key);
+        }
       }
       const runId = activeRunByThread.get(event.threadId);
       if (runId) {
@@ -2061,10 +2067,20 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
           return json(res, 400, { error: "approval policy applies only to permission requests" });
         }
       }
-      await instance.adapter.respondToRequest(bot.threadId, requestId, {
-        behavior: body.behavior,
-        message: body.message,
-      });
+      // The card's answered flag is patched asynchronously by the event
+      // folder; the gate is what makes a concurrent duplicate answer lose.
+      if (!answerGate.reserve(requestKey)) {
+        return json(res, 409, { error: "no such pending request" });
+      }
+      try {
+        await instance.adapter.respondToRequest(bot.threadId, requestId, {
+          behavior: body.behavior,
+          message: body.message,
+        });
+      } catch (error) {
+        answerGate.release(requestKey);
+        throw error;
+      }
       // Persist a remembered policy only after the owning provider accepted
       // this exact pending request. A stale or forged request must never be
       // able to mutate future approval behavior.
@@ -2230,6 +2246,14 @@ if (REMOTE) {
 }
 
 const server = createServer((req, res) => void handleRequest(req, res, "local"));
+// Approval cards persisted open by a previous process belong to drivers that
+// died with it; dismiss them before the first client can ask one.
+try {
+  const reconciled = dismissOrphanedApprovals(store.bots, store);
+  if (reconciled.length) console.log(`Dismissed ${reconciled.length} orphaned approval(s) from a previous run`);
+} catch (error) {
+  console.error("could not reconcile orphaned approvals", error);
+}
 LOCAL_PORT = await listenTcp(server, REQUESTED_LOCAL_PORT, "127.0.0.1");
 console.log(`Cumea server running on http://127.0.0.1:${LOCAL_PORT}`);
 postHarnessReady(LOCAL_PORT);

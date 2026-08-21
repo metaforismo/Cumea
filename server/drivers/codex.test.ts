@@ -20,12 +20,14 @@ const posixOnly = describe.skipIf(process.platform === "win32");
 
 describe("CodexDriver.decodeConfig", () => {
   it("defaults to the codex binary with fullAuto off", () => {
-    expect(CodexDriver.decodeConfig({})).toEqual({ cli: "codex", fullAuto: false, rpcTimeoutMs: 60_000 });
-    expect(CodexDriver.decodeConfig(undefined)).toEqual({ cli: "codex", fullAuto: false, rpcTimeoutMs: 60_000 });
+    const defaults = { cli: "codex", fullAuto: false, rpcTimeoutMs: 60_000, approvalTimeoutMs: 900_000 };
+    expect(CodexDriver.decodeConfig({})).toEqual(defaults);
+    expect(CodexDriver.decodeConfig(undefined)).toEqual(defaults);
     expect(CodexDriver.decodeConfig({ fullAuto: true }).fullAuto).toBe(true);
     // anything non-true is off — a truthy string must not enable full auto
     expect(CodexDriver.decodeConfig({ fullAuto: "yes" }).fullAuto).toBe(false);
     expect(() => CodexDriver.decodeConfig({ rpcTimeoutMs: 99 })).toThrow(/rpcTimeoutMs/);
+    expect(() => CodexDriver.decodeConfig({ approvalTimeoutMs: 49 })).toThrow(/approvalTimeoutMs/);
   });
 });
 
@@ -34,14 +36,19 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
   let recorder: EventRecorder;
   let scratch: string;
 
-  const create = async (opts: { mode?: string; fullAuto?: boolean; rpcTimeoutMs?: number } = {}) => {
+  const create = async (opts: { mode?: string; fullAuto?: boolean; rpcTimeoutMs?: number; approvalTimeoutMs?: number } = {}) => {
     if (opts.mode) process.env.FAKE_CODEX_MODE = opts.mode;
     instance = await CodexDriver.create({
       instanceId: "codex-test",
       displayName: "Codex Test",
       environment: {},
       enabled: true,
-      config: { cli: FAKE_CLI, fullAuto: opts.fullAuto ?? false, rpcTimeoutMs: opts.rpcTimeoutMs ?? 60_000 },
+      config: {
+        cli: FAKE_CLI,
+        fullAuto: opts.fullAuto ?? false,
+        rpcTimeoutMs: opts.rpcTimeoutMs ?? 60_000,
+        approvalTimeoutMs: opts.approvalTimeoutMs ?? 900_000,
+      },
     });
     recorder = recordEvents(instance.adapter);
   };
@@ -238,6 +245,25 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
     expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ decision: "approved" });
   });
 
+  it("resolves a timed-out approval as a timeout, not a user answer", async () => {
+    await create({ mode: "approval", approvalTimeoutMs: 80 });
+    await instance.adapter.sendTurn({ threadId: "t-approval-timeout", text: "clean up" });
+    const opened = await recorder.until((e) => e.type === "request.opened");
+    const resolved = await recorder.until((e) => e.type === "request.resolved");
+    expect(resolved).toMatchObject({ requestId: opened.requestId, behavior: "deny", source: "timeout" });
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  it("marks approvals denied by turn teardown as shutdown, not user", async () => {
+    await create({ mode: "approval" });
+    await instance.adapter.sendTurn({ threadId: "t-approval-shutdown", text: "clean up" });
+    await recorder.until((e) => e.type === "request.opened");
+    await instance.adapter.interruptTurn("t-approval-shutdown");
+    const resolved = await recorder.until((e) => e.type === "request.resolved");
+    expect(resolved).toMatchObject({ behavior: "deny", source: "shutdown" });
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
   it("auto-approves commands in fullAuto without opening a request", async () => {
     await create({ mode: "approval", fullAuto: true });
     const dump = join(scratch, "dump.json");
@@ -276,7 +302,7 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
       displayName: undefined,
       environment: {},
       enabled: true,
-      config: { cli: join(scratch, "does-not-exist"), fullAuto: false, rpcTimeoutMs: 60_000 },
+      config: { cli: join(scratch, "does-not-exist"), fullAuto: false, rpcTimeoutMs: 60_000, approvalTimeoutMs: 900_000 },
     });
     recorder = recordEvents(instance.adapter);
 
