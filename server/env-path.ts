@@ -10,9 +10,17 @@
 // on this machine, plus (async, best-effort) whatever PATH the user's
 // real login shell reports.
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, extname, join } from "node:path";
 
 /** nvm keeps every node version's bin dir separately; newest first so a
  * CLI installed under the latest node wins. */
@@ -44,8 +52,35 @@ function knownDirs(): string[] {
   ];
 }
 
+/** Standard Windows CLI install locations. Rescanning them lets a running GUI
+ * discover providers installed after launch, without depending on a refreshed
+ * process-wide PATH snapshot. */
+function windowsKnownDirs(): string[] {
+  const home = homedir();
+  const appData = process.env.APPDATA ?? join(home, "AppData", "Roaming");
+  const localAppData = process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
+  return [
+    join(appData, "npm"),
+    join(home, ".grok", "bin"),
+    join(localAppData, "agy", "bin"),
+    join(home, ".local", "bin"),
+    join(home, ".claude", "local"),
+    join(home, ".bun", "bin"),
+    join(home, ".deno", "bin"),
+    join(home, "go", "bin"),
+  ];
+}
+
 let cached: string | null = null;
 let probed = false;
+
+/** Drop the process-wide PATH snapshot before a user-requested provider
+ * rescan. This matters on Windows, where a running GUI process never receives
+ * PATH changes made by an installer, and for newly created Unix install dirs. */
+export function resetPathCache(): void {
+  cached = null;
+  probed = false;
+}
 
 /** Current best PATH, synchronously. Cheap after the first call. */
 export function augmentedPath(): string {
@@ -53,9 +88,7 @@ export function augmentedPath(): string {
     cached = mergePaths([
       ...(process.env.CUMEA_EXTRA_PATH ? process.env.CUMEA_EXTRA_PATH.split(delimiter) : []),
       ...(process.env.PATH ? process.env.PATH.split(delimiter) : []),
-      // GUI apps on Windows inherit the user PATH already; the unix
-      // install-dir scan and shell probe are the darwin/linux cure
-      ...(process.platform === "win32" ? [] : knownDirs().filter((d) => existsSync(d))),
+      ...(process.platform === "win32" ? windowsKnownDirs() : knownDirs()).filter((d) => existsSync(d)),
     ]);
   }
   // belt-and-braces: fold in the login shell's PATH once, in the
@@ -91,6 +124,200 @@ function probeLoginShellPath(): void {
 
 /** Test hook — the cache is process-wide otherwise. */
 export function resetPathCacheForTests(): void {
-  cached = null;
-  probed = false;
+  resetPathCache();
+}
+
+// Windows CLI resolution ----------------------------------------------------
+//
+// libuv does not apply PATHEXT when spawning a bare command and CreateProcess
+// cannot execute .cmd/.bat or a node shebang directly. Running those through
+// cmd.exe would make provider arguments (including JSON MCP configuration)
+// shell input. Resolve only formats whose meaning we can prove without a
+// shell, and reject every other command script.
+
+export interface ResolvedCliSpawn {
+  command: string;
+  args: string[];
+}
+
+export interface CliResolutionOptions {
+  platform?: NodeJS.Platform;
+  /** Test hook; production reads the augmented process PATH. */
+  pathEntries?: string[];
+  /** Test hook; production reads PATHEXT. */
+  pathExt?: string[];
+  /** Test hook for packaged Electron, where process.execPath is not Node. */
+  nodeExecutable?: string | null;
+}
+
+export class UnsafeWindowsCliError extends Error {
+  readonly code = "ERR_UNSAFE_WINDOWS_CLI_SHIM";
+  readonly cli: string;
+
+  constructor(cli: string) {
+    super(`Cannot safely launch Windows command shim without a shell: ${cli}`);
+    this.name = "UnsafeWindowsCliError";
+    this.cli = cli;
+  }
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
+  } catch {
+    return false;
+  }
+}
+
+function normalizedPathExt(options: CliResolutionOptions): string[] {
+  const configured = options.pathExt
+    ?? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";");
+  return [...new Set(configured
+    .map((extension) => extension.trim())
+    .filter(Boolean)
+    .map((extension) => (extension.startsWith(".") ? extension : `.${extension}`)))];
+}
+
+/** PATHEXT-aware lookup. Explicit paths are resolved exactly as supplied. */
+function whichWindows(cli: string, options: CliResolutionOptions): string | null {
+  const extensions = normalizedPathExt(options);
+  const pathLike = /[\\/]/.test(cli) || /^[a-zA-Z]:/.test(cli);
+  const probe = (base: string): string | null => {
+    const candidates = extname(base)
+      ? [base]
+      : [...extensions.map((extension) => `${base}${extension}`), base];
+    return candidates.find(isFile) ?? null;
+  };
+
+  if (pathLike) return probe(cli);
+  const entries = options.pathEntries ?? augmentedPath().split(delimiter);
+  for (const directory of entries) {
+    if (!directory) continue;
+    const found = probe(join(directory, cli));
+    if (found) return found;
+  }
+  return null;
+}
+
+function nodeExecutableNear(directory: string, options: CliResolutionOptions): string | null {
+  if (options.nodeExecutable !== undefined) return options.nodeExecutable;
+  const adjacent = join(directory, "node.exe");
+  if (isFile(adjacent)) return adjacent;
+  const onPath = whichWindows("node.exe", {
+    ...options,
+    pathExt: [".EXE"],
+  });
+  if (onPath && extname(onPath).toLowerCase() === ".exe") return onPath;
+  return (process.versions as Record<string, string | undefined>).electron ? null : process.execPath;
+}
+
+function readFirstLine(path: string): string | null {
+  let descriptor: number | null = null;
+  try {
+    descriptor = openSync(path, "r");
+    const buffer = Buffer.alloc(256);
+    const bytes = readSync(descriptor, buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytes).toString("utf8").split(/\r?\n/, 1)[0] ?? "";
+  } catch {
+    return null;
+  } finally {
+    if (descriptor !== null) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        // Best-effort descriptor cleanup.
+      }
+    }
+  }
+}
+
+function resolveNodeShebang(path: string, options: CliResolutionOptions): ResolvedCliSpawn | null {
+  const firstLine = readFirstLine(path);
+  if (!firstLine) return null;
+  // Keep this intentionally narrow. In particular, env -S and extra shebang
+  // arguments need shell-like parsing and are therefore not guessed here.
+  if (!/^#!\s*(?:\/usr\/bin\/env\s+node(?:\.exe)?|\/(?:usr\/local\/bin|usr\/bin)\/node|node(?:\.exe)?)\s*$/.test(firstLine)) {
+    return null;
+  }
+  const node = nodeExecutableNear(dirname(path), options);
+  return node ? { command: node, args: [path] } : null;
+}
+
+function safeRelativeShimTarget(shim: string, relative: string): string | null {
+  if (!relative || relative.includes("%") || relative.includes("!") || relative.includes(":")) return null;
+  const segments = relative.split(/[\\/]+/);
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) return null;
+  const target = join(dirname(shim), ...segments);
+  return isFile(target) ? target : null;
+}
+
+/** Parse only the stable npm-generated .cmd shape, without interpreting cmd. */
+function resolveNpmCmdShim(shim: string, options: CliResolutionOptions): ResolvedCliSpawn | null {
+  let text: string;
+  try {
+    text = readFileSync(shim, "utf8");
+  } catch {
+    return null;
+  }
+  if (text.length > 64 * 1024 || text.includes("\0")) return null;
+  const modernPreamble = /@ECHO off[\s\S]*GOTO start[\s\S]*:find_dp0[\s\S]*SET dp0=%~dp0[\s\S]*:start[\s\S]*SETLOCAL[\s\S]*CALL :find_dp0/i;
+  if (modernPreamble.test(text)) {
+    const nodeMatches = [...text.matchAll(/"%_prog%"\s+"%dp0%\\([^"\r\n]+\.[cm]?js)"\s+%\*\s*$/gim)];
+    const executableMatches = [...text.matchAll(/^\s*"%dp0%\\([^"\r\n]+\.(?:exe|com))"\s+%\*\s*$/gim)];
+    if (nodeMatches.length + executableMatches.length !== 1) return null;
+
+    if (nodeMatches.length === 1) {
+      const script = safeRelativeShimTarget(shim, nodeMatches[0][1]);
+      if (!script || !/\.[cm]?js$/i.test(script)) return null;
+      const node = nodeExecutableNear(dirname(shim), options);
+      return node ? { command: node, args: [script] } : null;
+    }
+
+    const executable = safeRelativeShimTarget(shim, executableMatches[0][1]);
+    return executable && /\.(?:exe|com)$/i.test(executable)
+      ? { command: executable, args: [] }
+      : null;
+  }
+
+  // cmd-shim releases before the dp0 subroutine emitted two explicit node
+  // branches. Accept that exact structure only when both branches name the
+  // same script; differing targets are ambiguous and therefore rejected.
+  const legacyPreamble = /^\s*@IF EXIST "%~dp0\\node\.exe"\s*\([\s\S]*\)\s*ELSE\s*\([\s\S]*@SETLOCAL[\s\S]*@SET PATHEXT=/i;
+  if (!legacyPreamble.test(text)) return null;
+  const legacyMatches = [...text.matchAll(/"%~dp0\\([^"\r\n]+\.[cm]?js)"\s+%\*\s*$/gim)];
+  const uniqueTargets = [...new Set(legacyMatches.map((match) => match[1]))];
+  if (legacyMatches.length !== 2 || uniqueTargets.length !== 1) return null;
+  const script = safeRelativeShimTarget(shim, uniqueTargets[0]);
+  if (!script) return null;
+  const node = nodeExecutableNear(dirname(shim), options);
+  return node ? { command: node, args: [script] } : null;
+}
+
+/**
+ * Resolve a provider CLI to an argv-only spawn. Off Windows this is identity.
+ * Unknown command names are returned unchanged so Node can report ENOENT.
+ */
+export function resolveCliSpawn(
+  cli: string,
+  args: string[],
+  options: CliResolutionOptions = {},
+): ResolvedCliSpawn {
+  if ((options.platform ?? process.platform) !== "win32") return { command: cli, args };
+  const file = whichWindows(cli, options);
+  if (!file) {
+    if (/\.(?:cmd|bat)$/i.test(cli)) throw new UnsafeWindowsCliError(cli);
+    return { command: cli, args };
+  }
+
+  const extension = extname(file).toLowerCase();
+  if (extension === ".bat") throw new UnsafeWindowsCliError(file);
+  if (extension === ".cmd") {
+    const resolved = resolveNpmCmdShim(file, options);
+    if (!resolved) throw new UnsafeWindowsCliError(file);
+    return { command: resolved.command, args: [...resolved.args, ...args] };
+  }
+  if (extension === ".exe" || extension === ".com") return { command: file, args };
+  const viaNode = resolveNodeShebang(file, options);
+  if (!viaNode) return { command: file, args };
+  return { command: viaNode.command, args: [...viaNode.args, ...args] };
 }

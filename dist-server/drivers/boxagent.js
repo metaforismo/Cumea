@@ -1,4 +1,5 @@
 import { newEventId, newId } from "../contracts.js";
+import { boxErrorMessage } from "../box.js";
 import { appendNative } from "./native.js";
 const DRIVER_KIND = "boxAgent";
 const BOX_API = "https://ascii.dev/api/box/v1";
@@ -11,6 +12,20 @@ const MODELS = {
     ],
 };
 const providerFor = (model) => (model.startsWith("gpt") ? "codex" : "claude-code");
+export function boxPromptId(started) {
+    const value = started?.promptRun?.id ?? started?.prompt?.id ?? started?.promptId ?? null;
+    return typeof value === "string" && value ? value : null;
+}
+export function boxEventText(event) {
+    const value = event?.text ?? event?.message ?? event?.data?.text ?? event?.data?.content ?? null;
+    return typeof value === "string" ? value : null;
+}
+export function boxPromptState(status, lastText = "") {
+    const run = status?.promptRun ?? status?.prompt ?? status ?? {};
+    const state = String(run?.status ?? status?.status ?? "");
+    const rawResult = run?.result ?? run?.output ?? status?.result ?? lastText;
+    return { status: state, result: typeof rawResult === "string" ? rawResult : lastText };
+}
 function decodeConfig(raw) {
     const o = (raw ?? {});
     return { pollMs: typeof o.pollMs === "number" ? o.pollMs : 2500 };
@@ -45,7 +60,9 @@ export const BoxAgentDriver = {
             });
             const body = await res.json().catch(() => null);
             if (!res.ok || body?.ok === false) {
-                throw new Error(body?.code ?? body?.error ?? `box HTTP ${res.status}`);
+                // Provider bodies may contain account data, echoed prompts, or other
+                // secrets. Keep user-visible/runtime failures deterministic and safe.
+                throw new Error(boxErrorMessage(res.status, "the Box agent request", body));
             }
             return body;
         };
@@ -73,7 +90,9 @@ export const BoxAgentDriver = {
                 body: JSON.stringify({ provider: providerFor(model), model, prompt }),
             });
             appendNative(threadId, { dir: "out", source: "box.prompt", msg: { model, prompt, response: started } });
-            const promptId = started?.prompt?.id ?? started?.promptId ?? started?.id ?? null;
+            // Current Box responses include the run under promptRun. A top-level
+            // `id` can be the Box itself, so it must never be treated as a prompt.
+            const promptId = boxPromptId(started);
             let cancelled = false;
             active.set(threadId, {
                 turnId,
@@ -104,8 +123,8 @@ export const BoxAgentDriver = {
                             seen.add(id);
                             appendNative(threadId, { dir: "in", source: "box.events", msg: ev });
                             const kind = String(ev.type ?? ev.kind ?? "");
-                            const text = ev.text ?? ev.message ?? ev.data?.text ?? null;
-                            if (/assistant|message|output/i.test(kind) && typeof text === "string" && text.trim()) {
+                            const text = boxEventText(ev);
+                            if (/assistant|message|output|response/i.test(kind) && typeof text === "string" && text.trim()) {
                                 lastText = text;
                                 emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: text });
                             }
@@ -121,10 +140,11 @@ export const BoxAgentDriver = {
                         }
                         if (promptId) {
                             const status = await api(`/boxes/${boxId}/prompts/${promptId}`).catch(() => null);
-                            const state = String(status?.prompt?.status ?? status?.status ?? "");
+                            const decoded = boxPromptState(status, lastText);
+                            const state = decoded.status;
                             appendNative(threadId, { dir: "in", source: "box.prompt.status", msg: status });
-                            if (/completed|succeeded|done/i.test(state)) {
-                                const result = status?.prompt?.result ?? status?.result ?? lastText;
+                            if (/completed|succeeded|done|finished/i.test(state)) {
+                                const result = decoded.result;
                                 if (typeof result === "string" && result.trim() && result !== lastText) {
                                     emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: result });
                                 }

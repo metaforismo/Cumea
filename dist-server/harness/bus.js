@@ -4,9 +4,11 @@ export class EventBus {
     unsubscribes = [];
     eventLog;
     shouldDeliver;
-    constructor(eventLog = new EventLogWriter(), shouldDeliver = () => true) {
+    sanitize;
+    constructor(eventLog = new EventLogWriter(), shouldDeliver = () => true, sanitize = (event) => event) {
         this.eventLog = eventLog;
         this.shouldDeliver = shouldDeliver;
+        this.sanitize = sanitize;
     }
     attach(instances) {
         for (const instance of instances) {
@@ -27,18 +29,19 @@ export class EventBus {
         // a rejected event must not reach peer-agent waiters or any future listener.
         if (!this.shouldDeliver(event))
             return;
+        const safeEvent = this.sanitize(event);
         try {
-            this.eventLog.append(event.threadId, event);
+            this.eventLog.append(safeEvent.threadId, safeEvent);
         }
         catch {
             /* logging must never take down the stream */
         }
         for (const listener of [...this.listeners]) {
             try {
-                listener(event);
+                listener(safeEvent);
             }
-            catch (e) {
-                console.error("bus: listener threw", e);
+            catch {
+                console.error("bus: listener failed");
             }
         }
     }

@@ -231,9 +231,11 @@ export class FileCapabilityStore {
   private capabilities = new Map<string, FileCapability>();
   private byteCount = 0;
   private readonly now: () => number;
+  private readonly onChange: () => void;
 
-  constructor(now: () => number = Date.now) {
+  constructor(now: () => number = Date.now, onChange: () => void = () => {}) {
     this.now = now;
+    this.onChange = onChange;
   }
 
   private remove(token: string): void {
@@ -241,6 +243,7 @@ export class FileCapabilityStore {
     if (!capability) return;
     this.byteCount -= capability.bytes.length;
     this.capabilities.delete(token);
+    this.onChange();
   }
 
   sweep(): void {
@@ -250,12 +253,15 @@ export class FileCapabilityStore {
     }
   }
 
-  issue(botId: string, file: ResolvedBotFile): FileCapability {
+  issue(botId: string, file: ResolvedBotFile, options: { allowHtml?: boolean } = {}): FileCapability {
     validateBotId(botId);
     this.sweep();
     if (!file.bytes.length) throw httpError(400, "file is empty");
     if (file.bytes.length > FILE_CAPABILITY_MAX_FILE_BYTES) throw httpError(413, "file is larger than 25 MB");
     const identified = classifyPreviewFile(file.name, file.bytes);
+    if (identified.kind === "html" && options.allowHtml !== true) {
+      throw httpError(415, "HTML preview is limited to generated workspace artifacts");
+    }
     while (
       this.capabilities.size >= MAX_CAPABILITIES ||
       (this.capabilities.size > 0 && this.byteCount + file.bytes.length > MAX_CAPABILITY_BYTES)
@@ -281,6 +287,7 @@ export class FileCapabilityStore {
     };
     this.capabilities.set(capability.token, capability);
     this.byteCount += capability.bytes.length;
+    this.onChange();
     return capability;
   }
 
@@ -299,6 +306,18 @@ export class FileCapabilityStore {
     for (const [token, capability] of this.capabilities) {
       if (capability.botId === botId) this.remove(token);
     }
+  }
+
+  /** Restore invalidates every byte snapshot, including capabilities whose
+   * public bot id happens to exist in both the old and restored workspace. */
+  clear(): void {
+    this.capabilities.clear();
+    this.byteCount = 0;
+    this.onChange();
+  }
+
+  secretValues(): string[] {
+    return [...this.capabilities.keys()];
   }
 }
 

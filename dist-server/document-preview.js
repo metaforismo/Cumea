@@ -1,6 +1,7 @@
 import { extname } from "node:path";
 import JSZip from "jszip";
 const MARKDOWN_MAX_BYTES = 5 * 1024 * 1024;
+const HTML_MAX_BYTES = 2 * 1024 * 1024;
 const DOCX_MAX_COMPRESSED_BYTES = 20 * 1024 * 1024;
 const DOCX_MAX_ENTRIES = 512;
 const DOCX_MAX_ENTRY_BYTES = 8 * 1024 * 1024;
@@ -166,7 +167,26 @@ export function classifyPreviewFile(name, bytes) {
             mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         };
     }
-    throw previewError(415, "Cumea previews Markdown, PDF, and DOCX files");
+    if ([".html", ".htm"].includes(extension)) {
+        if (bytes.length > HTML_MAX_BYTES)
+            throw previewError(413, "HTML preview is limited to 2 MB");
+        const text = decodeUtf8(bytes, "HTML file");
+        if (text.includes("\u0000"))
+            throw previewError(415, "HTML file contains binary data");
+        const signature = text.replace(/^\uFEFF?\s*/, "").slice(0, 4096);
+        if (!/^(?:<!doctype\s+html\b|<html\b)/i.test(signature)) {
+            throw previewError(415, "file extension says HTML, but a complete HTML document signature is missing");
+        }
+        // A sandboxed document may still navigate its own frame. The UI disables
+        // pointer/keyboard interaction and CSP denies resources, while rejecting
+        // every http-equiv meta closes the only useful parser-triggered automatic
+        // navigation mechanism (including entity-obfuscated refresh values).
+        if (/<meta\b[^>]*\bhttp-equiv\b/i.test(text)) {
+            throw previewError(415, "HTML artifact contains a forbidden http-equiv directive");
+        }
+        return { kind: "html", mime: "text/html; charset=utf-8" };
+    }
+    throw previewError(415, "Cumea previews Markdown, PDF, DOCX, and HTML files");
 }
 const CRC32_TABLE = new Uint32Array(256);
 for (let index = 0; index < CRC32_TABLE.length; index += 1) {

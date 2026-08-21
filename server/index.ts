@@ -5,11 +5,14 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir, hostname } from "node:os";
-import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { ApprovalRuleStore, applySavedRuleDecision, approvalBoundary, deriveApprovalScope, rememberApprovalAfterSettlement } from "./approval-rules.ts";
+import { BACKUP_MAX_ARCHIVE_BYTES, BackupService } from "./backup.ts";
 import * as box from "./box.ts";
+import { BoxIdleSleepManager, type IdleSleepBlocker } from "./box-idle-sleep.ts";
 import {
   BotResourceGate,
   TurnEventFence,
@@ -17,7 +20,19 @@ import {
   type BotDetachedOperation,
 } from "./bot-resource-gate.ts";
 import * as composio from "./composio.ts";
-import { ATTACHMENTS_DIR, ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
+import { ComputerProviderLeases, computerProviderSupported } from "./computer-provider.ts";
+import { coordinatorSystemPrompt } from "./coordinator.ts";
+import {
+  ATTACHMENTS_DIR,
+  DATA_DIR,
+  ensureDirs,
+  instanceConfigs,
+  loadConfig,
+  persistedInstanceConfigs,
+  saveConfig,
+  EVENTS_DIR,
+  NATIVE_DIR,
+} from "./config.ts";
 import { newId, type RuntimeEvent } from "./contracts.ts";
 import { purgeCommittedFileDeletions, stageFilesForDeletion, type StagedFileDeletion } from "./delete-files.ts";
 import {
@@ -29,9 +44,19 @@ import {
   stageBotWorkspaceForDeletion,
 } from "./file-capabilities.ts";
 import { buildStructuredPreview } from "./document-preview.ts";
+import { HTML_ARTIFACT_CSP, HTML_ARTIFACT_PERMISSIONS_POLICY } from "./html-artifact-policy.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
+import { resetPathCache } from "./env-path.ts";
+import {
+  CUSTOM_ACP_DRIVER_KIND,
+  customAcpInstance,
+  decodeCustomAcpProfileInput,
+  publicCustomAcpProfile,
+} from "./drivers/acp/custom.ts";
 import { threadEventKey, threadEventPrefix } from "./event-key.ts";
+import { classifyOpaquePotentialEffect } from "./effect-ledger.ts";
+import { compactReplayContext, renderReplayMetadata, shouldCompactContext } from "./context-compaction.ts";
 import { EventBus } from "./harness/bus.ts";
 import { EventLogWriter } from "./harness/event-log.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
@@ -46,11 +71,36 @@ import {
   sanitizeRemoteSsePayload,
 } from "./mobile.ts";
 import { PairingStore } from "./pairing.ts";
+import { publicPersistenceIssues, resetPersistenceIssue } from "./persistence-health.ts";
+import { buildPrivacyInventory } from "./privacy-data-flow.ts";
+import { McpRegistry } from "./mcp-registry.ts";
+import { compareSkillVersions, SkillRegistry, SKILL_MAX_ASSIGNMENTS, validateSkillAssignment } from "./skill-registry.ts";
+import { AgentMemoryStore } from "./memory.ts";
+import {
+  localVmAction,
+  localVmMcp,
+  localVmScreenshot,
+  localVmSetupCommands,
+  localVmStatus,
+  type LocalVmAction,
+} from "./local-vm.ts";
 import { ProviderFleetGate } from "./provider-fleet-gate.ts";
+import { scheduleExpoPushReceiptCheck, sendExpoPush } from "./push.ts";
 import { commitCaptureIfCurrent } from "./screen-capture.ts";
 import { mentionedBots, parseBotAvatar, Store, type BotRecord, type Message } from "./store.ts";
 import { isTemporaryBotCleanupEligible, sweepTemporaryBots, temporaryBotLifecycle } from "./temporary-bots.ts";
-import { WorkspaceStore, type AttachmentRecord, type RoutineSchedule, type TaskSource } from "./workspace.ts";
+import { isComputerAction, isDelegation, parseTaskBudget, type TaskBudget, type TaskBudgetKey } from "./task-budget.ts";
+import { decodeStaticRequestPath, readStaticFile } from "./static-files.ts";
+import { checkpointContinuationInput, planCheckpointResume } from "./run-checkpoint.ts";
+import { configSecretValues, SecretCatalog, sensitiveEnvironmentValues } from "./secret-egress.ts";
+import {
+  ROUTINE_NAME_MAX_LENGTH,
+  ROUTINE_PROMPT_MAX_LENGTH,
+  WorkspaceStore,
+  type AttachmentRecord,
+  type RoutineSchedule,
+  type TaskSource,
+} from "./workspace.ts";
 
 const PORT = Number(process.env.CUMEA_PORT || 8799);
 const STATIC_DIR = process.env.CUMEA_STATIC_DIR || null;
@@ -111,6 +161,13 @@ ensureDirs();
 const cfg = loadConfig();
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS);
 await registry.load(instanceConfigs(cfg));
+const mcpRegistry = new McpRegistry();
+const skillRegistry = new SkillRegistry();
+const memory = new AgentMemoryStore();
+const computerLeases = new ComputerProviderLeases();
+let localVmLifecycleBusy = false;
+const backupService = new BackupService({ dataDir: DATA_DIR });
+let maintenanceMode = false;
 
 // ── peer-agent comms wiring ────────────────────────────────────────────
 // A shared secret guards the localhost-only /api/internal endpoints the
@@ -127,6 +184,46 @@ const agentsProxyPath = (() => {
 })();
 // in the packaged app process.execPath is Electron — run the proxy as node
 const AGENTS_NODE_FLAG = { ELECTRON_RUN_AS_NODE: "1" };
+const memoryProxyPath = (() => {
+  const ts = join(dirname(fileURLToPath(import.meta.url)), "drivers", "memory-proxy.ts");
+  return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
+})();
+
+interface MemoryCapability {
+  botId: string;
+  threadId: string;
+  runId?: string;
+  expiresAt: number;
+}
+const memoryCapabilities = new Map<string, MemoryCapability>();
+const memoryTokenByTurn = new Map<string, string>();
+
+function issueMemoryIntegration(bot: BotRecord, turnId: string, runId?: string) {
+  const token = randomBytes(32).toString("base64url");
+  const turnKey = threadEventKey(bot.threadId, turnId);
+  memoryCapabilities.set(token, { botId: bot.id, threadId: bot.threadId, runId, expiresAt: Date.now() + 4 * 60 * 60_000 });
+  memoryTokenByTurn.set(turnKey, token);
+  refreshSecretCatalog();
+  return {
+    token,
+    descriptor: {
+      command: process.execPath,
+      args: [memoryProxyPath],
+      env: {
+        ...AGENTS_NODE_FLAG,
+        CUMEA_HARNESS_URL: `http://127.0.0.1:${PORT}`,
+        CUMEA_MEMORY_CAPABILITY: token,
+      },
+    },
+  };
+}
+
+function revokeMemoryTurn(turnKey: string): void {
+  const token = memoryTokenByTurn.get(turnKey);
+  if (token) memoryCapabilities.delete(token);
+  memoryTokenByTurn.delete(turnKey);
+  refreshSecretCatalog();
+}
 
 function agentsIntegration(botId: string, depth: number) {
   return {
@@ -179,7 +276,7 @@ function askBotAndWait(targetBotId: string, message: string, depth: number, sour
       taskTitle: `Handoff from ${store.bot(sourceBotId ?? "")?.name ?? "another bot"}`,
       turnId,
     }).catch((err) =>
-      finish(`(couldn't start that bot: ${err instanceof Error ? err.message : String(err)})`),
+      finish(`(couldn't start that bot: ${secretCatalog.safeError(err)})`),
     );
   });
 }
@@ -187,15 +284,43 @@ function askBotAndWait(targetBotId: string, message: string, depth: number, sour
 // default selection for new bots: first available instance, claude preferred
 async function defaultSelection() {
   const described = await registry.describe();
-  const available = described.filter((d) => d.snapshot.state === "available");
-  const pick = available.find((d) => d.driverKind === "claudeAgent") ?? available[0] ?? described[0];
-  return { instanceId: pick?.instanceId ?? "claude", model: pick?.models.default || "claude-sonnet-5" };
+  const available = described.filter(
+    (d) => d.snapshot.state === "available" && d.snapshot.authenticated !== false,
+  );
+  const pick = available.find((d) => d.driverKind === "claudeAgent") ?? available[0];
+  return { instanceId: pick?.instanceId ?? "", model: pick?.models.default ?? "" };
 }
-let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
-const store = new Store(() => bootSelection);
+let bootSelection = { instanceId: "", model: "" };
+const secretCatalog = new SecretCatalog();
+secretCatalog.replace([...configSecretValues(cfg), COMMS_TOKEN, process.env.EXPO_ACCESS_TOKEN]);
+const store = new Store(() => bootSelection, (message) => secretCatalog.redactValue(message) as Message);
+function assertBotSkillAssignments(): void {
+  for (const bot of store.bots) {
+    for (const assignment of bot.skillAssignments ?? []) {
+      if (!skillRegistry.has(assignment.id, assignment.version, true)) throw new Error(`Agent ${bot.id} references an unavailable or disabled local skill version`);
+    }
+  }
+}
+assertBotSkillAssignments();
+const approvalRules = new ApprovalRuleStore(DATA_DIR);
 const workspace = new WorkspaceStore();
 const pairing = new PairingStore();
-const fileCapabilities = new FileCapabilityStore();
+const fileCapabilities = new FileCapabilityStore(Date.now, refreshSecretCatalog);
+let computerSecretValues: string[] = [];
+
+function refreshSecretCatalog(): void {
+  secretCatalog.replace([
+    ...configSecretValues(cfg),
+    ...mcpRegistry.secretValues(),
+    ...pairing.secretValues(),
+    ...fileCapabilities.secretValues(),
+    ...memoryCapabilities.keys(),
+    ...computerSecretValues,
+    COMMS_TOKEN,
+    process.env.EXPO_ACCESS_TOKEN,
+  ]);
+}
+refreshSecretCatalog();
 const botResourceGate = new BotResourceGate();
 const turnEventFence = new TurnEventFence();
 const providerFleetGate = new ProviderFleetGate();
@@ -207,7 +332,8 @@ store.seedIfEmpty();
 // from its interrupted provider session can no longer recreate its log.
 const bus = new EventBus(new EventLogWriter({
   isThreadActive: (threadId) => Boolean(store.botByThread(threadId)),
-}), (event) => turnEventFence.accepts(event.threadId, event.type, event.turnId));
+}), (event) => turnEventFence.accepts(event.threadId, event.type, event.turnId), (event) =>
+  secretCatalog.redactValue(event) as RuntimeEvent);
 bus.attach(registry.instances());
 
 // ── SSE fan-out to clients ─────────────────────────────────────────────
@@ -245,6 +371,10 @@ function visibleRemoteSsePayload(payload: unknown, allowDeletedBot: boolean): un
       if (typeof envelope.threadId !== "string") return null;
       return store.bots.some((bot) => bot.threadId === envelope.threadId && !bot.hidden) ? payload : null;
     }
+    case "thread": {
+      if (typeof envelope.threadId !== "string") return null;
+      return store.bots.some((bot) => bot.threadId === envelope.threadId && !bot.hidden) ? payload : null;
+    }
     case "runtime": {
       const event = envelope.event as { threadId?: unknown } | undefined;
       if (typeof event?.threadId !== "string") return null;
@@ -275,7 +405,7 @@ function broadcast(payload: unknown, options: BroadcastOptions = {}) {
       ? sanitizeRemoteSsePayload(visibleCandidate, { visibleBotIds: visibleRemoteBotIds() })
       : visibleCandidate;
     if (outgoing === null) continue;
-    const frame = `data: ${JSON.stringify(outgoing)}\n\n`;
+    const frame = `data: ${JSON.stringify(secretCatalog.redactValue(outgoing))}\n\n`;
     try {
       res.write(frame);
     } catch {
@@ -291,17 +421,30 @@ function publicAttachment(attachment: AttachmentRecord) {
 
 function publicWorkspace() {
   const snapshot = workspace.snapshot();
-  return {
+  const result = {
     sections: snapshot.sections,
     attachments: snapshot.attachments.map(publicAttachment),
-    tasks: snapshot.tasks,
+    tasks: snapshot.tasks.map((task) => ({
+      ...task,
+      verificationStatus: workspace.verificationStatus(task.id),
+    })),
     runs: snapshot.runs,
     routines: snapshot.routines,
   };
+  return secretCatalog.redactValue(result) as typeof result;
 }
 
 function publicRemoteWorkspace() {
   return publicMobileWorkspace(publicWorkspace(), visibleRemoteBotIds());
+}
+
+function publicRemoteRoutine(routineId: string): unknown | null {
+  const routines = publicRemoteWorkspace().routines;
+  if (!Array.isArray(routines)) return null;
+  return routines.find((value) => {
+    if (!value || typeof value !== "object") return false;
+    return (value as { id?: unknown }).id === routineId;
+  }) ?? null;
 }
 
 function broadcastWorkspace() {
@@ -313,12 +456,91 @@ function broadcastWorkspace() {
 // and every client view are projections of it.
 const toolMessageByItem = new Map<string, string>(); // threadId + itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // threadId + requestId -> messageId
+const memoryRevisionsByTurn = new Map<string, { botId: string; revisionIds: string[] }>();
 const activeRunByThread = new Map<string, string>();
 const activeProviderTurnByThread = new Map<string, { instanceId: string; turnId: string }>();
+const budgetDeadlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const budgetStops = new Set<string>();
 /** Serializes manual and automatic deletion for the same bot. */
 const deletingBotIds = new Set<string>();
 /** Threads whose current turn actually invoked a computer tool. */
 const usedComputerByThread = new Set<string>();
+
+function clearBudgetTimer(runId: string | undefined) {
+  if (!runId) return;
+  const timer = budgetDeadlineTimers.get(runId);
+  if (timer) clearTimeout(timer);
+  budgetDeadlineTimers.delete(runId);
+}
+
+function exhaustRunBudget(bot: BotRecord, runId: string, reason: TaskBudgetKey) {
+  if (budgetStops.has(runId) || activeRunByThread.get(bot.threadId) !== runId || !isCanonicalBotOperation(bot)) return;
+  if (!workspace.markBudgetExhausted(runId, reason)) return;
+  budgetStops.add(runId);
+  clearBudgetTimer(runId);
+  const providerTurn = activeProviderTurnByThread.get(bot.threadId);
+  activeRunByThread.delete(bot.threadId);
+  activeProviderTurnByThread.delete(bot.threadId);
+  turnEventFence.invalidate(bot.threadId);
+  stopScreenPoller(bot.id);
+  computerLeases.release("vm", bot.threadId);
+  clearThreadEventState(bot.threadId);
+  store.patchBot(bot.id, { busy: false, unread: true });
+  broadcastWorkspace();
+  broadcast({ kind: "bot", bot: store.bot(bot.id) });
+  const instanceId = providerTurn?.instanceId ?? bot.modelSelection.instanceId;
+  void registry.get(instanceId)?.adapter.interruptTurn(bot.threadId, providerTurn?.turnId)
+    .catch(() => {})
+    .finally(() => {
+      budgetStops.delete(runId);
+      scheduleNextQueuedTurn(bot.id);
+    });
+}
+
+function armBudgetDeadline(bot: BotRecord, runId: string) {
+  const task = workspace.task(workspace.run(runId)?.taskId ?? "");
+  const usage = workspace.run(runId)?.budgetUsage;
+  const duration = task?.budget?.durationMs;
+  if (!duration || !usage) return;
+  const activeElapsed = usage.activeSince === undefined ? 0 : Math.max(0, Date.now() - usage.activeSince);
+  const remaining = duration - (task?.budgetDurationUsedMs ?? 0) - activeElapsed;
+  if (remaining <= 0) return exhaustRunBudget(bot, runId, "durationMs");
+  const timer = setTimeout(() => exhaustRunBudget(bot, runId, "durationMs"), remaining);
+  timer.unref?.();
+  budgetDeadlineTimers.set(runId, timer);
+}
+
+function notifyPairedDevices(bot: BotRecord, kind: "completed" | "needs_attention", ok = true) {
+  if (!bot.notifications || bot.hidden) return;
+  const foregroundDevices = new Set(
+    [...sseClients.values()].flatMap((client) => client.surface === "remote" && client.deviceId ? [client.deviceId] : []),
+  );
+  const targets = pairing.pushTargets()
+    .filter((target) => !foregroundDevices.has(target.deviceId))
+    .map((target) => ({ deviceId: target.deviceId, token: target.token }));
+  if (!targets.length) return;
+  const accessToken = process.env.EXPO_ACCESS_TOKEN;
+  void sendExpoPush(targets, {
+    title: bot.name,
+    body: kind === "needs_attention"
+      ? "Needs your attention"
+      : ok ? "Finished working" : "Run finished with an error",
+    data: { kind, botId: bot.id },
+  }, { accessToken })
+    .then(({ staleTokens, receipts }) => {
+      staleTokens.forEach((token) => pairing.clearPushToken(token));
+      if (staleTokens.length) refreshSecretCatalog();
+      scheduleExpoPushReceiptCheck(receipts, (token) => {
+        pairing.clearPushToken(token);
+        refreshSecretCatalog();
+      }, { accessToken });
+    })
+    .catch(() => {
+      // Push is best-effort and must never affect the canonical task state.
+      // Do not log capability-bearing device tokens or response bodies.
+      console.warn("mobile push delivery failed");
+    });
+}
 
 /** Detached provider callbacks must prove both generation and canonical store
  * ownership. The object-identity check prevents an ABA-style replacement with
@@ -337,6 +559,8 @@ function clearThreadEventState(threadId: string) {
   const prefix = threadEventPrefix(threadId);
   for (const key of toolMessageByItem.keys()) if (key.startsWith(prefix)) toolMessageByItem.delete(key);
   for (const key of askMessageByRequest.keys()) if (key.startsWith(prefix)) askMessageByRequest.delete(key);
+  for (const key of memoryRevisionsByTurn.keys()) if (key.startsWith(prefix)) memoryRevisionsByTurn.delete(key);
+  for (const key of memoryTokenByTurn.keys()) if (key.startsWith(prefix)) revokeMemoryTurn(key);
   usedComputerByThread.delete(threadId);
 }
 
@@ -347,6 +571,7 @@ bus.subscribe((event: RuntimeEvent) => {
     !isCanonicalBotOperation(bot) ||
     !turnEventFence.accepts(event.threadId, event.type, event.turnId)
   ) return;
+  if (bot.computer === "cloud") boxIdleSleep.touch(bot.id);
   // Provider callbacks may outlive an interrupted/deleted session. Resolve
   // canonical ownership before exposing diagnostics to any local SSE client.
   broadcast({ kind: "runtime", event });
@@ -356,6 +581,20 @@ bus.subscribe((event: RuntimeEvent) => {
     broadcast({ kind: "message", threadId: event.threadId, message });
     return message;
   };
+  const checkpointAt = (phase: "session" | "tool" | "approval" | "provider") => {
+    const runId = activeRunByThread.get(event.threadId);
+    const run = runId ? workspace.run(runId) : null;
+    const checkpoint = run?.checkpoint;
+    const activeLeafId = store.activeLeaf(event.threadId);
+    if (!runId || !checkpoint || !activeLeafId) return;
+    workspace.updateCheckpoint(runId, {
+      phase,
+      activeLeafId,
+      instanceId: checkpoint.provider.instanceId,
+      model: checkpoint.provider.model,
+      cursor: bot.resumeCursors[checkpoint.provider.instanceId],
+    });
+  };
 
   try {
     switch (event.type) {
@@ -363,6 +602,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (event.sessionId && event.providerInstanceId) {
         store.setResumeCursor(bot.id, event.providerInstanceId, event.sessionId);
       }
+      checkpointAt("session");
       break;
     case "item.completed":
       if (event.itemType === "assistant_text") {
@@ -385,6 +625,7 @@ bus.subscribe((event: RuntimeEvent) => {
         const runId = activeRunByThread.get(event.threadId);
         if (runId) {
           workspace.completeStep(runId, event.itemId, event.ok ? "completed" : "failed");
+          checkpointAt("tool");
           broadcastWorkspace();
         }
         // the bot just finished acting — refresh its screen preview now
@@ -398,53 +639,140 @@ bus.subscribe((event: RuntimeEvent) => {
         if ((event.title ?? "").startsWith("mcp__computer__")) usedComputerByThread.add(event.threadId);
         const runId = activeRunByThread.get(event.threadId);
         if (runId) {
-          workspace.addStep(runId, { kind: "tool", title: event.title ?? "Tool", itemId: event.itemId });
+          const step = workspace.addStep(runId, { kind: "tool", title: event.title ?? "Tool", itemId: event.itemId });
+          const title = event.title ?? "Tool";
+          const exhaustedReasons = [
+            workspace.chargeBudget(runId, "toolCalls"),
+            isComputerAction(title) ? workspace.chargeBudget(runId, "computerActions") : null,
+            isDelegation(title) ? workspace.chargeBudget(runId, "delegations") : null,
+          ];
+          const exhausted = exhaustedReasons.find((reason): reason is NonNullable<typeof reason> => reason !== null) ?? null;
+          const descriptor = classifyOpaquePotentialEffect(event.title);
+          if (descriptor) {
+            try {
+              workspace.observeOpaqueExternalEffect(runId, {
+                descriptor,
+                itemId: event.itemId,
+                stepId: step?.id,
+              });
+            } catch {
+              // The provider already crossed this opaque boundary. Failure to
+              // persist its observation must not manufacture a retry signal.
+              console.warn("could not persist opaque external-effect observation");
+            }
+          }
+          checkpointAt("tool");
           broadcastWorkspace();
+          if (exhausted) exhaustRunBudget(bot, runId, exhausted);
         }
       }
       break;
+    case "thread.token-usage.updated": {
+      const runId = activeRunByThread.get(event.threadId);
+      const run = runId ? workspace.run(runId) : null;
+      if (runId && run && (!event.turnId || !run.turnId || event.turnId === run.turnId)) {
+        const exhausted = workspace.observeTokenUsage(runId, event.providerInstanceId, run.checkpoint?.provider.model, event.input, event.output);
+        broadcastWorkspace();
+        if (exhausted) exhaustRunBudget(bot, runId, exhausted);
+      }
+      break;
+    }
     case "request.opened": {
       const permission = event.requestType === "permission";
       const runId = activeRunByThread.get(event.threadId);
-      const policy = permission ? bot.approvalPolicy ?? "ask" : "ask";
-      if (permission && policy !== "ask") {
-        const behavior = policy === "allow" ? "allow" : "deny";
-        pushMessage({
+      const scope = permission ? deriveApprovalScope(event.tool, event.summary) : null;
+      const instance = registry.get(bot.modelSelection.instanceId);
+      // Never write an audit row that claims the request was settled when the
+      // owning provider cannot actually receive the decision.
+      const automated = scope && instance ? approvalRules.decide(bot.id, scope) : null;
+      if (permission && automated) {
+        const behavior = automated.behavior;
+        const boundary = approvalBoundary(automated.scope);
+        const applying = pushMessage({
           role: "bot",
           kind: "options",
           card: {
-            title: policy === "allow" ? "Allowed by bot policy" : "Denied by bot policy",
-            subtitle: event.summary,
-            options: ["Always allow", "Allow once", "Never"],
+            title: behavior === "allow" ? "Applying saved allow rule" : "Applying saved deny rule",
+            subtitle: `Scoped to ${boundary}`,
+            options: [],
             requestId: event.requestId,
             requestType: event.requestType,
             tool: event.tool,
-            answered: behavior,
             dismissed: true,
           },
         });
+        checkpointAt("approval");
         if (runId) {
           workspace.addStep(runId, {
             kind: "approval",
-            title: event.summary,
+            title: `Applying saved ${behavior} rule (${boundary})`,
             itemId: event.requestId,
-            status: behavior === "allow" ? "completed" : "denied",
+            status: "running",
           });
           broadcastWorkspace();
         }
-        const instance = registry.get(bot.modelSelection.instanceId);
-        if (instance) {
-          const approvalOperation = botResourceGate.beginDetachedOperation(bot.id);
-          void instance.adapter.respondToRequest(event.threadId, event.requestId ?? "", { behavior })
-            .catch((error) => {
+        const approvalOperation = botResourceGate.beginDetachedOperation(bot.id);
+        void applySavedRuleDecision(
+          () => instance!.adapter.respondToRequest(event.threadId, event.requestId ?? "", { behavior }),
+          {
+            accepted: () => {
+              if (!isCanonicalBotOperation(bot, approvalOperation)) return;
+              try {
+                const current = store.messagesFor(event.threadId).find((message) => message.id === applying.id);
+                if (current?.card) {
+                  const patched = store.patchMessage(event.threadId, applying.id, {
+                    card: {
+                      ...current.card,
+                      title: behavior === "allow" ? "Allowed by saved rule" : "Denied by saved rule",
+                      answered: behavior,
+                      dismissed: true,
+                    },
+                  });
+                  if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
+                }
+                if (runId) {
+                  workspace.completeStep(runId, event.requestId, behavior === "allow" ? "completed" : "denied");
+                  broadcastWorkspace();
+                }
+              } catch {
+                // Provider settlement is authoritative even if the local audit
+                // cannot be updated. Never reopen and risk replaying it.
+              }
+            },
+            rejected: () => {
               // A provider rejection can arrive after DELETE committed and the
               // transcript was removed. Never let that callback recreate it.
               if (!isCanonicalBotOperation(bot, approvalOperation)) return;
-              const message = error instanceof Error ? error.message : String(error);
-              pushMessage({ role: "bot", kind: "activity", tool: { name: `approval policy failed: ${message.slice(0, 120)}`, ok: false } });
-            })
-            .finally(approvalOperation.release);
-        }
+              if (event.requestId) askMessageByRequest.set(threadEventKey(event.threadId, event.requestId), applying.id);
+              try {
+                const current = store.messagesFor(event.threadId).find((message) => message.id === applying.id);
+                if (current?.card) {
+                  const patched = store.patchMessage(event.threadId, applying.id, {
+                    card: {
+                      ...current.card,
+                      title: "Approval needed",
+                      subtitle: event.summary,
+                      options: ["Always allow", "Allow once", "Never"],
+                      dismissed: false,
+                    },
+                  });
+                  if (patched) broadcast({ kind: "message.patch", threadId: event.threadId, message: patched });
+                }
+                if (runId) {
+                  workspace.completeStep(runId, event.requestId, "failed");
+                  workspace.pauseBudgetDuration(runId);
+                  clearBudgetTimer(runId);
+                  workspace.markNeedsAttention(runId, event.summary, event.requestId);
+                  broadcastWorkspace();
+                }
+                notifyPairedDevices(bot, "needs_attention");
+              } catch {
+                // The request remains unsettled at the provider. Avoid any
+                // second automated response even if local persistence failed.
+              }
+            },
+          },
+        ).finally(approvalOperation.release);
         break;
       }
       const message = pushMessage({
@@ -459,11 +787,17 @@ bus.subscribe((event: RuntimeEvent) => {
           tool: event.tool,
         },
       });
+      checkpointAt("approval");
+      if (runId) {
+        workspace.pauseBudgetDuration(runId);
+        clearBudgetTimer(runId);
+      }
       if (event.requestId) askMessageByRequest.set(threadEventKey(event.threadId, event.requestId), message.id);
       if (runId) {
         workspace.markNeedsAttention(runId, event.summary, event.requestId);
         broadcastWorkspace();
       }
+      notifyPairedDevices(bot, "needs_attention");
       break;
     }
     case "request.resolved": {
@@ -482,11 +816,13 @@ bus.subscribe((event: RuntimeEvent) => {
       const runId = activeRunByThread.get(event.threadId);
       if (runId) {
         workspace.resumeRun(runId, event.requestId, event.behavior === "deny");
+        if (event.behavior !== "deny" && workspace.resumeBudgetDuration(runId)) armBudgetDeadline(bot, runId);
         broadcastWorkspace();
       }
       break;
     }
     case "runtime.error": {
+      checkpointAt("provider");
       pushMessage({ role: "bot", kind: "activity", tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false } });
       const runId = activeRunByThread.get(event.threadId);
       if (runId) {
@@ -496,6 +832,20 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     }
     case "turn.completed": {
+      checkpointAt("provider");
+      computerLeases.release("vm", event.threadId);
+      const memoryKey = event.turnId ? threadEventKey(event.threadId, event.turnId) : null;
+      const memoryUse = memoryKey ? memoryRevisionsByTurn.get(memoryKey) : null;
+      if (memoryUse && event.ok) {
+        try {
+          memory.markUsedForAnswer(memoryUse.botId, memoryUse.revisionIds, event.turnId!);
+        } catch {
+          // Audit metadata is useful but must never prevent the canonical turn
+          // from settling. Content, paths and errors remain out of logs.
+          console.warn("could not update memory usage metadata");
+        }
+      }
+      if (memoryKey) memoryRevisionsByTurn.delete(memoryKey);
       // the last live frame becomes a settled inline screen message —
       // the screenshot-in-chat moment
       const frame = stopScreenPoller(bot.id);
@@ -506,15 +856,26 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       const runId = activeRunByThread.get(event.threadId);
       if (runId) {
+        clearBudgetTimer(runId);
         workspace.completeRun(runId, event.ok, event.stopReason || (event.ok ? undefined : "Provider run failed"));
         activeRunByThread.delete(event.threadId);
         broadcastWorkspace();
       }
-      store.patchBot(bot.id, { busy: false, unread: true });
+      // A rewound provider continuation becomes trustworthy only after the
+      // replacement branch completes successfully. Spawn/handshake acceptance
+      // alone is not enough: a later provider failure must keep replay mode on
+      // for the next attempt.
+      store.patchBot(bot.id, {
+        busy: false,
+        unread: true,
+        ...(event.ok && bot.rewound ? { rewound: false } : {}),
+      });
+      notifyPairedDevices(bot, "completed", event.ok);
       const providerTurn = activeProviderTurnByThread.get(event.threadId);
       if (providerTurn?.turnId === event.turnId) activeProviderTurnByThread.delete(event.threadId);
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
       clearThreadEventState(event.threadId);
+      scheduleNextQueuedTurn(bot.id);
       break;
     }
     }
@@ -532,8 +893,11 @@ const screenPollers = new Map<
   { timer: ReturnType<typeof setInterval>; capture: () => Promise<void>; last: Frame | null }
 >();
 
-function startScreenPoller(botId: string) {
-  if (screenPollers.has(botId) || !box.boxConfigured(cfg)) return;
+function startScreenPoller(
+  botId: string,
+  captureFrame: (() => Promise<Frame>) | null = null,
+) {
+  if (screenPollers.has(botId) || (!captureFrame && !box.boxConfigured(cfg))) return;
   let inFlight = false;
   const capture = async () => {
     if (inFlight) return;
@@ -541,6 +905,7 @@ function startScreenPoller(botId: string) {
     try {
       await commitCaptureIfCurrent(
         async () => {
+          if (captureFrame) return await captureFrame();
           const { png, format } = await box.screenshotBox(cfg, botId);
           return { png, mime: format === "jpeg" ? "image/jpeg" : "image/png", capturedAt: Date.now() } satisfies Frame;
         },
@@ -578,6 +943,44 @@ function stopScreenPoller(botId: string): Frame | null {
   return entry.last;
 }
 
+function boxAutoSleepMs(): number | null {
+  if (!box.boxConfigured(cfg)) return null;
+  const configured = cfg.box?.autoSleepMinutes;
+  return configured === false ? null : (configured ?? 10) * 60_000;
+}
+
+/** Every condition is re-read at the deadline; durable task/routine state is
+ * authoritative, while transient maps close the provider and approval races. */
+function cloudIdleSleepBlocker(botId: string, ignoreResourceLease = false): IdleSleepBlocker | null {
+  const bot = store.bot(botId);
+  if (!bot) return "bot-missing";
+  if (deletingBotIds.has(botId) || botResourceGate.isDeleting(botId)) return "deleting";
+  if (bot.computer !== "cloud") return "not-cloud";
+  if (bot.busy || activeRunByThread.has(bot.threadId) || activeProviderTurnByThread.has(bot.threadId)) return "turn-active";
+  const snapshot = workspace.snapshot();
+  const botTasks = snapshot.tasks.filter((task) => task.botId === botId);
+  if (botTasks.some((task) => task.status === "needs_attention") ||
+      [...askMessageByRequest.keys()].some((key) => key.startsWith(threadEventPrefix(bot.threadId)))) return "needs-attention";
+  if (botTasks.some((task) => task.status === "queued" || task.status === "running") || queuedTurnTimers.has(botId)) return "queue-active";
+  if (snapshot.routines.some((routine) => routine.botId === botId && (routine.lastStatus === "queued" || routine.lastStatus === "running"))) return "routine-active";
+  if (screenPollers.has(botId)) return "screen-active";
+  if (!ignoreResourceLease && botResourceGate.hasActive(botId)) return "resource-active";
+  return null;
+}
+
+const boxIdleSleep = new BoxIdleSleepManager({
+  idleMs: boxAutoSleepMs,
+  blocker: (botId) => cloudIdleSleepBlocker(botId),
+  sleep: async (botId, isCurrent) => botResourceGate.run(botId, async () => {
+    if (!isCurrent() || cloudIdleSleepBlocker(botId, true)) return false;
+    await box.sleepBox(cfg, botId);
+    return true;
+  }),
+});
+// A restart has no trustworthy activity timestamp. Give existing explicit
+// cloud selections a complete idle window instead of stopping immediately.
+boxIdleSleep.reconcile(store.bots.filter((bot) => bot.computer === "cloud").map((bot) => bot.id));
+
 // Local computer-use contract written by Electron main on startup
 // (~/Library/Application Support/Cumea/cua-connection.json). Read
 // fresh each turn — Electron may restart or permissions may change.
@@ -595,11 +998,16 @@ function readCuaConnection(): { command: string; args: string[]; env: Record<str
     try {
       const conn = JSON.parse(readFileSync(path, "utf8"));
       if (!conn || conn.mode === "unavailable" || !conn.mcpCommand) continue;
-      return { command: conn.mcpCommand, args: conn.mcpArgs ?? ["mcp"], env: conn.mcpEnv ?? {} };
+      const environment = conn.mcpEnv ?? {};
+      computerSecretValues = sensitiveEnvironmentValues(environment);
+      refreshSecretCatalog();
+      return { command: conn.mcpCommand, args: conn.mcpArgs ?? ["mcp"], env: environment };
     } catch {
       /* try the next location */
     }
   }
+  computerSecretValues = [];
+  refreshSecretCatalog();
   return null;
 }
 
@@ -609,15 +1017,27 @@ interface TurnOptions {
   source?: TaskSource;
   sourceBotId?: string;
   routineId?: string;
+  scheduledFor?: number;
   taskId?: string;
   taskTitle?: string;
   attachments?: AttachmentRecord[];
   track?: boolean;
   /** Internal correlation id used by peer-agent handoffs. */
   turnId?: string;
+  /** A message-edit fork has already persisted and broadcast this user row. */
+  userMessage?: Message;
+  budget?: TaskBudget;
+  /** Explicit checkpoint resume reuses canonical task/message ownership and
+   * creates one linked run attempt. */
+  resumeFrom?: { runId: string; checkpointId: string; forceFreshSession: boolean };
+  /** Run created atomically with checkpoint consumption by the resume route. */
+  precreatedRunId?: string;
 }
 
 async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
+  text = secretCatalog.redactText(text);
+  if (opts.track === false && opts.budget !== undefined) throw Object.assign(new Error("untracked turns cannot have a task budget"), { status: 400 });
+  if (maintenanceMode) throw Object.assign(new Error("Cumea is in maintenance mode — retry in a moment"), { status: 409 });
   const providerFleet = providerFleetGate.snapshot();
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
@@ -647,43 +1067,89 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
           source: opts.source,
           sourceBotId: opts.sourceBotId,
           routineId: opts.routineId,
+          scheduledFor: opts.scheduledFor,
           attachmentIds: attachments.map((attachment) => attachment.id),
+          budget: opts.budget,
         });
   if (opts.track !== false && !task) throw Object.assign(new Error("no such task"), { status: 404 });
   if (task && task.botId !== bot.id) {
     throw Object.assign(new Error("task belongs to another bot"), { status: 409 });
   }
+  const retryingFailedTask = Boolean(opts.taskId && task?.status === "failed");
+  const precreatedResume = opts.precreatedRunId ? workspace.run(opts.precreatedRunId) : null;
+  if (opts.precreatedRunId && !precreatedResume) {
+    throw Object.assign(new Error("resume attempt is unavailable"), { status: 409 });
+  }
+  const resumingInterruptedTask = Boolean(
+    opts.resumeFrom && opts.taskId &&
+    (task?.status === "interrupted" ||
+      (task?.status === "running" && precreatedResume?.taskId === task.id && precreatedResume.status === "running")),
+  );
+  if (task && task.status !== "queued" && !retryingFailedTask && !resumingInterruptedTask) {
+    throw Object.assign(new Error("task is no longer queued"), { status: 409 });
+  }
 
-  const userMessage = store.appendMessage(bot.threadId, {
+  const userMessage = opts.userMessage ?? store.appendMessage(bot.threadId, {
     role: "user",
     kind: "text",
     text,
     ...(attachments.length ? { attachments: attachments.map(publicAttachment) } : {}),
   });
-  broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
+  if (!opts.userMessage) broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
+  if (task && !task.messageId && task.status === "queued") workspace.bindTaskMessage(task.id, userMessage.id);
 
   let runId: string | undefined;
   if (task) {
-    const run = workspace.createRun(task.id);
+    const run = precreatedResume ?? workspace.createRun(task.id, opts.resumeFrom ? {
+        resumeOfRunId: opts.resumeFrom.runId,
+        resumedFromCheckpointId: opts.resumeFrom.checkpointId,
+        omitAttachmentArtifacts: true,
+      } : {});
+    if (
+      opts.precreatedRunId &&
+      (run.id !== opts.precreatedRunId || run.botId !== bot.id || run.resumeOfRunId !== opts.resumeFrom?.runId ||
+        run.resumedFromCheckpointId !== opts.resumeFrom?.checkpointId)
+    ) throw Object.assign(new Error("resume attempt ownership changed"), { status: 409 });
     runId = run.id;
+    armBudgetDeadline(bot, run.id);
     broadcastWorkspace();
   }
 
   const instance = registry.get(selection.instanceId);
   if (!instance) {
-    const message = `provider instance "${selection.instanceId}" is unavailable — pick another model in settings`;
-    if (runId) workspace.completeRun(runId, false, message);
+    const message = selection.instanceId
+      ? `provider instance "${selection.instanceId}" is unavailable — choose a ready engine`
+      : "provider unavailable — install or sign in to an AI engine, then check again";
+    if (runId) {
+      clearBudgetTimer(runId);
+      workspace.completeRun(runId, false, message);
+    }
     broadcastWorkspace();
     throw Object.assign(new Error(message), { status: 409 });
+  }
+  if (runId) {
+    workspace.initializeCheckpoint(runId, {
+      activeLeafId: userMessage.id,
+      instanceId: selection.instanceId,
+      model: selection.model,
+      cursor: opts.resumeFrom?.forceFreshSession ? undefined : bot.resumeCursors[selection.instanceId],
+    });
   }
   if (runId) activeRunByThread.set(bot.threadId, runId);
 
   // transcript for API-backed drivers: settled text turns only
-  const transcript = store
-    .messagesFor(bot.threadId)
-    .filter((m) => m.kind === "text" && m.text && m.id !== userMessage.id)
-    .slice(-40)
-    .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! }));
+  const canonicalTranscript = store
+    .activePath(bot.threadId)
+    .filter((m) =>
+      m.kind === "text" &&
+      m.text &&
+      m.delivery !== "queued" &&
+      m.delivery !== "cancelled" &&
+      m.delivery !== "failed" &&
+      (opts.resumeFrom ? true : m.id !== userMessage.id) &&
+      (!bot.context || m.at >= bot.context.startedAt),
+    )
+    .map((m) => ({ id: m.id, role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: secretCatalog.redactText(m.text!), at: m.at }));
 
   const persona = [
     `You are ${bot.name}, a personal bot in Cumea.`,
@@ -692,11 +1158,35 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
   ]
     .filter(Boolean)
     .join(" ");
-  const providerText = attachments.length
+  const memoryContext = memory.context(bot.id, text);
+  const skillContext = skillRegistry.systemPrompt(bot.skillAssignments);
+  const rewound = bot.rewound === true;
+  const replaySurvivingPath = (rewound && instance.driverKind !== "grok") || Boolean(opts.resumeFrom?.forceFreshSession);
+  const nativeCursorResume = Boolean(opts.resumeFrom && !opts.resumeFrom.forceFreshSession);
+  const shouldReplayTranscript = !nativeCursorResume && shouldCompactContext(instance.adapter.capabilities, replaySurvivingPath);
+  const fallbackReplay = replaySurvivingPath && instance.adapter.capabilities.transcriptReplay !== true;
+  const compacted = shouldReplayTranscript ? compactReplayContext(canonicalTranscript, fallbackReplay ? { maxBytes: 8 * 1024 } : {}) : null;
+  const replayTranscript = (compacted?.messages ?? []).map(({ role, text: replayText }) => ({ role, text: replayText }));
+  const continuation = opts.resumeFrom ? checkpointContinuationInput({
+    survivingTranscript: replayTranscript,
+    attachments,
+    useProviderCursor: !opts.resumeFrom.forceFreshSession,
+  }) : null;
+  const providerText = opts.resumeFrom
+    ? continuation!.text
+    : attachments.length
     ? `${text}\n\nAttached files available on this computer:\n${attachments
         .map((attachment) => `- ${attachment.name} (${attachment.mime}, ${attachment.size} bytes): ${attachment.storedPath}`)
         .join("\n")}`
     : text;
+  const dispatchText = providerText;
+  const replaySystemMetadata = replaySurvivingPath && compacted && instance.adapter.capabilities.transcriptReplay !== true
+    ? renderReplayMetadata(compacted.messages, compacted.stats.omittedMessages)
+    : "";
+  if (runId && compacted) {
+    const submittedBytes = fallbackReplay ? Buffer.byteLength(replaySystemMetadata, "utf8") : compacted.stats.submittedBytes;
+    workspace.recordCompaction(runId, { ...compacted.stats, submittedBytes, estimatedSubmittedTokens: Math.ceil(submittedBytes / 4) });
+  }
 
   // busy flips immediately so the composer locks; the dispatch itself runs
   // in the background — box provisioning can take ~90s and must never
@@ -715,6 +1205,8 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
   let provisionedBoxId: string | undefined;
   let lateProvisionCleanupAttempted = false;
   let providerTurnAccepted = false;
+  let vmLeaseHeld = false;
+  let turnComputer: "cloud" | "vm" | "local" | null = null;
   const cleanupLateProvision = async () => {
     if (
       !cloudProvisionMayExist ||
@@ -725,7 +1217,7 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
     if (provisionedBoxId) {
       const result = await box.archiveBoxByIdForDeletion(cfg, provisionedBoxId);
       if (result.outcome === "warning") {
-        console.warn(`cloud computer cleanup warning during late provisioning for bot ${bot.id}: ${result.warning}`);
+        console.warn("cloud computer cleanup warning during late provisioning");
       }
     } else await archiveBotComputerForDeletion(bot.id, "late provisioning");
   };
@@ -733,11 +1225,39 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
   void (async () => {
     try {
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
+      if (instance.adapter.capabilities.customMcp === true && bot.mcpServerIds?.length) {
+        integrations.mcpServers = mcpRegistry.resolve(bot.mcpServerIds);
+      }
+      if (bot.memoryWriteEnabled === true && instance.adapter.capabilities.memoryMcp === true) {
+        integrations.memory = issueMemoryIntegration(bot, eventTurnId, runId).descriptor;
+      }
       if (bot.appsEnabled !== false && instance.adapter.capabilities.composioMcp === true && cfg.composio?.key) {
         integrations.composio = { key: cfg.composio.key, url: cfg.composio.url };
       }
-      const wants = bot.computer; // 'cloud' | 'local' | 'off' | undefined(auto)
-      if (instance.adapter.capabilities.cloudComputerMcp === true && wants !== "off" && wants !== "local" && box.boxConfigured(cfg)) {
+      const wants = bot.computer; // explicit destination, or undefined (auto)
+      if (wants === "vm") {
+        if (!computerProviderSupported("vm", instance.adapter.capabilities) || instance.driverKind === "boxAgent") {
+          throw new Error("this model engine cannot use the Local VM — choose Claude or an ACP engine, or select another computer destination");
+        }
+        const status = await localVmStatus();
+        if (!isCurrentTurn()) return;
+        if (!status.ready || !status.runtime) {
+          throw new Error(`${status.problem ?? "the Local VM is not ready"} (Cumea Settings → Integrations → Local VM)`);
+        }
+        if (!computerLeases.acquire("vm", bot.threadId)) {
+          throw new Error("the shared Local VM is already being used by another agent — wait for that turn to finish");
+        }
+        vmLeaseHeld = true;
+        integrations.localComputer = localVmMcp(status.runtime);
+        turnComputer = "vm";
+      }
+      if (wants === "cloud" && !computerProviderSupported("cloud", instance.adapter.capabilities)) {
+        throw new Error("this model engine cannot use a cloud computer — choose another engine or computer destination");
+      }
+      if (wants === "local" && !computerProviderSupported("local", instance.adapter.capabilities)) {
+        throw new Error("this model engine cannot control this computer — choose Claude or an ACP engine, or select another destination");
+      }
+      if (instance.adapter.capabilities.cloudComputerMcp === true && wants !== "off" && wants !== "local" && wants !== "vm" && box.boxConfigured(cfg)) {
         let b = await box.findBox(cfg, bot.id).catch(() => null);
         if (!isCurrentTurn()) return;
         // the Computer driver runs ON the box — provision it on first use
@@ -758,14 +1278,23 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
           b = await box.findBox(cfg, bot.id).catch(() => null);
           if (!isCurrentTurn()) return;
         }
-        if (b) integrations.computer = { boxId: b.id, token: cfg.box!.token! };
+        if (b) {
+          integrations.computer = { boxId: b.id, token: cfg.box!.token! };
+          turnComputer = "cloud";
+          if (bot.computer === "cloud") boxIdleSleep.touch(bot.id);
+        }
       }
       // local computer (this Mac) via the Electron-hosted cua-driver: the
       // Electron main process owns the daemon (TCC attribution) and writes
       // its spawn contract to cua-connection.json; the harness only reads it
-      if (instance.adapter.capabilities.localComputerMcp === true && !integrations.computer && wants !== "off" && wants !== "cloud") {
+      if (instance.adapter.capabilities.localComputerMcp === true && !integrations.computer && !integrations.localComputer && wants !== "off" && wants !== "cloud" && wants !== "vm") {
         const cua = readCuaConnection();
-        if (cua) integrations.localComputer = cua;
+        if (cua) {
+          integrations.localComputer = cua;
+          turnComputer = "local";
+        } else if (wants === "local") {
+          throw new Error("Cua Driver is not ready for this computer — check permissions and restart Cumea");
+        }
       }
       // peer-agent comms: give a user-initiated turn the list_bots/ask_bot
       // tools. A comms-invoked turn (depth ≥ cap) gets none — hard recursion
@@ -787,7 +1316,7 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
       // itself, so the harness stays the single owner of turns/permissions
       const tagged = integrations.agents
         ? mentionedBots(
-            providerText,
+            text,
             store.bots.filter((b) => b.id !== bot.id),
           )
         : [];
@@ -796,29 +1325,52 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
       // the generation before its first await, so provisioning that resumes
       // late can never start a new turn for a removed bot.
       if (!isCurrentTurn()) return;
+      if (runId && workspace.checkDurationBudget(runId)) {
+        exhaustRunBudget(bot, runId, "durationMs");
+        return;
+      }
       if (!eventAdmission.markDispatching()) return;
+      if (memoryContext.revisionIds.length) {
+        memoryRevisionsByTurn.set(threadEventKey(bot.threadId, eventTurnId), {
+          botId: bot.id,
+          revisionIds: memoryContext.revisionIds,
+        });
+      }
       activeProviderTurnByThread.set(bot.threadId, { instanceId: selection.instanceId, turnId: eventTurnId });
-      const started = await instance.adapter.sendTurn({
+      const started = await instance.adapter.sendTurn(secretCatalog.redactProviderInput({
         threadId: bot.threadId,
         turnId: eventTurnId,
-        text: providerText,
+        text: dispatchText,
         model: selection.model,
-        resumeCursor: bot.resumeCursors[selection.instanceId],
-        transcript,
+        resumeCursor: rewound || opts.resumeFrom?.forceFreshSession ? undefined : bot.resumeCursors[selection.instanceId],
+        transcript: shouldReplayTranscript && instance.adapter.capabilities.transcriptReplay === true
+          ? (continuation?.transcript ?? replayTranscript)
+          : undefined,
         cwd: localWorkspace,
         system:
-          persona +
+          persona + replaySystemMetadata + skillContext +
+          memoryContext.text +
+          " Keep private reasoning and routine tool chatter out of user-facing messages. For long work, send brief progress updates only at meaningful milestones so the user can steer or stop you without reading an execution log." +
           " Put user-facing files you create locally in the current working directory and cite them as ./filename.ext so Cumea can open them safely. When you create a file through the cloud computer, put it under /workspace and cite its absolute /workspace/path. Never cite a private configuration or credential path as a deliverable." +
           (integrations.computer && instance.driverKind !== "boxAgent"
             ? " You have your own cloud computer — use the computer tools (screenshot, computer_exec, open_url) whenever browsing or acting on a desktop helps."
-            : integrations.localComputer
-              ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
+            : integrations.localComputer && turnComputer === "vm"
+              ? " You can act inside an isolated Local VM through the computer tools. Read its desktop state first, prefer accessibility actions over raw coordinates, and keep generated files inside the VM unless the user asks to export them."
+              : integrations.localComputer
+                ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
               : "") +
           (integrations.agents
-            ? " You can work with the user's other bots through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply."
+            ? " You can work with the user's other bots through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply. Delegate only when a specialist materially helps, ask each peer at most once for this task, and do not ask a peer to recruit another peer."
             : "") +
+          (bot.coordinator ? coordinatorSystemPrompt(bot.id, store.bots, Boolean(integrations.agents)) : "") +
           (integrations.composio
             ? " The user's connected apps are available through the composio tools. Search for the right tool and use it before telling the user that a service is unavailable."
+            : "") +
+          (integrations.mcpServers?.length
+            ? " This agent has explicitly assigned local MCP tools. Use them only when relevant; requests remain subject to the agent's approval policy."
+            : "") +
+          (integrations.memory
+            ? " Durable memory tools are available. Search before claiming to remember a prior fact. Write only when the user explicitly requests memory or clearly confirms a durable preference; never store credentials or transient task chatter."
             : "") +
           (tagged.length
             ? ` The user tagged ${tagged
@@ -826,7 +1378,7 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
                 .join(" and ")} in their message — bring them in with ask_bot and fold their reply into your answer.`
             : ""),
         integrations,
-      });
+      }));
       if (!isCurrentBot() || !providerFleet.isCurrent()) {
         // DELETE may have raced with the provider's own asynchronous session
         // setup after its first interrupt saw no live turn. Stop it again once
@@ -849,10 +1401,27 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
         : store.bot(bot.id)?.busy === true;
       if (runId && turnStillActive) {
         workspace.bindTurn(runId, started.turnId);
+        workspace.updateCheckpoint(runId, {
+          phase: "turn_accepted",
+          activeLeafId: userMessage.id,
+          instanceId: selection.instanceId,
+          model: selection.model,
+          cursor: opts.resumeFrom?.forceFreshSession ? undefined : store.bot(bot.id)?.resumeCursors[selection.instanceId],
+        });
         broadcastWorkspace();
       }
       if (integrations.computer && turnStillActive) startScreenPoller(bot.id);
+      if (turnComputer === "vm" && turnStillActive) {
+        startScreenPoller(bot.id, async () => {
+          const image = await localVmScreenshot();
+          const matched = /^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+/=]+)$/.exec(image);
+          if (!matched) throw new Error("invalid Local VM screenshot");
+          return { png: matched[2], mime: matched[1], capturedAt: Date.now() };
+        });
+      }
     } catch (e) {
+      memoryRevisionsByTurn.delete(threadEventKey(bot.threadId, eventTurnId));
+      revokeMemoryTurn(threadEventKey(bot.threadId, eventTurnId));
       const providerTurn = activeProviderTurnByThread.get(bot.threadId);
       if (providerTurn?.turnId === eventTurnId) activeProviderTurnByThread.delete(bot.threadId);
       if (!isCurrentBot()) {
@@ -862,7 +1431,7 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
       if (!isCurrentTurn()) {
         return;
       }
-      const message = e instanceof Error ? e.message : String(e);
+      const message = secretCatalog.safeError(e, "Provider dispatch failed.");
       const failure = store.appendMessage(bot.threadId, {
         role: "bot",
         kind: "activity",
@@ -870,30 +1439,115 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
       });
       broadcast({ kind: "message", threadId: bot.threadId, message: failure });
       if (runId) {
+        clearBudgetTimer(runId);
         workspace.completeRun(runId, false, message);
         activeRunByThread.delete(bot.threadId);
         broadcastWorkspace();
       }
       store.patchBot(bot.id, { busy: false });
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
+      scheduleNextQueuedTurn(bot.id);
     } finally {
       // A normally running turn owns the fence until turn.completed. Failed or
       // cancelled dispatches must close it here so late callbacks stay stale.
       if (!providerTurnAccepted || !eventAdmission.isCurrent() || !isCurrentBot()) eventAdmission.invalidate();
+      if (vmLeaseHeld && !providerTurnAccepted) computerLeases.release("vm", bot.threadId);
+      if (!providerTurnAccepted) revokeMemoryTurn(threadEventKey(bot.threadId, eventTurnId));
       turnOperation.release();
     }
   })();
 }
 
+const queuedTurnTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function scheduleNextQueuedTurn(botId: string) {
+  if (maintenanceMode) return;
+  if (queuedTurnTimers.has(botId)) return;
+  const timer = setTimeout(() => {
+    queuedTurnTimers.delete(botId);
+    void dispatchNextQueuedTurn(botId);
+  }, 0);
+  timer.unref?.();
+  queuedTurnTimers.set(botId, timer);
+}
+
+async function dispatchNextQueuedTurn(botId: string) {
+  if (maintenanceMode) return;
+  const bot = store.bot(botId);
+  if (!bot || bot.busy || deletingBotIds.has(botId) || botResourceGate.isDeleting(botId)) return;
+  const task = workspace.queuedMessageTasks(botId)[0];
+  if (!task) return;
+  const message = task.messageId
+    ? store.messagesFor(bot.threadId).find((candidate) => candidate.id === task.messageId)
+    : undefined;
+  if (!message || message.role !== "user" || message.kind !== "text") {
+    workspace.settleQueuedTask(task.id, "failed");
+    broadcastWorkspace();
+    scheduleNextQueuedTurn(botId);
+    return;
+  }
+  const attachments = workspace.attachmentsFor(botId, task.attachmentIds);
+  const dispatched = store.patchMessage(bot.threadId, message.id, {
+    parentId: store.activeLeaf(bot.threadId),
+    delivery: "sent",
+  });
+  if (dispatched) store.setActiveLeaf(bot.threadId, dispatched.id);
+  if (dispatched) broadcast({ kind: "message.patch", threadId: bot.threadId, message: dispatched });
+  if (dispatched) broadcast({ kind: "thread", threadId: bot.threadId, activeLeafId: dispatched.id });
+  try {
+    await startTurn(botId, task.prompt, {
+      taskId: task.id,
+      attachments,
+      userMessage: dispatched ?? message,
+    });
+  } catch (error) {
+    workspace.settleQueuedTask(task.id, "failed");
+    const failed = store.patchMessage(bot.threadId, message.id, { delivery: "failed" });
+    if (failed) broadcast({ kind: "message.patch", threadId: bot.threadId, message: failed });
+    broadcastWorkspace();
+    scheduleNextQueuedTurn(botId);
+  }
+}
+
 // ── config hot-reload ─────────────────────────────────────────────────
 function configStatus() {
+  const acpProfileCount = Object.values(persistedInstanceConfigs(cfg))
+    .filter((instance) => instance.driver === CUSTOM_ACP_DRIVER_KIND).length;
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
     composio: { configured: Boolean(cfg.composio?.key), apiKeyConfigured: Boolean(cfg.composio?.apiKey) },
     box: { configured: Boolean(cfg.box?.token) },
     // not a secret — the sidebar shows it
     profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "" },
+    acpProfiles: { count: acpProfileCount },
   };
+}
+
+function listCustomAcpProfiles() {
+  return Object.entries(persistedInstanceConfigs(cfg)).flatMap(([id, instance]) => {
+    try {
+      const profile = publicCustomAcpProfile(id, instance);
+      return profile ? [profile] : [];
+    } catch {
+      // A forward-version or manually edited invalid entry remains preserved
+      // in config and appears as an unavailable shadow in /api/instances; the
+      // editor never receives a partially decoded command definition.
+      return [];
+    }
+  });
+}
+
+async function persistCustomAcpInstances(instances: ReturnType<typeof persistedInstanceConfigs>) {
+  if (store.bots.some((bot) => bot.busy)) {
+    throw Object.assign(new Error("Wait for running agents to finish before changing ACP profiles."), { status: 409 });
+  }
+  saveConfig({ instances });
+  Object.assign(cfg, loadConfig());
+  refreshSecretCatalog();
+  await reloadProviders();
+  const status = configStatus();
+  broadcast({ kind: "config", ...status });
+  return status;
 }
 
 /** Rebuild the provider fleet after a config change so new keys take
@@ -926,6 +1580,7 @@ async function reloadProviders() {
       activeProviderTurnByThread.delete(bot.threadId);
       clearThreadEventState(bot.threadId);
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
+      scheduleNextQueuedTurn(bot.id);
     }
     broadcastWorkspace();
   });
@@ -935,7 +1590,8 @@ async function reloadProviders() {
   await reload;
 }
 
-async function runRoutine(routineId: string, manual = false) {
+async function runRoutine(routineId: string, options: { manual?: boolean; scheduledFor?: number } = {}) {
+  const manual = options.manual === true;
   try {
     const owner = workspace.snapshot().routines.find((candidate) => candidate.id === routineId);
     if (!owner) throw Object.assign(new Error("no such routine"), { status: 404 });
@@ -954,7 +1610,6 @@ async function runRoutine(routineId: string, manual = false) {
       if (!isCanonicalBotOperation(bot)) {
         throw Object.assign(new Error("the bot is being deleted"), { status: 409 });
       }
-      workspace.advanceRoutine(routine.id);
       if (bot.busy) {
         workspace.markRoutineFailure(routine.id, "The bot was already working when this routine became due.");
         broadcastWorkspace();
@@ -966,10 +1621,11 @@ async function runRoutine(routineId: string, manual = false) {
         await startTurn(bot.id, routine.prompt, {
           source: "routine",
           routineId: routine.id,
+          scheduledFor: options.scheduledFor,
           taskTitle: routine.name,
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = secretCatalog.safeError(error);
         workspace.markRoutineFailure(routine.id, message);
         broadcastWorkspace();
         if (manual) throw error;
@@ -997,11 +1653,11 @@ interface DeleteBotOptions {
  * deletion blocker. Both manual DELETE and temporary expiry call the same
  * canonical transaction below; the late-provision fence above reuses this
  * observer for the one substrate race that can finish after metadata commit. */
-async function archiveBotComputerForDeletion(botId: string, context: "bot deletion" | "late provisioning") {
+async function archiveBotComputerForDeletion(botId: string, _context: "bot deletion" | "late provisioning") {
   const result = await box.archiveBoxForBotDeletion(cfg, botId);
   if (result.outcome === "warning") {
     // The helper deliberately redacts provider responses and credentials.
-    console.warn(`cloud computer cleanup warning during ${context} for bot ${botId}: ${result.warning}`);
+    console.warn("cloud computer cleanup warning");
   }
   return result;
 }
@@ -1028,6 +1684,7 @@ async function deleteBotTransactionally(botId: string, options: DeleteBotOptions
   // The sweeper's candidate snapshot is advisory. A Keep permanently PATCH or
   // newly durable work may commit before this transaction closes admission.
   if (options.automatic && !automaticDeletionStillEligible(bot)) return { deleted: false as const };
+  boxIdleSleep.cancel(bot.id);
   // Close admission synchronously before the first await. Operations already
   // inside the gate finish first, so their bytes/capabilities are included in
   // this delete; anything arriving later receives a bounded conflict.
@@ -1047,8 +1704,10 @@ async function deleteBotTransactionally(botId: string, options: DeleteBotOptions
         .catch(() => {});
     }
     stopScreenPoller(bot.id);
+    computerLeases.release("vm", bot.threadId);
     const runId = activeRunByThread.get(bot.threadId);
     if (runId) {
+      clearBudgetTimer(runId);
       workspace.completeRun(runId, false, "interrupted");
       activeRunByThread.delete(bot.threadId);
     }
@@ -1073,6 +1732,7 @@ async function deleteBotTransactionally(botId: string, options: DeleteBotOptions
       // both metadata stores commit, and every path can still be restored.
       stagedFiles = stageFilesForDeletion([
         ...store.botDeletionFiles(bot.id),
+        ...memory.botDeletionFiles(bot.id),
         { path: join(EVENTS_DIR, `${bot.threadId}.ndjson`), label: "event log" },
         { path: join(NATIVE_DIR, `${bot.threadId}.ndjson`), label: "native log" },
         ...workspace.botDeletionFiles(bot.id),
@@ -1108,7 +1768,7 @@ async function deleteBotTransactionally(botId: string, options: DeleteBotOptions
       if (computerCleanup.outcome === "stop-requested") {
         const resumed = await box.resumeBoxAfterDeletionRollback(cfg, bot.id);
         if (resumed.outcome === "warning") {
-          console.warn(`cloud computer resume warning after deletion rollback for bot ${bot.id}: ${resumed.warning}`);
+          console.warn("cloud computer resume warning after deletion rollback");
         }
       }
       broadcastWorkspace();
@@ -1126,12 +1786,13 @@ async function deleteBotTransactionally(botId: string, options: DeleteBotOptions
     // after an unlink/recursive removal has begun.
     purgeCommittedFileDeletions(
       [stagedFiles, stagedBotWorkspace],
-      (error) => console.error("could not purge committed bot deletion quarantine", error),
+      () => console.error("could not purge committed bot deletion quarantine"),
     );
 
     // Capabilities are in-memory snapshots, so revoke them before clients can
     // observe bot.deleted. No preview remains usable after that event.
     fileCapabilities.revokeBot(bot.id);
+    approvalRules.revokeBot(bot.id);
     broadcast(
       { kind: "bot.deleted", botId: bot.id, ...(options.operationId ? { operationId: options.operationId } : {}) },
       { remoteDeletedBotWasVisible: !bot.hidden },
@@ -1141,12 +1802,14 @@ async function deleteBotTransactionally(botId: string, options: DeleteBotOptions
   } finally {
     deletingBotIds.delete(bot.id);
     resourceBarrier.release();
+    const surviving = store.bot(bot.id);
+    if (surviving?.computer === "cloud") boxIdleSleep.touch(surviving.id);
   }
 }
 
 let sweepingTemporaryBots = false;
 async function dispatchTemporaryBotCleanup() {
-  if (sweepingTemporaryBots) return;
+  if (maintenanceMode || sweepingTemporaryBots) return;
   sweepingTemporaryBots = true;
   try {
     const result = await sweepTemporaryBots({
@@ -1157,10 +1820,7 @@ async function dispatchTemporaryBotCleanup() {
       isPendingRequest: (threadId, requestId) => askMessageByRequest.has(threadEventKey(threadId, requestId)),
       deleteBot: (botId) => deleteBotTransactionally(botId, { automatic: true }).then((result) => result.deleted),
     });
-    for (const failed of result.failed) {
-      const message = failed.error instanceof Error ? failed.error.message : String(failed.error);
-      console.error(`temporary bot cleanup failed for ${failed.botId}: ${message}`);
-    }
+    if (result.failed.length) console.error("temporary bot cleanup failed");
   } finally {
     sweepingTemporaryBots = false;
   }
@@ -1168,10 +1828,25 @@ async function dispatchTemporaryBotCleanup() {
 
 let dispatchingRoutines = false;
 async function dispatchDueRoutines() {
-  if (dispatchingRoutines) return;
+  if (maintenanceMode || dispatchingRoutines) return;
   dispatchingRoutines = true;
   try {
-    for (const routine of workspace.dueRoutines()) await runRoutine(routine.id);
+    for (const claim of workspace.claimDueRoutines()) {
+      if (claim.outcome === "run") {
+        try {
+          await runRoutine(claim.routineId, { scheduledFor: claim.scheduledFor });
+        } catch (error) {
+          // A routine can be deleted after its durable scheduler claim. Timer
+          // callbacks must never turn that race into an unhandled rejection.
+          if ((error as { status?: unknown })?.status !== 404) {
+            console.error("scheduled routine dispatch failed");
+          }
+        }
+      }
+    }
+    broadcastWorkspace();
+  } catch (error) {
+    console.error("routine scheduler tick failed");
   } finally {
     dispatchingRoutines = false;
   }
@@ -1185,6 +1860,10 @@ const temporaryBotTimer = setInterval(() => void dispatchTemporaryBotCleanup(), 
 temporaryBotTimer.unref();
 const initialTemporaryBotTimer = setTimeout(() => void dispatchTemporaryBotCleanup(), 1_000);
 initialTemporaryBotTimer.unref();
+const initialQueuedTurnTimer = setTimeout(() => {
+  for (const bot of store.bots) scheduleNextQueuedTurn(bot.id);
+}, 1_000);
+initialQueuedTurnTimer.unref();
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -1224,7 +1903,7 @@ function readBody(req: IncomingMessage): Promise<any> {
 
 const ATTACHMENT_MAX_FILE_BYTES = 25 * 1024 * 1024;
 
-function readBytes(req: IncomingMessage, maxBytes = ATTACHMENT_MAX_FILE_BYTES): Promise<Buffer> {
+function readBytes(req: IncomingMessage, maxBytes = ATTACHMENT_MAX_FILE_BYTES, label = "attachment"): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
@@ -1239,7 +1918,7 @@ function readBytes(req: IncomingMessage, maxBytes = ATTACHMENT_MAX_FILE_BYTES): 
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       total += bytes.length;
       if (total > maxBytes) {
-        fail(Object.assign(new Error("attachment is larger than 25 MB"), { status: 413 }));
+        fail(Object.assign(new Error(`${label} is larger than the ${Math.floor(maxBytes / (1024 * 1024))} MB limit`), { status: 413 }));
         return;
       }
       chunks.push(bytes);
@@ -1356,11 +2035,17 @@ function remoteRouteAllowed(method: string, path: string): boolean {
   }
   if (method === "GET" && /^\/api\/bots\/[\w-]+\/messages$/.test(path)) return true;
   if (method === "GET" && /^\/api\/bots\/[\w-]+\/computer-preview$/.test(path)) return true;
+  if (method === "GET" && path === "/api/routines/occurrences") return true;
   if (method === "DELETE" && /^\/api\/attachments\/[\w-]+$/.test(path)) return true;
+  if (method === "DELETE" && /^\/api\/tasks\/[\w-]+\/queue$/.test(path)) return true;
   if (method === "POST" && path === "/api/bots") return true;
+  if (["GET", "POST", "DELETE"].includes(method) && path === "/api/mobile/push-token") return true;
   if (method === "POST" && /^\/api\/bots\/[\w-]+\/attachments$/.test(path)) return true;
   if (method === "PATCH" && /^\/api\/bots\/[\w-]+$/.test(path)) return true;
-  if (method === "POST" && /^\/api\/bots\/[\w-]+\/(messages|respond|interrupt)$/.test(path)) return true;
+  if (method === "PATCH" && /^\/api\/routines\/[\w-]+$/.test(path)) return true;
+  if (method === "POST" && /^\/api\/routines\/[\w-]+\/run$/.test(path)) return true;
+  if (method === "POST" && /^\/api\/bots\/[\w-]+\/(messages|contexts|active-branch|respond|interrupt)$/.test(path)) return true;
+  if (method === "POST" && /^\/api\/bots\/[\w-]+\/messages\/[\w-]+\/edit$/.test(path)) return true;
   return false;
 }
 
@@ -1371,25 +2056,84 @@ function publicRemoteError(status: number, message: string): string {
 }
 
 function parseRoutineSchedule(value: unknown): RoutineSchedule {
-  if (!value || typeof value !== "object") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw Object.assign(new Error("schedule required"), { status: 400 });
   }
   const schedule = value as Record<string, unknown>;
   if (schedule.kind === "interval") {
-    return { kind: "interval", everyMinutes: Number(schedule.everyMinutes) };
+    if (typeof schedule.everyMinutes !== "number") {
+      throw Object.assign(new Error("interval minutes must be a number"), { status: 400 });
+    }
+    return { kind: "interval", everyMinutes: schedule.everyMinutes };
   }
   if (schedule.kind === "daily") {
-    return { kind: "daily", time: String(schedule.time ?? ""), timezone: String(schedule.timezone ?? "") };
+    if (typeof schedule.time !== "string" || typeof schedule.timezone !== "string") {
+      throw Object.assign(new Error("daily time and timezone must be strings"), { status: 400 });
+    }
+    return { kind: "daily", time: schedule.time, timezone: schedule.timezone };
   }
   if (schedule.kind === "weekly") {
+    if (
+      typeof schedule.time !== "string" ||
+      typeof schedule.timezone !== "string" ||
+      !Array.isArray(schedule.weekdays) ||
+      schedule.weekdays.some((day) => typeof day !== "number")
+    ) {
+      throw Object.assign(new Error("weekly time, timezone, and weekdays have invalid types"), { status: 400 });
+    }
     return {
       kind: "weekly",
-      time: String(schedule.time ?? ""),
-      timezone: String(schedule.timezone ?? ""),
-      weekdays: Array.isArray(schedule.weekdays) ? schedule.weekdays.map(Number) : [],
+      time: schedule.time,
+      timezone: schedule.timezone,
+      weekdays: schedule.weekdays,
     };
   }
   throw Object.assign(new Error("unknown schedule kind"), { status: 400 });
+}
+
+function routineRequestBody(value: unknown, allowed: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw Object.assign(new Error("routine request body must be an object"), { status: 400 });
+  }
+  const body = value as Record<string, unknown>;
+  if (Object.keys(body).some((key) => !allowed.includes(key))) {
+    throw Object.assign(new Error("routine request contains unsupported fields"), { status: 400 });
+  }
+  return body;
+}
+
+function routineString(value: unknown, field: string, maxLength: number): string {
+  if (typeof value !== "string") {
+    throw Object.assign(new Error(`${field} must be a string`), { status: 400 });
+  }
+  const clean = value.trim();
+  if (!clean) throw Object.assign(new Error(`${field} is required`), { status: 400 });
+  if (clean.length > maxLength) throw Object.assign(new Error(`${field} is too long`), { status: 400 });
+  return secretCatalog.redactText(clean);
+}
+
+function routineBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") {
+    throw Object.assign(new Error(`${field} must be a boolean`), { status: 400 });
+  }
+  return value;
+}
+
+function secretFreeMemoryInput(value: unknown): unknown {
+  const redacted = secretCatalog.redactValue(value);
+  if (JSON.stringify(redacted) !== JSON.stringify(value)) {
+    throw Object.assign(new Error("memory content must not contain credentials"), { status: 400 });
+  }
+  return value;
+}
+
+function integerQuery(url: URL, name: string, fallback: number): number {
+  const raw = url.searchParams.get(name);
+  if (raw === null) return fallback;
+  if (!/^-?\d+$/.test(raw)) throw Object.assign(new Error(`${name} must be an integer`), { status: 400 });
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) throw Object.assign(new Error(`${name} must be a safe integer`), { status: 400 });
+  return value;
 }
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse, surface: RequestSurface) {
@@ -1417,6 +2161,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       }
     }
     if (!requestOriginAllowed(req, method)) return json(res, 403, { error: "origin not allowed" });
+    if (maintenanceMode && path !== "/api/health") {
+      return json(res, 503, { error: "Cumea is in maintenance mode — retry in a moment" });
+    }
 
     // ── self-hosted mobile pairing ────────────────────────────────────
     // Pairing sessions and device revocation are deliberately local-only.
@@ -1442,6 +2189,35 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       res.setHeader("cache-control", "no-store");
       return json(res, 201, { ...claimed, hostUrl: REMOTE.publicUrl });
     }
+    if (path === "/api/mobile/push-token") {
+      if (surface !== "remote" || !authenticatedDeviceId) {
+        return json(res, 403, { error: "push registration is mobile-only" });
+      }
+      if (method === "GET") {
+        const device = pairing.list().find((candidate) => candidate.id === authenticatedDeviceId);
+        return json(res, 200, {
+          enabled: Boolean(device?.pushEnabled),
+          ...(device?.pushPlatform ? { platform: device.pushPlatform } : {}),
+        });
+      }
+      if (method === "POST") {
+        const body = await readBody(req);
+        const platform = body.platform === "ios" || body.platform === "android" ? body.platform : null;
+        if (!platform || typeof body.token !== "string") {
+          return json(res, 400, { error: "token and ios/android platform are required" });
+        }
+        const device = pairing.setPushRegistration(authenticatedDeviceId, { token: body.token, platform });
+        if (!device) return json(res, 404, { error: "no such device" });
+        refreshSecretCatalog();
+        return json(res, 200, { enabled: true, platform });
+      }
+      if (method === "DELETE") {
+        const device = pairing.setPushRegistration(authenticatedDeviceId, null);
+        if (!device) return json(res, 404, { error: "no such device" });
+        refreshSecretCatalog();
+        return json(res, 200, { enabled: false });
+      }
+    }
     if (method === "GET" && path === "/api/devices") {
       if (surface !== "local") return json(res, 403, { error: "device management is local-only" });
       return json(res, 200, { devices: pairing.list() });
@@ -1451,6 +2227,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       if (surface !== "local") return json(res, 403, { error: "device management is local-only" });
       const device = pairing.revoke(deviceMatch[1]);
       if (!device) return json(res, 404, { error: "no such device" });
+      refreshSecretCatalog();
       return json(res, 200, { device });
     }
 
@@ -1463,9 +2240,55 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         capabilities: { computerPreview: REMOTE_SCREEN_PREVIEW },
         bots: store.bots
           .filter((bot) => !bot.hidden)
-          .map((bot) => publicMobileBot(bot, store.messagesFor(bot.threadId), MOBILE_BOOTSTRAP_MESSAGE_LIMIT, visibleBotIds)),
+          .map((bot) => publicMobileBot(
+            bot,
+            store.messagesFor(bot.threadId),
+            MOBILE_BOOTSTRAP_MESSAGE_LIMIT,
+            visibleBotIds,
+            store.activeLeaf(bot.threadId),
+          )),
         workspace: publicRemoteWorkspace(),
       });
+    }
+
+    // ── capability-scoped durable memory MCP ──────────────────────────
+    if (path.startsWith("/api/internal/memory/")) {
+      const authorization = String(req.headers.authorization ?? "");
+      const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+      const capability = token ? memoryCapabilities.get(token) : undefined;
+      if (!capability || capability.expiresAt <= Date.now()) {
+        if (token) {
+          memoryCapabilities.delete(token);
+          refreshSecretCatalog();
+        }
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const owner = store.bot(capability.botId);
+      if (!owner || owner.threadId !== capability.threadId || owner.memoryWriteEnabled !== true) {
+        memoryCapabilities.delete(token);
+        refreshSecretCatalog();
+        return json(res, 401, { error: "memory capability is no longer valid" });
+      }
+      if (method === "GET" && path === "/api/internal/memory/search") {
+        const query = String(url.searchParams.get("q") ?? "").trim().slice(0, 500);
+        if (!query) return json(res, 400, { error: "query required" });
+        return json(res, 200, secretCatalog.redactValue({
+          documents: memory.search(owner.id, query).map((document) => ({
+            path: document.path,
+            content: document.content,
+            revision: document.revision,
+          })),
+        }));
+      }
+      if (method === "POST" && path === "/api/internal/memory/remember") {
+        const document = memory.remember(owner.id, secretFreeMemoryInput(await readBody(req)), {
+          source: "agent",
+          threadId: capability.threadId,
+          ...(capability.runId ? { runId: capability.runId } : {}),
+        });
+        return json(res, 200, { document: { path: document.path, revision: document.revision } });
+      }
+      return json(res, 404, { error: "no route" });
     }
 
     // ── internal peer-agent comms (localhost + shared token only) ──────
@@ -1586,16 +2409,60 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
     if (method === "GET" && path === "/api/work") {
       return json(res, 200, { workspace: surface === "remote" ? publicRemoteWorkspace() : publicWorkspace() });
     }
+    let effectMatch = path.match(/^\/api\/effects\/(effect-[\w-]+)\/resolve$/);
+    if (effectMatch && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "external-effect resolution is local-only" });
+      const effect = workspace.externalEffect(effectMatch[1]);
+      if (!effect) return json(res, 404, { error: "no such external effect" });
+      const body = await readBody(req);
+      if (
+        !body || typeof body !== "object" || Array.isArray(body) ||
+        Object.keys(body).some((key) => key !== "resolution" && key !== "note") ||
+        (body.resolution !== "applied" && body.resolution !== "failed")
+      ) return json(res, 400, { error: "resolution must be applied or failed" });
+      return await botResourceGate.run(effect.botId, async () => {
+        const current = workspace.externalEffect(effect.id);
+        const bot = store.bot(effect.botId);
+        if (!bot || current !== effect || current.botId !== effect.botId || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the effect owner changed" });
+        }
+        const resolved = workspace.resolveExternalEffect(
+          effect.id,
+          body.resolution,
+          typeof body.note === "string" ? secretCatalog.redactText(body.note) : body.note,
+        );
+        broadcastWorkspace();
+        return json(res, 200, { effect: resolved });
+      });
+    }
+    if (method === "GET" && path === "/api/routines/occurrences") {
+      const now = Date.now();
+      const from = integerQuery(url, "from", now);
+      const to = integerQuery(url, "to", now + 7 * 24 * 60 * 60_000);
+      const limit = integerQuery(url, "limit", 256);
+      if (
+        Number.isNaN(new Date(from).getTime()) ||
+        Number.isNaN(new Date(to).getTime()) ||
+        to < from ||
+        to - from > 31 * 24 * 60 * 60_000
+      ) {
+        return json(res, 400, { error: "occurrence window must be between 0 and 31 days" });
+      }
+      if (limit < 1 || limit > 512) return json(res, 400, { error: "limit must be between 1 and 512" });
+      const visibleBotIds = surface === "remote" ? visibleRemoteBotIds() : undefined;
+      const occurrences = workspace.projectRoutines(from, to, limit, visibleBotIds);
+      return json(res, 200, { occurrences });
+    }
     if (method === "POST" && path === "/api/sections") {
       const body = await readBody(req);
-      const section = workspace.createSection(String(body.name ?? ""));
+      const section = workspace.createSection(secretCatalog.redactText(String(body.name ?? "")));
       broadcastWorkspace();
       return json(res, 201, { section });
     }
     let m = path.match(/^\/api\/sections\/([\w-]+)$/);
     if (m && method === "PATCH") {
       const body = await readBody(req);
-      const section = workspace.patchSection(m[1], String(body.name ?? ""));
+      const section = workspace.patchSection(m[1], secretCatalog.redactText(String(body.name ?? "")));
       if (!section) return json(res, 404, { error: "no such section" });
       broadcastWorkspace();
       return json(res, 200, { section });
@@ -1612,8 +2479,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       return json(res, 200, { ok: true });
     }
     if (method === "POST" && path === "/api/routines") {
-      const body = await readBody(req);
-      const botId = String(body.botId ?? "");
+      const body = routineRequestBody(await readBody(req), ["botId", "name", "prompt", "schedule", "enabled"]);
+      const botId = routineString(body.botId, "botId", 100);
       return await botResourceGate.run(botId, async () => {
         const bot = store.bot(botId);
         if (!bot || (surface === "remote" && bot.hidden)) return json(res, 404, { error: "no such bot" });
@@ -1625,10 +2492,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         }
         const routine = workspace.createRoutine({
           botId,
-          name: String(body.name ?? ""),
-          prompt: String(body.prompt ?? ""),
+          name: secretCatalog.redactText(routineString(body.name, "routine name", ROUTINE_NAME_MAX_LENGTH)),
+          prompt: secretCatalog.redactText(routineString(body.prompt, "routine task", ROUTINE_PROMPT_MAX_LENGTH)),
           schedule: parseRoutineSchedule(body.schedule),
-          enabled: body.enabled === undefined ? true : Boolean(body.enabled),
+          enabled: body.enabled === undefined ? true : routineBoolean(body.enabled, "enabled"),
         });
         broadcastWorkspace();
         return json(res, 201, { routine });
@@ -1646,7 +2513,16 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
           return json(res, 404, { error: "no such routine" });
         }
         if (surface === "remote" && bot.hidden) return json(res, 404, { error: "no such routine" });
-        const body = await readBody(req);
+        let body: Record<string, unknown>;
+        try {
+          body = routineRequestBody(await readBody(req), ["name", "prompt", "schedule", "enabled"]);
+        } catch (error) {
+          if (surface === "remote" && (error as { message?: unknown }).message === "routine request contains unsupported fields") {
+            return json(res, 400, { error: "mobile may only edit the routine name, task, schedule, or enabled state" });
+          }
+          throw error;
+        }
+        if (!Object.keys(body).length) return json(res, 400, { error: "routine patch is empty" });
         if (
           store.bot(bot.id) !== bot ||
           workspace.snapshot().routines.find((candidate) => candidate.id === routineId) !== owner ||
@@ -1655,14 +2531,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
           return json(res, 409, { error: "the bot is being deleted" });
         }
         const routine = workspace.patchRoutine(routineId, {
-          ...(body.name !== undefined ? { name: String(body.name) } : {}),
-          ...(body.prompt !== undefined ? { prompt: String(body.prompt) } : {}),
+          ...(body.name !== undefined ? { name: secretCatalog.redactText(routineString(body.name, "routine name", ROUTINE_NAME_MAX_LENGTH)) } : {}),
+          ...(body.prompt !== undefined ? { prompt: secretCatalog.redactText(routineString(body.prompt, "routine task", ROUTINE_PROMPT_MAX_LENGTH)) } : {}),
           ...(body.schedule !== undefined ? { schedule: parseRoutineSchedule(body.schedule) } : {}),
-          ...(body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {}),
+          ...(body.enabled !== undefined ? { enabled: routineBoolean(body.enabled, "enabled") } : {}),
         });
         if (!routine) return json(res, 404, { error: "no such routine" });
         broadcastWorkspace();
-        return json(res, 200, { routine });
+        return json(res, 200, { routine: surface === "remote" ? publicRemoteRoutine(routine.id) : routine });
       });
     }
     m = path.match(/^\/api\/routines\/([\w-]+)$/);
@@ -1685,8 +2561,87 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
     }
     m = path.match(/^\/api\/routines\/([\w-]+)\/run$/);
     if (m && method === "POST") {
-      await runRoutine(m[1], true);
+      const routine = workspace.snapshot().routines.find((candidate) => candidate.id === m![1]);
+      const bot = routine ? store.bot(routine.botId) : null;
+      if (!routine || !bot || (surface === "remote" && bot.hidden)) return json(res, 404, { error: "no such routine" });
+      await runRoutine(m[1], { manual: true });
       return json(res, 202, { ok: true });
+    }
+    m = path.match(/^\/api\/tasks\/([\w-]+)\/evidence-requirements$/);
+    if (m && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "verification policy administration is local-only" });
+      const taskId = m[1];
+      const owner = workspace.task(taskId);
+      if (!owner) return json(res, 404, { error: "no such task" });
+      const body = await readBody(req);
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => key !== "label")) {
+        return json(res, 400, { error: "evidence requirement accepts only a label" });
+      }
+      return await botResourceGate.run(owner.botId, async () => {
+        const current = workspace.task(taskId);
+        const bot = store.bot(owner.botId);
+        if (!bot || current !== owner || current.botId !== owner.botId || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the task owner changed" });
+        }
+        const requirement = workspace.addEvidenceRequirement(
+          taskId,
+          typeof body.label === "string" ? secretCatalog.redactText(body.label) : body.label,
+        );
+        broadcastWorkspace();
+        return json(res, 201, { requirement, verificationStatus: workspace.verificationStatus(taskId) });
+      });
+    }
+    m = path.match(/^\/api\/tasks\/([\w-]+)\/evidence-requirements\/([\w-]+)$/);
+    if (m && method === "DELETE") {
+      if (surface !== "local") return json(res, 403, { error: "verification policy administration is local-only" });
+      const taskId = m[1];
+      const owner = workspace.task(taskId);
+      if (!owner) return json(res, 404, { error: "no such task" });
+      return await botResourceGate.run(owner.botId, async () => {
+        const current = workspace.task(taskId);
+        const bot = store.bot(owner.botId);
+        if (!bot || current !== owner || current.botId !== owner.botId || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the task owner changed" });
+        }
+        if (!workspace.removeEvidenceRequirement(taskId, m![2])) return json(res, 404, { error: "no such evidence requirement" });
+        broadcastWorkspace();
+        return json(res, 200, { ok: true, verificationStatus: workspace.verificationStatus(taskId) });
+      });
+    }
+    m = path.match(/^\/api\/tasks\/([\w-]+)\/evidence$/);
+    if (m && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "evidence recording is local-only" });
+      const taskId = m[1];
+      const owner = workspace.task(taskId);
+      if (!owner) return json(res, 404, { error: "no such task" });
+      const body = await readBody(req);
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => !["requirementId", "runId", "reference"].includes(key))) {
+        return json(res, 400, { error: "invalid evidence record" });
+      }
+      const reference = body.reference;
+      if (
+        typeof body.requirementId !== "string" || body.requirementId.length > 100 ||
+        typeof body.runId !== "string" || body.runId.length > 100 ||
+        !reference || typeof reference !== "object" || Array.isArray(reference) ||
+        Object.keys(reference).some((key) => !["kind", "id"].includes(key)) ||
+        (reference.kind !== "step" && reference.kind !== "artifact") ||
+        typeof reference.id !== "string" || reference.id.length > 100
+      ) return json(res, 400, { error: "evidence must reference one canonical run step or artifact" });
+      return await botResourceGate.run(owner.botId, async () => {
+        const current = workspace.task(taskId);
+        const bot = store.bot(owner.botId);
+        if (!bot || current !== owner || current.botId !== owner.botId || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the task owner changed" });
+        }
+        const evidence = workspace.recordEvidence({
+          taskId,
+          requirementId: body.requirementId,
+          runId: body.runId,
+          reference: { kind: reference.kind, id: reference.id },
+        });
+        broadcastWorkspace();
+        return json(res, 201, { evidence, verificationStatus: workspace.verificationStatus(taskId) });
+      });
     }
     m = path.match(/^\/api\/tasks\/([\w-]+)\/teach$/);
     if (m && method === "POST") {
@@ -1700,34 +2655,129 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
           return json(res, 404, { error: "no such task" });
         }
         if (surface === "remote" && bot.hidden) return json(res, 404, { error: "no such task" });
-        const body = await readBody(req);
+        const body = routineRequestBody(await readBody(req), ["timezone", "name", "schedule", "enabled"]);
         if (store.bot(bot.id) !== bot || workspace.task(taskId) !== task || !isCanonicalBotOperation(bot)) {
           return json(res, 409, { error: "the bot is being deleted" });
         }
-        const timezone = String(body.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+        const timezone = body.timezone === undefined
+          ? Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+          : routineString(body.timezone, "timezone", 100);
         const routine = workspace.createRoutine({
           botId: task.botId,
-          name: String(body.name || task.title),
-          prompt: task.prompt,
-          schedule: body.schedule
+          name: secretCatalog.redactText(body.name === undefined ? task.title : routineString(body.name, "routine name", ROUTINE_NAME_MAX_LENGTH)),
+          prompt: secretCatalog.redactText(task.prompt),
+          schedule: body.schedule !== undefined
             ? parseRoutineSchedule(body.schedule)
             : { kind: "daily", time: "09:00", timezone },
-          enabled: body.enabled === undefined ? false : Boolean(body.enabled),
+          enabled: body.enabled === undefined ? false : routineBoolean(body.enabled, "enabled"),
         });
         broadcastWorkspace();
         return json(res, 201, { routine });
+      });
+    }
+    m = path.match(/^\/api\/tasks\/([\w-]+)\/queue$/);
+    if (m && method === "DELETE") {
+      const task = workspace.task(m[1]);
+      if (!task || task.source !== "message" || task.status !== "queued") {
+        return json(res, 404, { error: "no such queued message" });
+      }
+      return await botResourceGate.run(task.botId, async () => {
+        const bot = store.bot(task.botId);
+        const current = workspace.task(task.id);
+        if (!bot || !current || current !== task || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        const cancelled = workspace.settleQueuedTask(task.id, "cancelled");
+        if (!cancelled) return json(res, 409, { error: "that message has already started" });
+        if (task.messageId) {
+          const message = store.patchMessage(bot.threadId, task.messageId, { delivery: "cancelled" });
+          if (message) broadcast({ kind: "message.patch", threadId: bot.threadId, message });
+        }
+        broadcastWorkspace();
+        return json(res, 200, { task: cancelled });
       });
     }
     m = path.match(/^\/api\/tasks\/([\w-]+)\/retry$/);
     if (m && method === "POST") {
       const task = workspace.task(m[1]);
       if (!task) return json(res, 404, { error: "no such task" });
+      if (task.status !== "failed") return json(res, 409, { error: "only failed tasks can be retried" });
       const attachments = workspace.attachmentsFor(task.botId, task.attachmentIds);
       if (attachments.some((attachment) => !existsSync(attachment.storedPath))) {
         return json(res, 409, { error: "one or more task attachments are missing from disk" });
       }
       await startTurn(task.botId, task.prompt, { taskId: task.id, attachments });
       return json(res, 202, { ok: true });
+    }
+    m = path.match(/^\/api\/runs\/([\w-]+)\/resume$/);
+    if (m && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "checkpoint resume is local-only" });
+      const requestedRun = workspace.run(m[1]);
+      if (!requestedRun) return json(res, 404, { error: "no such run" });
+      const body = await readBody(req);
+      if (
+        !body || typeof body !== "object" || Array.isArray(body) ||
+        Object.keys(body).some((key) => key !== "checkpointId") ||
+        typeof body.checkpointId !== "string" || !/^[\w-]{1,100}$/.test(body.checkpointId)
+      ) return json(res, 400, { error: "an exact checkpointId is required" });
+      return await botResourceGate.run(requestedRun.botId, async () => {
+        const run = workspace.run(requestedRun.id);
+        const task = run ? workspace.task(run.taskId) : null;
+        const bot = run ? store.bot(run.botId) : null;
+        if (
+          run !== requestedRun || !task || !bot || task.botId !== bot.id ||
+          !isCanonicalBotOperation(bot) || bot.busy || run.status !== "interrupted" ||
+          task.status !== "interrupted" || task.latestRunId !== run.id
+        ) return json(res, 409, { error: "checkpoint owner or run state changed" });
+        const checkpoint = run.checkpoint;
+        if (!checkpoint || checkpoint.id !== body.checkpointId) {
+          return json(res, 409, { error: "checkpoint no longer matches this run" });
+        }
+        if (!task.messageId) return json(res, 409, { error: "canonical task message is unavailable" });
+        const userMessage = store.messagesFor(bot.threadId).find((message) => message.id === task.messageId);
+        if (!userMessage || userMessage.role !== "user" || userMessage.kind !== "text" || userMessage.text !== task.prompt) {
+          return json(res, 409, { error: "canonical task transcript is unavailable" });
+        }
+        const instance = registry.get(bot.modelSelection.instanceId);
+        const plan = planCheckpointResume({
+          checkpoint,
+          activeLeafId: store.activeLeaf(bot.threadId),
+          providerAvailable: Boolean(instance),
+          currentInstanceId: bot.modelSelection.instanceId,
+          currentModel: bot.modelSelection.model,
+          currentCursor: bot.resumeCursors[bot.modelSelection.instanceId],
+          sessionResumeCapable: instance?.adapter.capabilities.sessionResume === true,
+          unsafeEffects: workspace.hasUnsafeEffects(run.id),
+        });
+        if (!plan.allowed) {
+          return json(res, 409, { error: `checkpoint resume blocked: ${plan.reason ?? "unsafe"}` });
+        }
+        const attachments = workspace.attachmentsFor(task.botId, task.attachmentIds);
+        if (attachments.length !== task.attachmentIds.length || attachments.some((attachment) => !existsSync(attachment.storedPath))) {
+          return json(res, 409, { error: "one or more task attachments are missing from disk" });
+        }
+        const next = workspace.createResumeRun(run.id);
+        broadcastWorkspace();
+        try {
+          await startTurn(bot.id, task.prompt, {
+            taskId: task.id,
+            attachments,
+            userMessage,
+            resumeFrom: { runId: run.id, checkpointId: checkpoint.id, forceFreshSession: !plan.useProviderCursor },
+            precreatedRunId: next.id,
+          });
+        } catch (error) {
+          workspace.completeRun(next.id, false, secretCatalog.safeError(error));
+          broadcastWorkspace();
+          throw error;
+        }
+        return json(res, 202, {
+          ok: true,
+          runId: next.id,
+          resumeOfRunId: run.id,
+          providerSession: plan.useProviderCursor ? "verified_cursor" : "fresh",
+        });
+      });
     }
     m = path.match(/^\/api\/attachments\/([\w-]+)$/);
     if (m && method === "GET") {
@@ -1778,7 +2828,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         const file = typeof requested === "string" && requested.trim().startsWith("/workspace/")
           ? await box.readWorkspaceFile(cfg, bot.id, requested)
           : readLocalBotFile(bot.id, requested);
-        const capability = fileCapabilities.issue(bot.id, file);
+        const capability = fileCapabilities.issue(bot.id, file, { allowHtml: true });
         res.setHeader("cache-control", "no-store");
         return json(res, 201, { file: publicFileCapability(capability, file.source) });
       });
@@ -1809,7 +2859,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         res.writeHead(200, {
           ...SECURITY_HEADERS,
           "cache-control": "no-store",
-          "content-type": capability.mime,
+          "content-type": capability.kind === "html" ? "application/octet-stream" : capability.mime,
           "content-length": String(capability.bytes.length),
           "content-disposition": `attachment; filename*=UTF-8''${encodedName}`,
         });
@@ -1827,20 +2877,122 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         });
         return res.end(capability.bytes);
       }
+      if (capability.kind === "html") {
+        res.writeHead(200, {
+          ...SECURITY_HEADERS,
+          "cache-control": "no-store",
+          "content-type": capability.mime,
+          "content-length": String(capability.bytes.length),
+          "content-disposition": `inline; filename*=UTF-8''${encodedName}`,
+          "content-security-policy": HTML_ARTIFACT_CSP,
+          "permissions-policy": HTML_ARTIFACT_PERMISSIONS_POLICY,
+          // The application embeds this exact same-origin capability into an
+          // iframe whose empty sandbox makes the document's origin opaque.
+          "x-frame-options": "SAMEORIGIN",
+        });
+        return res.end(capability.bytes);
+      }
       res.setHeader("cache-control", "no-store");
       return json(res, 200, { preview: await buildStructuredPreview(capability.kind, capability.bytes) });
     }
+    // ── local, instruction-only skill packages ──
+    if (path === "/api/skills" && method === "GET") {
+      if (surface !== "local") return json(res, 403, { error: "local skill management is desktop-local" });
+      return json(res, 200, { skills: skillRegistry.list() });
+    }
+    if (path === "/api/skills" && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "local skill management is desktop-local" });
+      return json(res, 201, { skill: skillRegistry.create(await readBody(req)) });
+    }
+    if (path === "/api/skills/import" && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "local skill import is desktop-local" });
+      return json(res, 201, { skill: skillRegistry.import(await readBody(req)) });
+    }
+    m = path.match(/^\/api\/skills\/([a-z0-9][a-z0-9-]{0,63})\/versions$/);
+    if (m && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "local skill updates are desktop-local" });
+      const body = await readBody(req);
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).sort().join("\0") !== ["description", "displayName", "enabled", "id", "instructions", "label", "version"].join("\0")) {
+        return json(res, 400, { error: "skill update body has unknown or missing fields" });
+      }
+      if (body.id !== m[1]) return json(res, 400, { error: "skill update id does not match its route" });
+      return json(res, 201, { skill: skillRegistry.create(body, { requireNewer: true }) });
+    }
+    m = path.match(/^\/api\/skills\/([a-z0-9][a-z0-9-]{0,63})\/([0-9A-Za-z.+-]+)$/);
+    if (m && method === "GET") {
+      if (surface !== "local") return json(res, 403, { error: "local skill content is desktop-local" });
+      return json(res, 200, { skill: skillRegistry.package(m[1], m[2]) });
+    }
+    if (m && method === "PATCH") {
+      if (surface !== "local") return json(res, 403, { error: "local skill updates are desktop-local" });
+      const body = await readBody(req);
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 1 || typeof body.enabled !== "boolean") return json(res, 400, { error: "only the enabled flag can be changed in place" });
+      if (!body.enabled && store.bots.some((bot) => bot.skillAssignments?.some((assignment) => assignment.id === m![1] && assignment.version === m![2]))) {
+        return json(res, 409, { error: "unassign this exact skill version before disabling it" });
+      }
+      return json(res, 200, { manifest: skillRegistry.setEnabled(m[1], m[2], body.enabled) });
+    }
+    if (m && method === "DELETE") {
+      if (surface !== "local") return json(res, 403, { error: "local skill deletion is desktop-local" });
+      if (store.bots.some((bot) => bot.skillAssignments?.some((assignment) => assignment.id === m![1] && assignment.version === m![2]))) {
+        return json(res, 409, { error: "unassign this exact skill version before deleting it" });
+      }
+      skillRegistry.delete(m[1], m[2]);
+      return json(res, 200, { ok: true });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/skills\/([a-z0-9][a-z0-9-]{0,63})(?:\/(rollback))?$/);
+    if (m && ((!m[3] && method === "PUT") || (m[3] === "rollback" && method === "POST"))) {
+      if (surface !== "local") return json(res, 403, { error: "agent skill assignment is desktop-local" });
+      return await botResourceGate.run(m[1], async () => {
+        const bot = store.bot(m![1]);
+        if (!bot) return json(res, 404, { error: "no such bot" });
+        if (bot.busy) return json(res, 409, { error: "wait for the active turn before changing assigned skills" });
+        const body = await readBody(req);
+        if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 1 || typeof body.version !== "string") return json(res, 400, { error: "skill assignment body must contain exactly one version" });
+        const assignment = validateSkillAssignment({ id: m![2], version: body.version });
+        if (!skillRegistry.has(assignment.id, assignment.version, true)) return json(res, 409, { error: "that exact enabled skill version is unavailable" });
+        const current = bot.skillAssignments ?? [];
+        const previous = current.find((candidate) => candidate.id === assignment.id);
+        if (m![3] === "rollback" && (!previous || compareSkillVersions(assignment.version, previous.version) >= 0)) return json(res, 409, { error: "rollback requires an older available SemVer version" });
+        const next = [...current.filter((candidate) => candidate.id !== assignment.id), assignment];
+        if (next.length > SKILL_MAX_ASSIGNMENTS) return json(res, 409, { error: "agent skill assignment limit reached" });
+        const patched = store.patchBot(bot.id, { skillAssignments: next });
+        if (!patched) return json(res, 409, { error: "the bot is being deleted" });
+        broadcast({ kind: "bot", bot: patched });
+        return json(res, 200, { bot: patched });
+      });
+    }
+    if (m && method === "DELETE" && !m[3]) {
+      if (surface !== "local") return json(res, 403, { error: "agent skill assignment is desktop-local" });
+      return await botResourceGate.run(m[1], async () => {
+        const bot = store.bot(m![1]);
+        if (!bot) return json(res, 404, { error: "no such bot" });
+        if (bot.busy) return json(res, 409, { error: "wait for the active turn before changing assigned skills" });
+        if (!bot.skillAssignments?.some((assignment) => assignment.id === m![2])) return json(res, 404, { error: "that skill is not assigned" });
+        const patched = store.patchBot(bot.id, { skillAssignments: bot.skillAssignments.filter((assignment) => assignment.id !== m![2]) });
+        if (!patched) return json(res, 409, { error: "the bot is being deleted" });
+        broadcast({ kind: "bot", bot: patched });
+        return json(res, 200, { bot: patched });
+      });
+    }
+
     // ── bots ──
     if (method === "GET" && path === "/api/bots") {
       const visibleBotIds = visibleRemoteBotIds();
-      return json(res, 200, {
+      return json(res, 200, secretCatalog.redactValue({
         bots:
           surface === "remote"
             ? store.bots
                 .filter((bot) => !bot.hidden)
-                .map((bot) => publicMobileBot(bot, store.messagesFor(bot.threadId), MOBILE_BOOTSTRAP_MESSAGE_LIMIT, visibleBotIds))
-            : store.bots.map((b) => ({ ...b, messages: store.messagesFor(b.threadId) })),
-      });
+                .map((bot) => publicMobileBot(
+                  bot,
+                  store.messagesFor(bot.threadId),
+                  MOBILE_BOOTSTRAP_MESSAGE_LIMIT,
+                  visibleBotIds,
+                  store.activeLeaf(bot.threadId),
+                ))
+            : store.bots.map((b) => ({ ...b, messages: store.messagesFor(b.threadId), activeLeafId: store.activeLeaf(b.threadId) })),
+      }));
     }
     if (method === "POST" && path === "/api/bots") {
       const body = await readBody(req);
@@ -1857,12 +3009,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       const requestedName =
         body.name === undefined
           ? undefined
-          : String(body.name).replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80);
+          : secretCatalog.redactText(String(body.name).replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80));
       if (requestedName !== undefined && !requestedName) return json(res, 400, { error: "name cannot be empty" });
       const requestedTitle =
         body.title === undefined
           ? undefined
-          : String(body.title).replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 120);
+          : secretCatalog.redactText(String(body.title).replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 120));
       const bot = store.createBot({ lifecycle });
       const patch: Record<string, unknown> = { modelSelection: await defaultSelection() };
       if (requestedName !== undefined) patch.name = requestedName;
@@ -1870,12 +3022,58 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       store.patchBot(bot.id, patch);
       const created = store.bot(bot.id)!;
       broadcast({ kind: "bot", bot: created });
-      return json(res, 201, {
+      return json(res, 201, secretCatalog.redactValue({
         bot:
           surface === "remote"
-            ? publicMobileBot(created, store.messagesFor(created.threadId), MOBILE_BOOTSTRAP_MESSAGE_LIMIT, visibleRemoteBotIds())
-            : { ...created, messages: store.messagesFor(bot.threadId) },
-      });
+            ? publicMobileBot(
+                created,
+                store.messagesFor(created.threadId),
+                MOBILE_BOOTSTRAP_MESSAGE_LIMIT,
+                visibleRemoteBotIds(),
+                store.activeLeaf(created.threadId),
+              )
+            : { ...created, messages: store.messagesFor(bot.threadId), activeLeafId: store.activeLeaf(bot.threadId) },
+      }));
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memories$/);
+    if (m && method === "GET") {
+      if (surface !== "local") return json(res, 403, { error: "agent memory management is local-only" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      return json(res, 200, secretCatalog.redactValue({
+        documents: memory.list(bot.id),
+        retention: { maxDocuments: 100, maxRevisionsPerDocument: 50, maxContentBytes: 16 * 1024 },
+      }));
+    }
+    if (m && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "agent memory management is local-only" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const document = memory.create(bot.id, secretFreeMemoryInput(await readBody(req)), { source: "user", threadId: bot.threadId });
+      return json(res, 201, { document });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memories\/(mem-[a-f0-9]{20})\/revisions$/);
+    if (m && method === "GET") {
+      if (surface !== "local") return json(res, 403, { error: "agent memory management is local-only" });
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      return json(res, 200, secretCatalog.redactValue({ revisions: memory.revisions(m[1], m[2]) }));
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memories\/(mem-[a-f0-9]{20})$/);
+    if (m && method === "PUT") {
+      if (surface !== "local") return json(res, 403, { error: "agent memory management is local-only" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const document = memory.update(bot.id, m[2], secretFreeMemoryInput(await readBody(req)), { source: "user", threadId: bot.threadId });
+      return json(res, 200, { document });
+    }
+    if (m && method === "DELETE") {
+      if (surface !== "local") return json(res, 403, { error: "agent memory management is local-only" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const body = await readBody(req);
+      return memory.delete(bot.id, m[2], body.expectedRevision)
+        ? json(res, 200, { ok: true })
+        : json(res, 404, { error: "no such memory document" });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
     if (m && method === "PATCH") {
@@ -1915,13 +3113,43 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         if (body.modelSelection !== undefined && owner.busy) {
           return json(res, 409, { error: "interrupt the active turn before changing its provider" });
         }
+        if (body.computer !== undefined && !["cloud", "vm", "local", "off"].includes(body.computer)) {
+          return json(res, 400, { error: "unknown computer destination" });
+        }
+        if (body.memoryWriteEnabled !== undefined && typeof body.memoryWriteEnabled !== "boolean") {
+          return json(res, 400, { error: "memoryWriteEnabled must be a boolean" });
+        }
+        if (body.coordinator !== undefined && typeof body.coordinator !== "boolean") {
+          return json(res, 400, { error: "coordinator must be a boolean" });
+        }
+        const willCoordinate = body.coordinator === true || (owner.coordinator === true && body.coordinator !== false);
+        if (willCoordinate && (body.temporary === true || owner.lifecycle && body.temporary !== false)) {
+          return json(res, 400, { error: "a temporary bot cannot be the workspace Coordinator" });
+        }
+        if (willCoordinate && body.hidden === true) {
+          return json(res, 400, { error: "the workspace Coordinator must remain visible" });
+        }
+        if (willCoordinate && body.collaborationEnabled === false) {
+          return json(res, 400, { error: "the workspace Coordinator requires bot collaboration" });
+        }
+        if (willCoordinate) {
+          const selectedInstanceId = body.modelSelection?.instanceId ?? owner.modelSelection.instanceId;
+          const selectedInstance = typeof selectedInstanceId === "string" ? registry.get(selectedInstanceId) : null;
+          if (selectedInstance?.adapter.capabilities.agentsMcp !== true) {
+            return json(res, 400, { error: "the selected provider does not support Coordinator peer tools" });
+          }
+        }
         const lifecycleMutation = body.temporary !== undefined;
         if (body.temporary === true) patch.lifecycle = temporaryBotLifecycle(body.ttlMinutes);
         for (const key of [
           "name", "title", "description", "notifications", "modelSelection", "unread", "computer", "color",
-          "mascotExpression", "pinned", "hidden", "appsEnabled", "collaborationEnabled",
+          "mascotExpression", "pinned", "hidden", "appsEnabled", "collaborationEnabled", "memoryWriteEnabled",
         ] as const) {
-          if (body[key] !== undefined) patch[key] = body[key];
+          if (body[key] !== undefined) {
+            patch[key] = ["name", "title", "description"].includes(key)
+              ? secretCatalog.redactText(String(body[key]))
+              : body[key];
+          }
         }
         if (body.avatar !== undefined) {
           const avatar = parseBotAvatar(body.avatar);
@@ -1936,13 +3164,32 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
           patch.sectionId = sectionId;
         }
         if (body.approvalPolicy !== undefined) {
-          if (!["ask", "allow", "deny"].includes(body.approvalPolicy)) {
-            return json(res, 400, { error: "unknown approval policy" });
-          }
-          patch.approvalPolicy = body.approvalPolicy;
+          return json(res, 400, { error: "global approval policies are no longer supported" });
         }
+        if (body.mcpServerIds !== undefined) {
+          if (
+            !Array.isArray(body.mcpServerIds) ||
+            body.mcpServerIds.length > 16 ||
+            body.mcpServerIds.some((id: unknown) => typeof id !== "string" || !mcpRegistry.has(id)) ||
+            new Set(body.mcpServerIds).size !== body.mcpServerIds.length
+          ) {
+            return json(res, 400, { error: "mcpServerIds must contain up to 16 unique configured server ids" });
+          }
+          patch.mcpServerIds = body.mcpServerIds;
+        }
+        if (body.coordinator !== undefined) {
+          patch.coordinator = body.coordinator;
+          if (body.coordinator) patch.collaborationEnabled = true;
+        }
+        const displacedCoordinator = body.coordinator === true
+          ? store.bots.find((candidate) => candidate.id !== botId && candidate.coordinator === true)
+          : undefined;
         const bot = store.patchBot(botId, patch, { clearLifecycle: lifecycleMutation && body.temporary === false });
         if (!bot) return json(res, 409, { error: "the bot is being deleted" });
+        if (body.computer !== undefined) {
+          if (bot.computer === "cloud") boxIdleSleep.touch(bot.id);
+          else boxIdleSleep.cancel(bot.id);
+        }
         const botEvent = lifecycleMutation && body.temporary === false ? { ...bot, lifecycle: null } : bot;
         if (remoteWasVisible && bot.hidden) {
           broadcast(
@@ -1950,6 +3197,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
             { remoteOverride: { kind: "bot.deleted", botId: bot.id }, remoteDeletedBotWasVisible: true },
           );
         } else broadcast({ kind: "bot", bot: botEvent });
+        if (displacedCoordinator) {
+          const displaced = store.bot(displacedCoordinator.id);
+          if (displaced) broadcast({ kind: "bot", bot: displaced });
+        }
         return json(res, 200, { bot });
       });
     }
@@ -1961,6 +3212,23 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       const operationId = /^[\w-]{1,100}$/.test(rawOperationId) ? rawOperationId : undefined;
       const result = await deleteBotTransactionally(bot.id, { operationId });
       return json(res, 200, { ok: true, removed: result.removed, computerCleanup: result.computerCleanup });
+    }
+
+    m = path.match(/^\/api\/bots\/([\w-]+)\/approval-rules$/);
+    if (m && method === "GET") {
+      if (surface !== "local") return json(res, 403, { error: "approval rule administration is local-only" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      return json(res, 200, { rules: approvalRules.list(bot.id) });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/approval-rules\/([\w-]+)$/);
+    if (m && method === "DELETE") {
+      if (surface !== "local") return json(res, 403, { error: "approval rule administration is local-only" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      return approvalRules.revoke(bot.id, m[2])
+        ? json(res, 200, { ok: true })
+        : json(res, 404, { error: "no such approval rule" });
     }
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/attachments$/);
@@ -2014,7 +3282,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       const start = Math.max(0, end - limit);
       const page = all.slice(start, end);
       const nextBefore = start > 0 && page.length ? page[0].id : null;
-      return json(res, 200, {
+      return json(res, 200, secretCatalog.redactValue({
         messages: surface === "remote"
           ? page.map((message) => publicMobileMessage(message, visibleRemoteBotIds()))
           : page,
@@ -2024,16 +3292,139 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
           hasMore: start > 0,
           nextBefore,
         },
+        activeLeafId: store.activeLeaf(bot.threadId),
+      }));
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/contexts$/);
+    if (m && method === "POST") {
+      const botId = m[1];
+      return await botResourceGate.run(botId, async () => {
+        const bot = store.bot(botId);
+        if (!bot || (surface === "remote" && bot.hidden)) return json(res, 404, { error: "no such bot" });
+        const body = await readBody(req);
+        if (store.bot(botId) !== bot || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        if (bot.busy) return json(res, 409, { error: "wait for or stop the active task before starting a new context" });
+        if (workspace.queuedMessageTasks(botId).length) {
+          return json(res, 409, { error: "send or cancel queued messages before starting a new context" });
+        }
+        const startedAt = Date.now();
+        const label = secretCatalog.redactText(String(body.label ?? "New task")
+          .replace(/[\u0000-\u001f\u007f]/g, "")
+          .trim()
+          .slice(0, 80)) || "New task";
+        const context = { id: newId(), label, startedAt };
+        const marker = store.appendMessage(bot.threadId, { role: "bot", kind: "context", context });
+        const patched = store.patchBot(bot.id, { context, resumeCursors: {}, rewound: false, unread: false });
+        broadcast({ kind: "message", threadId: bot.threadId, message: marker });
+        broadcast({ kind: "bot", bot: patched });
+        return json(res, 201, { context, message: surface === "remote" ? publicMobileMessage(marker, visibleRemoteBotIds()) : marker });
       });
     }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/messages$/);
     if (m && method === "POST") {
-      const body = await readBody(req);
-      const text = String(body.text ?? "").trim();
-      if (!text) return json(res, 400, { error: "text required" });
-      const attachmentIds = Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String).slice(0, 10) : [];
-      const attachments = workspace.attachmentsFor(m[1], attachmentIds);
-      await startTurn(m[1], text, { attachments, track: body.track !== false });
-      return json(res, 202, { ok: true });
+      const botId = m[1];
+      return await botResourceGate.run(botId, async () => {
+        const bot = store.bot(botId);
+        if (!bot || (surface === "remote" && bot.hidden)) return json(res, 404, { error: "no such bot" });
+        const body = await readBody(req);
+        if (store.bot(botId) !== bot || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        const text = secretCatalog.redactText(String(body.text ?? "").trim());
+        if (!text) return json(res, 400, { error: "text required" });
+        if (surface === "remote" && body.budget !== undefined) return json(res, 403, { error: "task budgets can only be configured locally" });
+        if (body.track === false && body.budget !== undefined) return json(res, 400, { error: "untracked messages cannot have a task budget" });
+        const budget = parseTaskBudget(body.budget);
+        const attachmentIds = Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String).slice(0, 10) : [];
+        const attachments = workspace.attachmentsFor(botId, attachmentIds);
+        if (bot.busy && body.track !== false) {
+          const queued = workspace.queuedMessageTasks(botId);
+          if (queued.length >= 25) return json(res, 429, { error: "this bot already has 25 queued messages" });
+          const task = workspace.createTask({
+            botId,
+            prompt: text,
+            source: "message",
+            attachmentIds: attachments.map((attachment) => attachment.id),
+            budget,
+          });
+          try {
+            const message = store.appendDetachedMessage(bot.threadId, {
+              role: "user",
+              kind: "text",
+              text,
+              delivery: "queued",
+              ...(attachments.length ? { attachments: attachments.map(publicAttachment) } : {}),
+            });
+            workspace.bindQueuedMessage(task.id, message.id);
+            broadcast({ kind: "message", threadId: bot.threadId, message });
+            broadcastWorkspace();
+            return json(res, 202, { ok: true, queued: true, taskId: task.id, message });
+          } catch (error) {
+            workspace.settleQueuedTask(task.id, "failed");
+            throw error;
+          }
+        }
+        await startTurn(botId, text, { attachments, track: body.track !== false, budget });
+        return json(res, 202, { ok: true, queued: false });
+      });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/messages\/([\w-]+)\/edit$/);
+    if (m && method === "POST") {
+      const botId = m[1];
+      const messageId = m[2];
+      return await botResourceGate.run(botId, async () => {
+        const bot = store.bot(botId);
+        if (!bot || (surface === "remote" && bot.hidden)) return json(res, 404, { error: "no such bot" });
+        const body = await readBody(req);
+        if (store.bot(botId) !== bot || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        if (bot.busy) return json(res, 409, { error: "stop the bot before editing a message" });
+        const text = String(body.text ?? "").trim();
+        if (!text) return json(res, 400, { error: "text required" });
+        const source = store.messagesFor(bot.threadId).find((message) => message.id === messageId);
+        if (!source || source.role !== "user" || source.kind !== "text") {
+          return json(res, 404, { error: "only user text messages can be edited" });
+        }
+        if (!registry.get(bot.modelSelection.instanceId)) {
+          return json(res, 409, { error: "provider unavailable" });
+        }
+        // Mark old provider sessions unusable before changing the transcript.
+        // If the thread write fails, a harmless replay remains safer than
+        // resuming a session whose branch is uncertain.
+        store.patchBot(bot.id, { rewound: true, resumeCursors: {} });
+        const message = store.branchMessage(bot.threadId, messageId, text);
+        if (!message) return json(res, 404, { error: "no such message" });
+        const attachmentIds = message.attachments?.map((attachment) => attachment.id) ?? [];
+        const attachments = workspace.attachmentsFor(bot.id, attachmentIds);
+        broadcast({ kind: "message", threadId: bot.threadId, message });
+        await startTurn(bot.id, text, { attachments, userMessage: message });
+        return json(res, 202, { ok: true, message, activeLeafId: message.id });
+      });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/active-branch$/);
+    if (m && method === "POST") {
+      const botId = m[1];
+      return await botResourceGate.run(botId, async () => {
+        const bot = store.bot(botId);
+        if (!bot || (surface === "remote" && bot.hidden)) return json(res, 404, { error: "no such bot" });
+        const body = await readBody(req);
+        if (store.bot(botId) !== bot || !isCanonicalBotOperation(bot)) {
+          return json(res, 409, { error: "the bot is being deleted" });
+        }
+        if (bot.busy) return json(res, 409, { error: "stop the bot before switching message versions" });
+        const messageId = String(body.messageId ?? "");
+        if (!store.messagesFor(bot.threadId).some((message) => message.id === messageId)) {
+          return json(res, 404, { error: "no such message" });
+        }
+        store.patchBot(bot.id, { rewound: true, resumeCursors: {} });
+        const activeLeafId = store.setActiveLeaf(bot.threadId, messageId);
+        if (!activeLeafId) return json(res, 404, { error: "no such message" });
+        broadcast({ kind: "thread", threadId: bot.threadId, activeLeafId });
+        return json(res, 200, { activeLeafId });
+      });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer-preview$/);
     if (m && method === "GET") {
@@ -2085,8 +3476,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       const instance = registry.get(bot.modelSelection.instanceId);
       if (!instance) return json(res, 409, { error: "provider unavailable" });
       if (body.rememberPolicy !== undefined) {
-        if (!["allow", "deny", "ask"].includes(body.rememberPolicy)) {
+        if (surface !== "local") {
+          return json(res, 403, { error: "durable approval rules can only be managed locally" });
+        }
+        if (!["allow", "deny"].includes(body.rememberPolicy)) {
           return json(res, 400, { error: "unknown approval policy" });
+        }
+        if (body.rememberPolicy !== body.behavior) {
+          return json(res, 400, { error: "remembered policy must match the current decision" });
         }
         if (requestMessage.card.requestType !== "permission") {
           return json(res, 400, { error: "approval policy applies only to permission requests" });
@@ -2107,11 +3504,36 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         // Persist a remembered policy only after the owning provider accepted
         // this exact pending request. A stale or forged request must never be
         // able to mutate future approval behavior.
+        let rememberedPolicy: boolean | undefined;
+        let rememberWarning: string | undefined;
         if (body.rememberPolicy !== undefined) {
-          const patched = store.patchBot(bot.id, { approvalPolicy: body.rememberPolicy });
-          if (patched) broadcast({ kind: "bot", bot: patched });
+          const scope = deriveApprovalScope(requestMessage.card.tool ?? "", requestMessage.card.subtitle);
+          const result = rememberApprovalAfterSettlement(approvalRules, bot.id, scope, body.rememberPolicy);
+          const remembered = result.rule;
+          rememberedPolicy = result.remembered;
+          rememberWarning = result.warning;
+          try {
+            const boundary = remembered ? approvalBoundary(remembered) : null;
+            const note = store.appendMessage(bot.threadId, {
+              role: "bot",
+              kind: "activity",
+              tool: {
+                name: remembered
+                  ? `Saved ${remembered.decision} rule for ${boundary}.`
+                  : rememberWarning!,
+                ok: Boolean(remembered),
+              },
+            });
+            broadcast({ kind: "message", threadId: bot.threadId, message: note });
+          } catch {
+            rememberWarning = rememberWarning ?? "The action was settled, but its local approval audit could not be saved.";
+          }
         }
-        return json(res, 200, { ok: true });
+        return json(res, 200, {
+          ok: true,
+          ...(rememberedPolicy !== undefined ? { remembered: rememberedPolicy } : {}),
+          ...(rememberWarning ? { warning: rememberWarning } : {}),
+        });
       } finally {
         approvalOperation.release();
       }
@@ -2145,7 +3567,241 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
 
     // ── provider instances (model picker) ──
     if (method === "GET" && path === "/api/instances") {
+      resetPathCache();
       return json(res, 200, { instances: await registry.describe() });
+    }
+
+    // ── privacy and data-flow inventory (same-host UI only) ──
+    // The response is assembled exclusively from fixed copy and booleans. It
+    // never serializes provider configuration, paths, prompts or identities.
+    if (method === "GET" && path === "/api/privacy/data-flows") {
+      if (surface !== "local") return json(res, 403, { error: "privacy inventory is local-only" });
+      res.setHeader("cache-control", "no-store");
+      resetPathCache();
+      const [providerSnapshots, vm] = await Promise.all([registry.describe(), localVmStatus()]);
+      const devices = pairing.list();
+      return json(res, 200, buildPrivacyInventory({
+        providerConfigs: persistedInstanceConfigs(cfg),
+        providerSnapshots,
+        boxConfigured: Boolean(cfg.box?.token),
+        composioConfigured: Boolean(cfg.composio?.key || cfg.composio?.apiKey),
+        expoPushEnabled: devices.some((device) => !device.revokedAt && device.pushEnabled),
+        pairedMobileEnabled: devices.some((device) => !device.revokedAt),
+        pairedMobileAvailable: Boolean(REMOTE),
+        remoteScreenPreviewEnabled: REMOTE_SCREEN_PREVIEW,
+        localMcpAvailable: mcpRegistry.list().length > 0,
+        localMcpEnabled: mcpRegistry.list().some((server) => server.enabled),
+        localVmAvailable: vm.daemonUp,
+        localVmEnabled: vm.ready,
+      }));
+    }
+
+    // ── optional Cua Local VM (local host only) ──
+    if (method === "GET" && path === "/api/local-vm") {
+      if (surface !== "local") return json(res, 403, { error: "Local VM management is local-only" });
+      const status = await localVmStatus();
+      return json(res, 200, { ...status, commands: localVmSetupCommands(status.runtime) });
+    }
+    m = path.match(/^\/api\/local-vm\/(pull|run|start|stop|remove)$/);
+    if (m && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "Local VM management is local-only" });
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const action = m[1] as LocalVmAction;
+      if (localVmLifecycleBusy) return json(res, 409, { error: "another Local VM setup action is still running" });
+      if (computerLeases.owner("vm") && ["run", "stop", "remove"].includes(action)) {
+        return json(res, 409, { error: "the Local VM is being used by an agent — stop that turn first" });
+      }
+      localVmLifecycleBusy = true;
+      try {
+        const status = await localVmAction(action);
+        return json(res, 200, { ...status, commands: localVmSetupCommands(status.runtime) });
+      } finally {
+        localVmLifecycleBusy = false;
+      }
+    }
+    if (method === "POST" && path === "/api/local-vm/screenshot") {
+      if (surface !== "local") return json(res, 403, { error: "Local VM management is local-only" });
+      return json(res, 200, { image: await localVmScreenshot() });
+    }
+
+    // ── fail-closed persistence diagnostics (same-host UI only) ─────
+    if (path === "/api/persistence/issues" && method === "GET") {
+      if (surface !== "local") return json(res, 403, { error: "persistence diagnostics are local-only" });
+      return json(res, 200, { issues: publicPersistenceIssues() });
+    }
+    m = path.match(/^\/api\/persistence\/issues\/(persistence-[a-f0-9]{20})\/reset$/);
+    if (m && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "persistence recovery is local-only" });
+      const body = await readBody(req);
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => key !== "confirmation") || typeof body.confirmation !== "string") {
+        return json(res, 400, { error: "exact filename confirmation is required" });
+      }
+      if (maintenanceMode || store.bots.some((bot) => bot.busy) || activeRunByThread.size || activeProviderTurnByThread.size || dispatchingRoutines || sweepingTemporaryBots) {
+        return json(res, 409, { error: "stop active agents before recovering persistence" });
+      }
+      maintenanceMode = true;
+      try {
+        const recovered = resetPersistenceIssue(m[1], body.confirmation);
+        return json(res, 200, { ...recovered, restartRequired: true });
+      } finally {
+        maintenanceMode = false;
+      }
+    }
+
+    // ── portable backup + atomic restore (same-host UI only) ─────────
+    // Credential registries, paired devices and provider/browser sessions are
+    // deliberately outside this archive. The paired-mobile allowlist never
+    // exposes these administrative endpoints.
+    if (method === "GET" && path === "/api/backup/export") {
+      if (surface !== "local") return json(res, 403, { error: "backup export is local-only" });
+      if (maintenanceMode || store.bots.some((bot) => bot.busy) || activeRunByThread.size || dispatchingRoutines || sweepingTemporaryBots) {
+        return json(res, 409, { error: "wait for active agents and maintenance work to finish before exporting" });
+      }
+      const botId = url.searchParams.get("botId")?.trim();
+      maintenanceMode = true;
+      try {
+        const exported = await backupService.export(botId ? { kind: "agent", botId } : { kind: "full" });
+        const stamp = exported.manifest.createdAt.replace(/[:.]/g, "-");
+        res.writeHead(200, {
+          ...SECURITY_HEADERS,
+          "content-type": "application/zip",
+          "content-length": String(exported.bytes.length),
+          "content-disposition": `attachment; filename="cumea-${botId ? `agent-${botId}-` : ""}${stamp}.zip"`,
+          "cache-control": "no-store",
+        });
+        return res.end(exported.bytes);
+      } finally {
+        maintenanceMode = false;
+        for (const bot of store.bots) scheduleNextQueuedTurn(bot.id);
+      }
+    }
+    if (method === "POST" && (path === "/api/backup/inspect" || path === "/api/backup/restore")) {
+      if (surface !== "local") return json(res, 403, { error: "backup restore is local-only" });
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/zip")) {
+        return json(res, 415, { error: "content-type must be application/zip" });
+      }
+      const archive = await readBytes(req, BACKUP_MAX_ARCHIVE_BYTES, "backup archive");
+      const dryRun = path === "/api/backup/inspect" || url.searchParams.get("dryRun") === "1";
+      if (dryRun) {
+        const inspected = await backupService.restore(archive, { dryRun: true });
+        return json(res, 200, inspected);
+      }
+      if (req.headers["x-cumea-restore-confirm"] !== "replace") {
+        return json(res, 400, { error: "restore confirmation header is required" });
+      }
+      if (
+        maintenanceMode || store.bots.some((bot) => bot.busy) || activeRunByThread.size || activeProviderTurnByThread.size ||
+        dispatchingRoutines || sweepingTemporaryBots || localVmLifecycleBusy
+      ) return json(res, 409, { error: "stop active agents and maintenance work before restoring" });
+      maintenanceMode = true;
+      const oldBots = store.bots.map((bot) => ({ id: bot.id, threadId: bot.threadId }));
+      for (const timer of queuedTurnTimers.values()) clearTimeout(timer);
+      queuedTurnTimers.clear();
+      for (const bot of oldBots) stopScreenPoller(bot.id);
+      fileCapabilities.clear();
+      try {
+        // No provider turn is active; flush the last bounded diagnostics now
+        // so no pending write can recreate excluded event history after swap.
+        bus.flushLog();
+        const restored = await backupService.restore(archive, {
+          reload: () => {
+            store.reloadFromDisk();
+            workspace.reloadFromDisk();
+            skillRegistry.reload();
+            assertBotSkillAssignments();
+            // Approval rules are intentionally excluded from portable
+            // backups. Reload the host-local file copied into staging; rules
+            // for restored identities are revoked immediately after swap.
+            approvalRules.reload();
+            Object.assign(cfg, loadConfig());
+            refreshSecretCatalog();
+          },
+        });
+        for (const restoredBotId of restored.manifest.scope.botIds) approvalRules.revokeBot(restoredBotId);
+        for (const bot of oldBots) if (!store.bot(bot.id)) broadcast({ kind: "bot.deleted", botId: bot.id }, { remoteDeletedBotWasVisible: true });
+        for (const bot of store.bots) broadcast({ kind: "bot", bot });
+        broadcastWorkspace();
+        broadcast({ kind: "config", ...configStatus() });
+        return json(res, 200, {
+          ...restored,
+          // The host path is intentionally not exposed through HTTP.
+          preRestoreBackup: restored.preRestoreBackup ? basename(restored.preRestoreBackup) : undefined,
+        });
+      } finally {
+        maintenanceMode = false;
+        for (const bot of store.bots) scheduleNextQueuedTurn(bot.id);
+      }
+    }
+
+    // ── assigned local MCP servers (stdio only, secrets write-only) ──
+    if (path === "/api/mcp-servers" && method === "GET") {
+      if (surface !== "local") return json(res, 403, { error: "MCP server management is local-only" });
+      return json(res, 200, { servers: mcpRegistry.list() });
+    }
+    if (path === "/api/mcp-servers" && method === "POST") {
+      if (surface !== "local") return json(res, 403, { error: "MCP server management is local-only" });
+      const server = mcpRegistry.create(await readBody(req));
+      refreshSecretCatalog();
+      return json(res, 201, { server });
+    }
+    m = path.match(/^\/api\/mcp-servers\/(mcp-[a-f0-9]{20})$/);
+    if (m && method === "PUT") {
+      if (surface !== "local") return json(res, 403, { error: "MCP server management is local-only" });
+      const server = mcpRegistry.update(m[1], await readBody(req));
+      if (server) refreshSecretCatalog();
+      return server ? json(res, 200, { server }) : json(res, 404, { error: "no such MCP server" });
+    }
+    if (m && method === "DELETE") {
+      if (surface !== "local") return json(res, 403, { error: "MCP server management is local-only" });
+      if (store.bots.some((bot) => bot.mcpServerIds?.includes(m![1]))) {
+        return json(res, 409, { error: "Unassign this MCP server from every agent before deleting it." });
+      }
+      const deleted = mcpRegistry.delete(m[1]);
+      if (deleted) refreshSecretCatalog();
+      return deleted ? json(res, 200, { ok: true }) : json(res, 404, { error: "no such MCP server" });
+    }
+
+    // ── local subscription/CLI harness profiles (ACP over stdio) ──
+    // This is intentionally absent from the paired-mobile allowlist. A profile
+    // can execute a local binary, so only the same-origin host UI may manage it.
+    if (method === "GET" && path === "/api/acp-profiles") {
+      if (surface !== "local") return json(res, 403, { error: "ACP profiles are local-only" });
+      return json(res, 200, { profiles: listCustomAcpProfiles() });
+    }
+    if (method === "POST" && path === "/api/acp-profiles") {
+      if (surface !== "local") return json(res, 403, { error: "ACP profiles are local-only" });
+      const profile = decodeCustomAcpProfileInput(await readBody(req));
+      const instances = persistedInstanceConfigs(cfg);
+      let id: string;
+      do id = `acp-${randomBytes(10).toString("hex")}`; while (instances[id]);
+      instances[id] = customAcpInstance(profile);
+      await persistCustomAcpInstances(instances);
+      return json(res, 201, { profile: publicCustomAcpProfile(id, instances[id]) });
+    }
+    m = path.match(/^\/api\/acp-profiles\/([\w-]+)$/);
+    if (m && method === "PUT") {
+      if (surface !== "local") return json(res, 403, { error: "ACP profiles are local-only" });
+      const instances = persistedInstanceConfigs(cfg);
+      const current = instances[m[1]];
+      if (!current || current.driver !== CUSTOM_ACP_DRIVER_KIND) return json(res, 404, { error: "no such ACP profile" });
+      const profile = decodeCustomAcpProfileInput(await readBody(req));
+      instances[m[1]] = customAcpInstance(profile);
+      await persistCustomAcpInstances(instances);
+      return json(res, 200, { profile: publicCustomAcpProfile(m[1], instances[m[1]]) });
+    }
+    if (m && method === "DELETE") {
+      if (surface !== "local") return json(res, 403, { error: "ACP profiles are local-only" });
+      const instances = persistedInstanceConfigs(cfg);
+      const current = instances[m[1]];
+      if (!current || current.driver !== CUSTOM_ACP_DRIVER_KIND) return json(res, 404, { error: "no such ACP profile" });
+      if (store.bots.some((bot) => bot.modelSelection.instanceId === m![1])) {
+        return json(res, 409, { error: "Move bots to another model before deleting this ACP profile." });
+      }
+      delete instances[m[1]];
+      await persistCustomAcpInstances(instances);
+      return json(res, 200, { ok: true });
     }
 
     // ── app config (API keys — never echoed back, booleans only) ──
@@ -2153,17 +3809,47 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       return json(res, 200, configStatus());
     }
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
+      if (surface !== "local") return json(res, 403, { error: "App configuration is local-only" });
       const body = await readBody(req);
       const patch: Record<string, object> = {};
       for (const key of ["xai", "composio", "box", "profile"] as const) {
         if (body[key] && typeof body[key] === "object") patch[key] = body[key];
       }
+      if (patch.profile) patch.profile = secretCatalog.redactValue(patch.profile) as object;
       if (!Object.keys(patch).length) return json(res, 400, { error: "nothing to save" });
+      if (Object.prototype.hasOwnProperty.call(patch, "box")) {
+        const requested = patch.box as { token?: unknown; autoSleepMinutes?: unknown };
+        const nextBox: { token?: string; autoSleepMinutes?: number | false } = {};
+        if (Object.prototype.hasOwnProperty.call(requested, "token")) {
+          if (typeof requested.token !== "string") return json(res, 400, { error: "A Box API token is required" });
+          const verification = await box.verifyBoxToken(requested.token);
+          if (!verification.ok) {
+            return json(res, verification.status, { error: verification.message, code: verification.code });
+          }
+          nextBox.token = requested.token.trim();
+        }
+        if (Object.prototype.hasOwnProperty.call(requested, "autoSleepMinutes")) {
+          const minutes = requested.autoSleepMinutes;
+          if (minutes !== false && (!Number.isInteger(minutes) || Number(minutes) < 1 || Number(minutes) > 1_440)) {
+            return json(res, 400, { error: "Box auto-sleep must be off or between 1 and 1440 minutes" });
+          }
+          nextBox.autoSleepMinutes = minutes as number | false;
+        }
+        if (!Object.keys(nextBox).length) return json(res, 400, { error: "A Box token or auto-sleep setting is required" });
+        patch.box = nextBox;
+      }
       saveConfig(patch);
       Object.assign(cfg, loadConfig());
+      if (Object.prototype.hasOwnProperty.call(patch, "box")) {
+        boxIdleSleep.reconcile(store.bots.filter((bot) => bot.computer === "cloud").map((bot) => bot.id));
+      }
+      refreshSecretCatalog();
       // provider keys change the fleet; a profile edit must not kill
       // in-flight turns with a pointless reload
-      if (Object.keys(patch).some((k) => k !== "profile")) await reloadProviders();
+      const providerConfigChanged = Object.prototype.hasOwnProperty.call(patch, "xai") ||
+        Object.prototype.hasOwnProperty.call(patch, "composio") ||
+        (Object.prototype.hasOwnProperty.call(patch, "box") && Object.prototype.hasOwnProperty.call(patch.box, "token"));
+      if (providerConfigChanged) await reloadProviders();
       const status = configStatus();
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
@@ -2172,16 +3858,16 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
     // ── connectors (Composio) ──
     if (method === "GET" && path === "/api/connectors/catalog") {
       const { cards, source } = await composio.listToolkits(cfg);
-      return json(res, 200, { configured: Boolean(cfg.composio?.key), source, cards });
+      return json(res, 200, secretCatalog.redactValue({ configured: Boolean(cfg.composio?.key), source, cards }));
     }
     if (method === "GET" && path === "/api/connectors") {
       const services = (url.searchParams.get("services") ?? "").split(",").filter(Boolean);
       if (!cfg.composio?.key) return json(res, 200, { configured: false, services: {} });
       const status = await composio.connectionStatus(cfg, services.length ? services : composio.CURATED_SLUGS);
-      return json(res, 200, { configured: true, services: status });
+      return json(res, 200, secretCatalog.redactValue({ configured: true, services: status }));
     }
     m = path.match(/^\/api\/connectors\/([\w-]+)\/authorize$/);
-    if (m && method === "POST") return json(res, 200, await composio.authorizeService(cfg, m[1]));
+    if (m && method === "POST") return json(res, 200, secretCatalog.redactValue(await composio.authorizeService(cfg, m[1])));
     m = path.match(/^\/api\/connectors\/([\w-]+)$/);
     if (m && method === "DELETE") return json(res, 200, await composio.removeService(cfg, m[1]));
 
@@ -2196,7 +3882,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         if (store.bot(bot.id) !== bot || !isCanonicalBotOperation(bot)) {
           return json(res, 409, { error: "the bot is being deleted" });
         }
-        return json(res, 200, status);
+        return json(res, 200, {
+          ...status,
+          ...(surface === "local" ? { autoSleep: boxIdleSleep.status(bot.id) } : {}),
+        });
       });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/(provision|join|sleep|exec|screenshot)$/);
@@ -2205,6 +3894,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       const bot = store.bot(botId);
       if (!bot) return json(res, 404, { error: "no such bot" });
       if (m[2] === "provision") {
+        if (bot.computer === "cloud") boxIdleSleep.touch(bot.id);
+        await boxIdleSleep.waitForPendingSleep(bot.id);
         const operation = botResourceGate.beginDetachedOperation(bot.id);
         let provisionedBoxId: string | undefined;
         let cleanupAttempted = false;
@@ -2214,13 +3905,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
           if (provisionedBoxId) {
             const cleanup = await box.archiveBoxByIdForDeletion(cfg, provisionedBoxId);
             if (cleanup.outcome === "warning") {
-              console.warn(`cloud computer cleanup warning during late provisioning for bot ${bot.id}: ${cleanup.warning}`);
+              console.warn("cloud computer cleanup warning during late provisioning");
             }
           } else await archiveBotComputerForDeletion(bot.id, "late provisioning");
         };
         try {
           if (!isCanonicalBotOperation(bot, operation)) throw Object.assign(new Error("the bot is being deleted"), { status: 409 });
           const result = await box.provisionBox(cfg, bot.id, bot.name);
+          if (bot.computer === "cloud") boxIdleSleep.touch(bot.id);
           provisionedBoxId = result.boxId;
           if (!isCanonicalBotOperation(bot, operation)) {
             await cleanupStaleProvision();
@@ -2237,6 +3929,29 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
           operation.release();
         }
       }
+      if (m[2] === "sleep") {
+        boxIdleSleep.beginManualSleep(bot.id);
+        try {
+          const result = await botResourceGate.run(bot.id, async () => {
+            if (store.bot(bot.id) !== bot || !isCanonicalBotOperation(bot)) {
+              throw Object.assign(new Error("the bot is being deleted"), { status: 409 });
+            }
+            return await box.sleepBox(cfg, bot.id);
+          });
+          if (store.bot(bot.id) !== bot || !isCanonicalBotOperation(bot)) {
+            boxIdleSleep.cancel(bot.id);
+            throw Object.assign(new Error("the bot is being deleted"), { status: 409 });
+          }
+          boxIdleSleep.markManualSleepResult(bot.id, true);
+          return json(res, 200, { ...result, autoSleep: boxIdleSleep.status(bot.id) });
+        } catch (error) {
+          if (store.bot(bot.id) === bot && isCanonicalBotOperation(bot)) boxIdleSleep.markManualSleepResult(bot.id, false);
+          else boxIdleSleep.cancel(bot.id);
+          throw error;
+        }
+      }
+      if (bot.computer === "cloud") boxIdleSleep.touch(bot.id);
+      await boxIdleSleep.waitForPendingSleep(bot.id);
       return await botResourceGate.run(bot.id, async () => {
         if (store.bot(bot.id) !== bot || !isCanonicalBotOperation(bot)) {
           return json(res, 409, { error: "the bot is being deleted" });
@@ -2247,9 +3962,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         }
         const result = m![2] === "join"
           ? await box.joinBox(cfg, bot.id)
-          : m![2] === "sleep"
-            ? await box.sleepBox(cfg, bot.id)
-            : m![2] === "exec"
+          : m![2] === "exec"
               ? await box.execOnBox(cfg, bot.id, String(body?.command ?? ""))
               : await box.screenshotBox(cfg, bot.id);
         // DELETE cannot enter while this active lease is held. Still resolve
@@ -2257,42 +3970,39 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
         if (store.bot(bot.id) !== bot || !isCanonicalBotOperation(bot)) {
           return json(res, 409, { error: "the bot is being deleted" });
         }
-        return json(res, 200, result);
+        if (bot.computer === "cloud") boxIdleSleep.touch(bot.id);
+        return json(res, 200, { ...result, autoSleep: boxIdleSleep.status(bot.id) });
       });
     }
 
     // packaged app: the server serves the built UI too (window → :8799 for
     // everything, no dev proxy to die). CUMEA_STATIC_DIR is set by Electron.
     if (method === "GET" && !path.startsWith("/api/") && STATIC_DIR) {
-      const root = resolve(STATIC_DIR);
-      const candidate = path === "/" ? "/index.html" : path;
-      const file = resolve(root, `.${candidate}`);
-      if (file !== root && !file.startsWith(`${root}${sep}`)) return json(res, 404, { error: "not found" });
-      try {
-        const data = readFileSync(file);
+      const candidate = decodeStaticRequestPath(req.url ?? "");
+      if (!candidate) return json(res, 404, { error: "not found" });
+      const file = readStaticFile(STATIC_DIR, candidate);
+      if (file) {
         const headers: Record<string, string> = {
           ...SECURITY_HEADERS,
-          "content-type": MIME[extname(file)] ?? "application/octet-stream",
+          "content-type": MIME[extname(file.canonicalPath)] ?? "application/octet-stream",
         };
-        if (extname(file) === ".html") headers["content-security-policy"] = DOCUMENT_CSP;
+        if (extname(file.canonicalPath) === ".html") headers["content-security-policy"] = DOCUMENT_CSP;
         res.writeHead(200, headers);
-        return res.end(data);
-      } catch {
-        // SPA fallback
-        try {
-          const data = readFileSync(join(STATIC_DIR, "index.html"));
-          res.writeHead(200, { ...SECURITY_HEADERS, "content-type": "text/html", "content-security-policy": DOCUMENT_CSP });
-          return res.end(data);
-        } catch {
-          /* fall through to 404 */
-        }
+        return res.end(file.bytes);
+      }
+      // A valid client-side route may fall back to the SPA. Invalid encodings
+      // and traversal forms returned above never receive even index bytes.
+      const fallback = readStaticFile(STATIC_DIR, "/index.html");
+      if (fallback) {
+        res.writeHead(200, { ...SECURITY_HEADERS, "content-type": "text/html", "content-security-policy": DOCUMENT_CSP });
+        return res.end(fallback.bytes);
       }
     }
 
     return json(res, 404, { error: `no route: ${method} ${path}` });
   } catch (e) {
     const status = (e as any)?.status ?? 500;
-    const message = e instanceof Error ? e.message : String(e);
+    const message = secretCatalog.safeError(e);
     return json(res, status, { error: surface === "remote" ? publicRemoteError(status, message) : message });
   }
 }
@@ -2309,14 +4019,18 @@ remoteServer?.listen(REMOTE!.port, REMOTE!.bind, () => {
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
+    boxIdleSleep.shutdown();
     clearInterval(routineTimer);
     clearTimeout(initialRoutineTimer);
     clearInterval(temporaryBotTimer);
     clearTimeout(initialTemporaryBotTimer);
+    clearTimeout(initialQueuedTurnTimer);
+    for (const timer of queuedTurnTimers.values()) clearTimeout(timer);
+    queuedTurnTimers.clear();
     try {
       bus.flushLog();
     } catch (error) {
-      console.error("event log shutdown flush failed", error);
+      console.error("event log shutdown flush failed");
     } finally {
       remoteServer?.close();
       server.close();

@@ -13,10 +13,11 @@
 // is never a security contract). session/load REPLAYS history as ordinary
 // session/update notifications, so updates are double-gated: nothing emits
 // before the prompt is sent, and `_meta.isReplay` updates are dropped.
-import { spawn, execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { newEventId, newId } from "../../contracts.js";
 import { augmentedPath } from "../../env-path.js";
+import { minimalProviderEnvironment, stripManagedCredentials } from "../../provider-environment.js";
+import { execCli, killCliTree, spawnCli } from "../../procs.js";
 import { appendNative } from "../native.js";
 const INIT_TIMEOUT = 20_000;
 const NEW_SESSION_TIMEOUT = 30_000;
@@ -34,16 +35,21 @@ function decodeAcpConfig(defaultCli) {
 export function createAcpDriver(support) {
     const DRIVER_KIND = support.driverKind;
     const SOURCE = support.nativeSource;
-    const decodeConfig = decodeAcpConfig(support.defaultCli);
+    const decodeConfig = support.decodeConfig ?? decodeAcpConfig(support.defaultCli);
+    const driverModels = typeof support.models === "function"
+        ? (support.fallbackModels ?? { default: "default", options: [{ id: "default", label: "Default" }] })
+        : support.models;
     const DENY_TIMEOUT_NOTE = "Cumea: nobody answered this permission request in time. Skip this action and finish what you can without it.";
     return {
         driverKind: DRIVER_KIND,
         metadata: { displayName: support.displayName, supportsMultipleInstances: true },
-        models: support.models,
+        install: support.install,
+        models: driverModels,
         decodeConfig,
-        defaultConfig: () => decodeConfig({}),
+        defaultConfig: () => support.defaultConfig?.() ?? decodeConfig({}),
         async create(input) {
             const { instanceId, config } = input;
+            const models = typeof support.models === "function" ? support.models(config) : support.models;
             const listeners = new Set();
             const active = new Map();
             const emit = (event) => {
@@ -58,12 +64,14 @@ export function createAcpDriver(support) {
                 createdAt: new Date().toISOString(),
             });
             const childEnv = () => {
+                const minimal = support.environmentPolicy === "minimal";
                 const env = {
-                    ...process.env,
-                    ...input.environment,
+                    ...(minimal ? minimalProviderEnvironment(process.env) : process.env),
+                    ...(minimal ? {} : input.environment),
                     PATH: augmentedPath(),
                 };
-                support.transformEnv?.(env);
+                stripManagedCredentials(env);
+                support.transformEnv?.(env, config);
                 return env;
             };
             // ACP session mcpServers: stdio is the baseline every ACP agent
@@ -90,6 +98,23 @@ export function createAcpDriver(support) {
                         env: Object.entries(agents.env).map(([name, value]) => ({ name, value: String(value) })),
                     });
                 }
+                const memory = turn.integrations?.memory;
+                if (memory) {
+                    servers.push({
+                        name: "memory",
+                        command: memory.command,
+                        args: memory.args,
+                        env: Object.entries(memory.env).map(([name, value]) => ({ name, value: String(value) })),
+                    });
+                }
+                for (const server of turn.integrations?.mcpServers ?? []) {
+                    servers.push({
+                        name: server.name,
+                        command: server.command,
+                        args: server.args,
+                        env: Object.entries(server.env).map(([name, value]) => ({ name, value: String(value) })),
+                    });
+                }
                 return servers;
             };
             const sendTurn = async (turn) => {
@@ -100,11 +125,10 @@ export function createAcpDriver(support) {
                 const cwd = turn.cwd ?? config.workspace ?? homedir();
                 const env = childEnv();
                 const mcpServers = acpMcpServers(turn);
-                const child = spawn(config.cli, support.spawnArgs(config, turn), {
+                const child = spawnCli(config.cli, support.spawnArgs(config, turn), {
                     cwd,
                     env,
                     stdio: ["pipe", "pipe", "pipe"],
-                    detached: true,
                 });
                 const state = { settled: false, promptSent: false, text: "" };
                 const asks = new Map();
@@ -133,15 +157,7 @@ export function createAcpDriver(support) {
                     send({ jsonrpc: "2.0", id, method, params });
                 });
                 const stop = () => {
-                    try {
-                        process.kill(-child.pid, "SIGTERM");
-                    }
-                    catch {
-                        try {
-                            child.kill("SIGTERM");
-                        }
-                        catch { }
-                    }
+                    killCliTree(child);
                 };
                 const settle = (ok, stopReason) => {
                     if (state.settled)
@@ -350,18 +366,21 @@ export function createAcpDriver(support) {
                     try {
                         const init = await request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } }, INIT_TIMEOUT);
                         const methods = Array.isArray(init?.authMethods) ? init.authMethods : [];
-                        const methodId = support.pickAuthMethod(methods);
+                        const methodId = support.pickAuthMethod(methods, config);
+                        const authFailure = typeof support.authFailure === "function"
+                            ? support.authFailure(config)
+                            : support.authFailure;
                         if (methodId) {
                             try {
                                 await request("authenticate", { methodId }, INIT_TIMEOUT);
                             }
                             catch {
-                                if (support.authFailure === "fail")
+                                if (authFailure === "fail")
                                     throw new Error(support.loginNote);
                                 // else: proceed on an ambient login
                             }
                         }
-                        else if (support.authFailure === "fail") {
+                        else if (authFailure === "fail") {
                             throw new Error(support.loginNote);
                         }
                         const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
@@ -426,22 +445,34 @@ export function createAcpDriver(support) {
             const snapshot = async () => {
                 const env = childEnv();
                 const version = await new Promise((resolve) => {
-                    execFile(config.cli, ["--version"], { timeout: 8000, env }, (err, stdout) => resolve(err ? null : stdout.trim()));
+                    execCli(config.cli, support.versionArgs?.(config) ?? ["--version"], { timeout: 8000, env }, (err, stdout) => resolve(err ? null : stdout.trim()));
                 });
                 if (!version)
                     return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-                return { state: "available", version, authenticated: support.isAuthenticated(env) };
+                const authenticated = support.isAuthenticated(env, config);
+                return {
+                    state: "available",
+                    version,
+                    ...(typeof authenticated === "boolean" ? { authenticated } : {}),
+                };
             };
             return {
                 instanceId,
                 driverKind: DRIVER_KIND,
                 displayName: input.displayName,
                 enabled: input.enabled,
-                models: support.models,
+                models,
                 snapshot,
                 adapter: {
                     provider: DRIVER_KIND,
-                    capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true, localComputerMcp: true },
+                    capabilities: {
+                        sessionModelSwitch: "unsupported",
+                        sessionResume: true,
+                        agentsMcp: true,
+                        localComputerMcp: true,
+                        customMcp: true,
+                        memoryMcp: true,
+                    },
                     sendTurn,
                     interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
                     respondToRequest: async (threadId, requestId, decision) => {

@@ -33,6 +33,16 @@ const support: AcpSupport = {
   defaultCli: "gemini",
   nativeSource: "gemini.acp",
   loginNote: "Gemini CLI is not signed in — run `gemini` once to log in, or set GEMINI_API_KEY",
+  install: {
+    command: {
+      darwin: "npm install -g @google/gemini-cli",
+      linux: "npm install -g @google/gemini-cli",
+      win32: "npm install -g @google/gemini-cli",
+    },
+    docsUrl: "https://github.com/google-gemini/gemini-cli",
+    signInCommand: "gemini",
+    needsNode: true,
+  },
 
   spawnArgs: (_config, turn) => ["--experimental-acp", ...(turn.model ? ["-m", turn.model] : [])],
 

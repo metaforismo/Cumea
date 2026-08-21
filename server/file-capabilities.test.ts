@@ -50,17 +50,34 @@ describe("file capability boundary", () => {
 
   it("expires tokens and revokes every capability owned by a deleted bot", () => {
     let now = 100;
-    const store = new capabilities.FileCapabilityStore(() => now);
+    let changes = 0;
+    const store = new capabilities.FileCapabilityStore(() => now, () => changes++);
     const one = store.issue("bot-expiry", { name: "one.md", source: "local", bytes: Buffer.from("one") });
     const two = store.issue("bot-expiry", { name: "two.md", source: "local", bytes: Buffer.from("two") });
+    expect(store.secretValues()).toEqual([one.token, two.token]);
     expect(store.get(one.token)).not.toBeNull();
     store.revokeBot("bot-expiry");
     expect(store.get(one.token)).toBeNull();
     expect(store.get(two.token)).toBeNull();
+    expect(changes).toBeGreaterThanOrEqual(4);
 
     const expiring = store.issue("bot-expiry", { name: "three.md", source: "local", bytes: Buffer.from("three") });
     now += capabilities.FILE_CAPABILITY_TTL_MS;
     expect(store.get(expiring.token)).toBeNull();
+  });
+
+  it("only enables HTML for an explicitly resolved generated workspace artifact", () => {
+    const store = new capabilities.FileCapabilityStore(() => 100);
+    const html = {
+      name: "artifact.html",
+      source: "local" as const,
+      bytes: Buffer.from("<!doctype html><html><body>Generated</body></html>"),
+    };
+    expect(() => store.issue("bot-html", html)).toThrow(/generated workspace artifacts/i);
+    expect(store.issue("bot-html", html, { allowHtml: true })).toMatchObject({
+      kind: "html",
+      mime: "text/html; charset=utf-8",
+    });
   });
 
   it("quarantines and rolls back a whole workspace without following inner symlinks", () => {

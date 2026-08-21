@@ -5,24 +5,25 @@
   --animate-panel-in: panel-in 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   --animate-pop-in: pop-in 0.2s cubic-bezier(0.22, 1, 0.36, 1);
 
-  --color-app: #070707;
-  --color-panel: #111111;
-  --color-raised: #2f2f2f;
-  --color-raised-hover: #3d3d3d;
-  --color-card: #262626;
-  --color-inset: #191919;
-  --color-hairline: #333333;
-  --color-ink: #fcfcfc;
-  --color-ink-secondary: #fcfcfc99;
+  --color-app: #202020;
+  --color-panel: #101010;
+  --color-raised: #303030;
+  --color-raised-hover: #3b3b3b;
+  --color-card: #303030;
+  --color-inset: #1a1a1a;
+  --color-hairline: #353535;
+  --color-ink: #f2f2f2;
+  --color-ink-secondary: #f2f2f294;
   --color-accent: #1084fe;
   --color-accent-border: #459ffe;
-  --color-bubble-user: #5a5a5a;
+  --color-bubble-user: #ecece8;
+  --color-bubble-user-text: #141414;
   --color-success: #38d591;
   --color-danger: #ff5667;
   --color-warning: #ff9800;
 
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text",
-    "Segoe UI", system-ui, sans-serif;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI", "Helvetica Neue", Arial, sans-serif;
 
   --radius-lg: 6px;
   --radius-xl: 10px;
@@ -32,6 +33,7 @@ html,
 body,
 #root {
   height: 100%;
+  color-scheme: dark;
 }
 
 body {
@@ -40,6 +42,95 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
+}
+
+/* Conversation typography is measured from the live Grok Bot demo, then
+   tightened for Cumea's denser agent workspace. Neutral contrast and a modest
+   radius make long work reports read like messages instead of dashboard cards. */
+.chat-bubble {
+  max-width: min(640px, 92%);
+  border-radius: 18px;
+  padding: 9px 13px;
+  font-size: 15.5px;
+  font-weight: 400;
+  line-height: 22px;
+  letter-spacing: -0.22px;
+  overflow-wrap: anywhere;
+}
+
+.chat-bubble--assistant {
+  background: #303030;
+  color: var(--color-ink);
+}
+
+.chat-bubble--user {
+  background: var(--color-bubble-user);
+  color: var(--color-bubble-user-text);
+}
+
+.chat-bubble strong {
+  font-weight: 650;
+}
+
+.chat-bubble--streaming {
+  min-width: 42px;
+}
+
+.chat-stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 13px;
+  margin-left: 3px;
+  border-radius: 999px;
+  background: var(--color-ink-secondary);
+  vertical-align: -2px;
+  animation: chat-caret 900ms ease-in-out infinite;
+}
+
+.chat-date-separator {
+  padding: 8px 0 4px;
+  color: var(--color-ink-secondary);
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: -0.08px;
+  text-align: center;
+}
+
+.chat-context-separator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0 6px;
+  color: var(--color-ink-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.chat-context-separator::before,
+.chat-context-separator::after {
+  height: 1px;
+  flex: 1;
+  background: color-mix(in srgb, var(--color-hairline) 58%, transparent);
+  content: "";
+}
+
+@keyframes chat-caret {
+  0%, 100% { opacity: 0.28; }
+  50% { opacity: 0.9; }
+}
+
+.chat-thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-ink-secondary);
+  animation: chat-thinking-dot 1.25s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+@keyframes chat-thinking-dot {
+  0%, 60%, 100% { opacity: 0.32; transform: scale(0.82); }
+  28% { opacity: 0.9; transform: scale(1); }
 }
 
 ::-webkit-scrollbar {
@@ -515,6 +606,11 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .chat-stream-caret,
+  .chat-thinking-dot {
+    animation: none !important;
+  }
+
   .cumea-motion *,
   .cumea-motion {
     animation: none !important;
@@ -527,9 +623,234 @@ body {
   .cumea-eyes { transform: none; }
 }
 
-:where(button, a, summary, input, textarea, select):focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--color-accent, #6ea8ff) 75%, white);
+:where(button, a, summary, select):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-ink) 72%, transparent);
   outline-offset: 2px;
+}
+
+.composer-shell {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.025), 0 8px 30px rgb(0 0 0 / 0.08);
+  transition: border-color 120ms ease-out, background-color 120ms ease-out, box-shadow 120ms ease-out;
+}
+
+.composer-shell:focus-within {
+  border-color: rgb(242 242 242 / 0.22);
+  background: rgb(52 52 52 / 0.78);
+  box-shadow: inset 0 0 0 1px rgb(242 242 242 / 0.05), 0 10px 32px rgb(0 0 0 / 0.1);
+}
+
+.composer-input:focus-visible {
+  outline: none;
+}
+
+.composer-icon-button,
+.composer-stop-button,
+.composer-send-button {
+  display: flex;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: var(--color-ink-secondary);
+  transition: color 100ms ease-out, background-color 100ms ease-out, opacity 100ms ease-out;
+}
+
+.composer-icon-button:hover { background: rgb(255 255 255 / 0.065); color: var(--color-ink); }
+.composer-icon-button:disabled { cursor: not-allowed; opacity: 0.42; }
+.composer-send-button { background: var(--color-ink); color: var(--color-app); }
+.composer-send-button:hover { opacity: 0.86; }
+.composer-send-button:disabled { cursor: not-allowed; opacity: 0.45; }
+.composer-stop-button { background: rgb(255 86 103 / 0.11); color: #ff7c89; }
+.composer-stop-button:hover { background: rgb(255 86 103 / 0.18); color: #ff9aa4; }
+
+.composer-add-menu {
+  box-shadow: 0 18px 55px rgb(0 0 0 / 0.45), 0 2px 8px rgb(0 0 0 / 0.3);
+}
+
+.composer-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 10px;
+  border-radius: 10px;
+  padding: 10px;
+  text-align: left;
+  transition: background-color 100ms ease-out, opacity 100ms ease-out;
+}
+
+.composer-menu-item:hover { background: rgb(255 255 255 / 0.065); }
+.composer-menu-item:disabled { cursor: not-allowed; opacity: 0.38; }
+.composer-menu-icon { display: flex; width: 28px; height: 28px; flex: 0 0 auto; align-items: center; justify-content: center; border-radius: 8px; background: var(--color-raised); color: var(--color-ink-secondary); }
+
+/* First run is the one product surface where expressive motion earns its
+   place. The field uses Cumea's MIT-attributed Mote geometry; transforms are
+   intentionally unsynchronised and disappear under Reduce Motion. */
+.onboarding-scene {
+  isolation: isolate;
+  background: #151515;
+}
+
+.onboarding-vignette {
+  z-index: 2;
+  background: radial-gradient(circle at 50% 48%, rgb(21 21 21 / 0.1) 0 25%, rgb(21 21 21 / 0.3) 58%, rgb(21 21 21 / 0.2) 94%);
+}
+
+.onboarding-mote {
+  animation: onboarding-float 12s ease-in-out infinite alternate;
+  filter: saturate(1.08);
+  opacity: 0.96;
+  will-change: transform;
+}
+
+.onboarding-intro {
+  text-shadow: 0 2px 20px rgb(0 0 0 / 0.22);
+}
+
+.onboarding-card {
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: 22px;
+  background: rgb(15 15 15 / 0.96);
+  padding: 28px;
+  box-shadow: 0 28px 90px rgb(0 0 0 / 0.46), 0 2px 10px rgb(0 0 0 / 0.35), inset 0 1px 0 rgb(255 255 255 / 0.035);
+}
+
+.onboarding-primary,
+.settings-primary {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 10px;
+  background: var(--color-ink);
+  padding: 0 18px;
+  color: var(--color-app);
+  font-size: 13.5px;
+  font-weight: 600;
+  transition: opacity 100ms ease-out, transform 100ms ease-out;
+}
+
+.onboarding-primary:hover,
+.settings-primary:hover { opacity: 0.88; }
+.onboarding-primary:active,
+.settings-primary:active { transform: scale(0.985); }
+.onboarding-primary:disabled,
+.settings-primary:disabled { cursor: not-allowed; opacity: 0.35; }
+
+.onboarding-icon-button,
+.settings-icon-button {
+  display: flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: var(--color-ink-secondary);
+  transition: color 100ms ease-out, background-color 100ms ease-out;
+}
+
+.onboarding-icon-button:hover,
+.settings-icon-button:hover { background: rgb(255 255 255 / 0.065); color: var(--color-ink); }
+
+.onboarding-input,
+.settings-input {
+  width: 100%;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 9px;
+  background: #1b1b1b;
+  padding: 10px 12px;
+  color: var(--color-ink);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 120ms ease-out, box-shadow 120ms ease-out, background-color 120ms ease-out;
+}
+
+.onboarding-input::placeholder,
+.settings-input::placeholder { color: rgb(242 242 242 / 0.43); }
+.onboarding-input:focus-visible,
+.settings-input:focus-visible { border-color: rgb(242 242 242 / 0.3); background: #1e1e1e; box-shadow: 0 0 0 3px rgb(242 242 242 / 0.07); }
+
+.onboarding-permission-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid rgb(255 255 255 / 0.075);
+  padding: 16px 2px;
+}
+.onboarding-permission-row:first-child { border-top: 0; padding-top: 4px; }
+.onboarding-permission-icon { display: flex; width: 36px; height: 36px; flex: 0 0 auto; align-items: center; justify-content: center; border-radius: 10px; background: #242424; color: var(--color-ink-secondary); }
+.onboarding-secondary { min-height: 32px; flex: 0 0 auto; border-radius: 8px; background: #292929; padding: 0 12px; color: var(--color-ink); font-size: 12px; font-weight: 500; transition: background-color 100ms ease-out, opacity 100ms ease-out; }
+.onboarding-secondary:hover { background: #343434; }
+.onboarding-secondary:disabled { cursor: not-allowed; opacity: 0.4; }
+
+@keyframes onboarding-float {
+  0% { transform: translate3d(-3px, -5px, 0) rotate(-2deg); }
+  50% { transform: translate3d(4px, 8px, 0) rotate(2deg); }
+  100% { transform: translate3d(-1px, 14px, 0) rotate(-1deg); }
+}
+
+.settings-modal-backdrop {
+  background: rgb(0 0 0 / 0.68);
+  backdrop-filter: blur(8px);
+  animation: settings-backdrop-in 160ms ease-out both;
+}
+
+.settings-modal {
+  border: 1px solid rgb(255 255 255 / 0.095);
+  border-radius: 18px;
+  background: var(--color-app);
+  box-shadow: 0 34px 100px rgb(0 0 0 / 0.58), 0 2px 12px rgb(0 0 0 / 0.38), inset 0 1px 0 rgb(255 255 255 / 0.035);
+  animation: settings-modal-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.settings-nav-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  border-radius: 9px;
+  padding: 9px 10px;
+  color: var(--color-ink-secondary);
+  font-size: 12.5px;
+  text-align: left;
+  transition: color 100ms ease-out, background-color 100ms ease-out;
+}
+.settings-nav-item:hover { background: rgb(255 255 255 / 0.05); color: var(--color-ink); }
+.settings-nav-item--active { background: rgb(255 255 255 / 0.085); color: var(--color-ink); }
+
+.settings-card {
+  border: 1px solid rgb(255 255 255 / 0.07);
+  border-radius: 12px;
+  background: #292929;
+  padding: 16px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.025);
+  transition: background-color 100ms ease-out;
+}
+
+@keyframes settings-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes settings-modal-in { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+@media (max-width: 760px) {
+  .work-panel {
+    position: absolute;
+    inset-block: 0;
+    right: 0;
+    z-index: 30;
+    width: min(100vw, 430px);
+  }
+  .settings-modal { width: calc(100vw - 24px); height: calc(100vh - 24px); }
+  .settings-modal > aside { width: 180px; }
+  .onboarding-mote { opacity: 0.68; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-mote,
+  .settings-modal-backdrop,
+  .settings-modal { animation: none !important; }
+  .onboarding-mote { will-change: auto; }
 }
 
 /* Mote Studio avatar layer. The shape geometry is MIT-licensed; animation is

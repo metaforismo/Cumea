@@ -9,7 +9,6 @@
 //
 // resumeCursor is the codex thread id; a later turn tries thread/resume
 // and falls back to a fresh thread/start.
-import { spawn, execFile } from "node:child_process";
 import { homedir } from "node:os";
 
 import type {
@@ -23,9 +22,25 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { augmentedPath } from "../env-path.ts";
+import { stripManagedCredentials } from "../provider-environment.ts";
+import { execCli, killCliTree, spawnCli } from "../procs.ts";
 import { appendNative } from "./native.ts";
 
 const DRIVER_KIND = "codex";
+
+function codexCliEnv(): Record<string, string | undefined> {
+  const environment: Record<string, string | undefined> = {
+    ...process.env,
+    PATH: augmentedPath(),
+    NPM_CONFIG_LOGLEVEL: "error",
+  };
+  // The CLI owns its ChatGPT subscription login. API and integration
+  // credentials belong to other adapters and must not cross this process
+  // boundary.
+  delete environment.OPENAI_API_KEY;
+  stripManagedCredentials(environment);
+  return environment;
+}
 
 // catalog ported from upstream packages/contracts/src/model.ts
 const MODELS = {
@@ -67,6 +82,16 @@ const DENY_TIMEOUT_NOTE =
 export const CodexDriver: ProviderDriver<CodexConfig> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "Codex", supportsMultipleInstances: true },
+  install: {
+    command: {
+      darwin: "npm install -g @openai/codex",
+      linux: "npm install -g @openai/codex",
+      win32: "npm install -g @openai/codex",
+    },
+    docsUrl: "https://github.com/openai/codex",
+    signInCommand: "codex",
+    needsNode: true,
+  },
   models: MODELS,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),
@@ -97,16 +122,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = turn.turnId ?? newId();
 
-      const env: Record<string, string | undefined> = { ...process.env, PATH: augmentedPath(), NPM_CONFIG_LOGLEVEL: "error" };
-      // the CLI owns its own ChatGPT login; a leaked API key silently flips
-      // billing to pay-as-you-go (agentcal)
-      delete env.OPENAI_API_KEY;
+      const env = codexCliEnv();
 
-      const child = spawn(config.cli, ["app-server"], {
+      const child = spawnCli(config.cli, ["app-server"], {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],
-        detached: true,
       });
 
       const state = { settled: false, lastText: "" };
@@ -136,13 +157,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         });
 
       const stop = () => {
-        try {
-          process.kill(-child.pid!, "SIGTERM");
-        } catch {
-          try {
-            child.kill("SIGTERM");
-          } catch {}
-        }
+        killCliTree(child);
       };
 
       const settle = (ok: boolean, stopReason: string | null) => {
@@ -277,9 +292,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             settle(t.status === "completed", t.status === "completed" ? null : (t.error?.message ?? t.status ?? "failed"));
             break;
           }
-          case "error":
-            if (p.message) emit({ ...base(threadId, turnId), type: "runtime.error", message: p.message });
+          case "error": {
+            const message = p.message ?? p.error?.message;
+            if (message) emit({ ...base(threadId, turnId), type: "runtime.error", message: String(message).slice(0, 400) });
             break;
+          }
         }
       };
 
@@ -382,7 +399,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
     const snapshot = async (): Promise<ProviderSnapshot> => {
       const version = await new Promise<string | null>((resolve) => {
-        execFile(config.cli, ["--version"], { timeout: 8000, env: { ...process.env, PATH: augmentedPath() } }, (err, stdout) =>
+        execCli(config.cli, ["--version"], { timeout: 8000, env: codexCliEnv() }, (err, stdout) =>
           resolve(err ? null : stdout.trim()),
         );
       });
@@ -399,7 +416,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
-        capabilities: { sessionModelSwitch: "unsupported" },
+        capabilities: { sessionModelSwitch: "unsupported", sessionResume: true },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
         respondToRequest: async (threadId, requestId, decision) => {

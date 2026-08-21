@@ -13,9 +13,13 @@ import type {
   PairClaimResponse,
   PairingClaimInput,
   PendingAttachment,
+  QueuedMessageSummary,
   RoutineSummary,
+  RoutineSchedule,
+  RoutineOccurrence,
 } from "./types";
 import { responseDecision } from "./response-decision";
+import { parseProjectedHandoff } from "./handoff";
 
 type HostEnrollment = Extract<Enrollment, { mode: "host" }>;
 
@@ -31,13 +35,16 @@ interface RawCard {
 
 interface RawMessage {
   id: string;
+  parentId?: string | null;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen" | "handoff";
+  kind: "text" | "options" | "activity" | "screen" | "handoff" | "context";
   text?: string;
   card?: RawCard;
   attachments?: Array<{ id: string; name: string; mime: string; size: number }>;
-  handoff?: { prompt?: string; reply?: string; status?: string };
+  handoff?: unknown;
   tool?: { name?: string; ok?: boolean };
+  context?: { id?: string; label?: string; startedAt?: number };
+  delivery?: "queued" | "sent" | "cancelled" | "failed";
   at: number;
 }
 
@@ -53,19 +60,21 @@ interface RawBot {
   lifecycle?: { kind?: "temporary"; expiresAt?: number } | null;
   avatar?: Partial<AvatarConfig> & { kind?: "mote" | "upload"; imageDataUrl?: string };
   messages?: RawMessage[];
+  activeLeafId?: string | null;
+  context?: { id?: string; label?: string; startedAt?: number };
 }
 
 interface RawRoutine {
   id: string;
   botId: string;
   name: string;
-  schedule:
-    | { kind: "interval"; everyMinutes: number }
-    | { kind: "daily"; time: string; timezone: string }
-    | { kind: "weekly"; time: string; timezone: string; weekdays: number[] };
+  prompt?: string;
+  schedule: RoutineSchedule;
   enabled: boolean;
   nextRunAt: number | null;
-  lastStatus?: "running" | "completed" | "failed";
+  lastRunAt?: number;
+  lastScheduledFor?: number;
+  lastStatus?: "queued" | "running" | "completed" | "failed" | "missed";
 }
 
 interface RawBootstrap {
@@ -74,7 +83,16 @@ interface RawBootstrap {
   profile?: { name?: string; email?: string };
   capabilities?: { computerPreview?: boolean };
   bots?: RawBot[];
-  workspace?: { routines?: RawRoutine[] };
+  workspace?: { routines?: RawRoutine[]; tasks?: RawTask[] };
+}
+
+interface RawTask {
+  id: string;
+  botId: string;
+  status: string;
+  source?: string;
+  messageId?: string;
+  createdAt?: number;
 }
 
 const FALLBACK_AVATAR: AvatarConfig = {
@@ -101,7 +119,7 @@ function rawBot(value: unknown): RawBot | null {
 
 function rawMessage(value: unknown): RawMessage | null {
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.at !== "number") return null;
-  if (!["bot", "user"].includes(String(value.role)) || !["text", "options", "activity", "screen", "handoff"].includes(String(value.kind))) {
+  if (!["bot", "user"].includes(String(value.role)) || !["text", "options", "activity", "screen", "handoff", "context"].includes(String(value.kind))) {
     return null;
   }
   return value as unknown as RawMessage;
@@ -113,6 +131,21 @@ function mergeRawMessages(previous: readonly RawMessage[], incoming: readonly Ra
   return [...byId.values()].sort((left, right) =>
     left.at === right.at ? left.id.localeCompare(right.id) : left.at - right.at,
   );
+}
+
+function visibleRawMessages(bot: RawBot): RawMessage[] {
+  const messages = bot.messages ?? [];
+  if (!messages.length) return [];
+  const byId = new Map(messages.map((message) => [message.id, message]));
+  const path: RawMessage[] = [];
+  const visited = new Set<string>();
+  let current = byId.get(bot.activeLeafId ?? messages.at(-1)?.id ?? "");
+  while (current && !visited.has(current.id)) {
+    path.push(current);
+    visited.add(current.id);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return path.reverse();
 }
 
 export function normalizeHostUrl(raw: string): string {
@@ -223,12 +256,17 @@ function messageText(message: RawMessage): string {
   if (message.text) return message.text;
   if (message.card) return [message.card.title, message.card.subtitle].filter(Boolean).join("\n");
   if (message.tool?.name) return message.tool.name;
-  if (message.handoff) return message.handoff.reply ?? message.handoff.prompt ?? "Agent handoff";
+  if (message.kind === "handoff") {
+    const handoff = parseProjectedHandoff(message.handoff);
+    return handoff?.result ?? handoff?.prompt ?? "Handoff unavailable";
+  }
+  if (message.context) return message.context.label ?? "New task";
   if (message.kind === "screen") return "Computer screen updated";
   return "Activity updated";
 }
 
 function mapMessage(agentId: string, message: RawMessage): ChatMessage {
+  const handoff = message.kind === "handoff" ? parseProjectedHandoff(message.handoff) : undefined;
   return {
     id: message.id,
     agentId,
@@ -239,23 +277,28 @@ function mapMessage(agentId: string, message: RawMessage): ChatMessage {
         ? "approval"
         : message.kind === "handoff"
           ? "handoff"
-          : "text",
+          : message.kind === "context"
+            ? "context"
+            : "text",
     text: messageText(message),
     createdAt: message.at,
     status: message.tool?.ok === false ? "error" : "done",
     attachments: message.attachments,
+    parentId: message.parentId ?? null,
+    delivery: message.delivery,
+    ...(handoff ? { handoff } : {}),
   };
 }
 
 function pendingAttention(bot: RawBot): AttentionItem[] {
-  return (bot.messages ?? []).flatMap((message) => {
+  return visibleRawMessages(bot).flatMap((message) => {
     const card = message.card;
     if (!card?.requestId || card.answered || card.dismissed) return [];
     const requestType = card.requestType ?? "question";
     const choices = card.options?.length
       ? card.options
       : requestType === "permission"
-        ? ["Always allow", "Allow once", "Never"]
+        ? ["Allow once", "Deny once"]
         : [];
     return [{
       id: message.id,
@@ -271,8 +314,8 @@ function pendingAttention(bot: RawBot): AttentionItem[] {
   });
 }
 
-function mapAgent(bot: RawBot): AgentSummary {
-  const messages = bot.messages ?? [];
+function mapAgent(bot: RawBot, queuedCount = 0): AgentSummary {
+  const messages = visibleRawMessages(bot);
   const last = messages.at(-1);
   const attention = pendingAttention(bot);
   const needsYou = attention.length > 0;
@@ -293,6 +336,11 @@ function mapAgent(bot: RawBot): AgentSummary {
     needsYou,
     presence: needsYou ? "needs-you" : bot.busy ? "working" : "idle",
     avatar: avatarFor(bot),
+    activeLeafId: bot.activeLeafId ?? messages.at(-1)?.id ?? null,
+    queuedCount,
+    ...(bot.context?.id && bot.context.label && typeof bot.context.startedAt === "number"
+      ? { context: { id: bot.context.id, label: bot.context.label, startedAt: bot.context.startedAt } }
+      : {}),
     ...(lifecycle ? { lifecycle } : {}),
   };
 }
@@ -310,11 +358,23 @@ function mapRoutines(routines: RawRoutine[], bots: Map<string, RawBot>): Routine
     agentId: routine.botId,
     agentName: bots.get(routine.botId)?.name ?? "Bot",
     name: routine.name,
+    prompt: routine.prompt ?? "",
     schedule: scheduleLabel(routine),
+    scheduleSpec: routine.schedule,
     enabled: routine.enabled,
     nextRunAt: routine.nextRunAt,
+    lastRunAt: routine.lastRunAt,
+    lastScheduledFor: routine.lastScheduledFor,
     lastStatus: routine.lastStatus,
   }));
+}
+
+function mapQueuedMessages(tasks: RawTask[]): QueuedMessageSummary[] {
+  return tasks.flatMap((task) =>
+    task.source === "message" && task.status === "queued" && typeof task.messageId === "string"
+      ? [{ id: task.id, agentId: task.botId, messageId: task.messageId, createdAt: task.createdAt ?? Date.now() }]
+      : [],
+  );
 }
 
 function parseSseData(block: string): unknown | null {
@@ -347,6 +407,7 @@ export class HostClient {
   private readonly bots = new Map<string, RawBot>();
   private readonly botIdByThread = new Map<string, string>();
   private rawRoutines: RawRoutine[] = [];
+  private rawTasks: RawTask[] = [];
 
   constructor(private readonly credentials: HostEnrollment) {}
 
@@ -384,7 +445,9 @@ export class HostClient {
       messages: mergeRawMessages(previousBots.get(bot.id)?.messages ?? [], bot.messages ?? []),
     }));
     this.rawRoutines = Array.isArray(raw.workspace?.routines) ? raw.workspace.routines : [];
-    const agents = mergedBots.map(mapAgent).sort((left, right) => right.updatedAt - left.updatedAt);
+    this.rawTasks = Array.isArray(raw.workspace?.tasks) ? raw.workspace.tasks : [];
+    const queuedMessages = mapQueuedMessages(this.rawTasks);
+    const agents = mergedBots.map((bot) => mapAgent(bot, queuedMessages.filter((task) => task.agentId === bot.id).length)).sort((left, right) => right.updatedAt - left.updatedAt);
     return {
       hostName: raw.host?.name,
       profile: { name: raw.profile?.name || "Cumea user", email: raw.profile?.email },
@@ -392,6 +455,7 @@ export class HostClient {
       agents,
       attention: mergedBots.flatMap(pendingAttention).sort((left, right) => right.createdAt - left.createdAt),
       routines: mapRoutines(this.rawRoutines, this.bots),
+      queuedMessages,
       messages: Object.fromEntries(mergedBots.map((bot) => [bot.id, (bot.messages ?? []).map((message) => mapMessage(bot.id, message))])),
       serverTime: Date.now(),
     };
@@ -404,13 +468,25 @@ export class HostClient {
       const incoming = rawBot(payload.bot);
       if (!incoming) return null;
       const bot = this.rememberBot(incoming, true);
-      return { kind: "agent", agent: mapAgent(bot), attention: pendingAttention(bot) };
+      return { kind: "agent", agent: mapAgent(bot, mapQueuedMessages(this.rawTasks).filter((task) => task.agentId === bot.id).length), attention: pendingAttention(bot) };
     }
     if (payload.kind === "bot.deleted" && typeof payload.botId === "string") {
       const bot = this.bots.get(payload.botId);
       if (bot) this.botIdByThread.delete(bot.threadId);
       this.bots.delete(payload.botId);
       return { kind: "agent.deleted", agentId: payload.botId };
+    }
+    if (
+      payload.kind === "thread" &&
+      typeof payload.threadId === "string" &&
+      (typeof payload.activeLeafId === "string" || payload.activeLeafId === null)
+    ) {
+      const agentId = this.botIdByThread.get(payload.threadId);
+      if (!agentId) return null;
+      const bot = this.bots.get(agentId);
+      if (!bot) return null;
+      this.rememberBot({ ...bot, activeLeafId: payload.activeLeafId }, true);
+      return { kind: "thread", agentId, activeLeafId: payload.activeLeafId };
     }
     if ((payload.kind === "message" || payload.kind === "message.patch") && typeof payload.threadId === "string") {
       const agentId = this.botIdByThread.get(payload.threadId);
@@ -422,10 +498,14 @@ export class HostClient {
       const existingIndex = messages.findIndex((candidate) => candidate.id === message.id);
       if (existingIndex >= 0) messages[existingIndex] = message;
       else messages.push(message);
-      const merged = this.rememberBot({ ...bot, messages });
+      const merged = this.rememberBot({
+        ...bot,
+        messages,
+        ...(payload.kind === "message" && message.delivery !== "queued" ? { activeLeafId: message.id } : {}),
+      });
       return {
         kind: payload.kind,
-        agent: mapAgent(merged),
+        agent: mapAgent(merged, mapQueuedMessages(this.rawTasks).filter((task) => task.agentId === merged.id).length),
         message: mapMessage(agentId, message),
         attention: pendingAttention(merged),
       };
@@ -454,7 +534,8 @@ export class HostClient {
     }
     if (payload.kind === "workspace" && isRecord(payload.workspace)) {
       this.rawRoutines = Array.isArray(payload.workspace.routines) ? payload.workspace.routines as RawRoutine[] : [];
-      return { kind: "workspace", routines: mapRoutines(this.rawRoutines, this.bots) };
+      this.rawTasks = Array.isArray(payload.workspace.tasks) ? payload.workspace.tasks as RawTask[] : [];
+      return { kind: "workspace", routines: mapRoutines(this.rawRoutines, this.bots), queuedMessages: mapQueuedMessages(this.rawTasks) };
     }
     return null;
   }
@@ -462,6 +543,35 @@ export class HostClient {
   async snapshot(): Promise<MobileSnapshot> {
     const body = await this.request("/api/mobile/bootstrap");
     return this.rememberSnapshot(body as unknown as RawBootstrap);
+  }
+
+  async patchRoutine(
+    routineId: string,
+    patch: Partial<Pick<RoutineSummary, "name" | "prompt" | "enabled">> & { schedule?: RoutineSchedule },
+  ): Promise<RoutineSummary> {
+    const body = await this.request(`/api/routines/${encodeURIComponent(routineId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    const routine = body.routine as RawRoutine | undefined;
+    if (!routine?.id || !routine.botId) throw new Error("The host returned an invalid routine.");
+    const index = this.rawRoutines.findIndex((candidate) => candidate.id === routine.id);
+    if (index >= 0) this.rawRoutines[index] = routine;
+    else this.rawRoutines.push(routine);
+    return mapRoutines([routine], this.bots)[0];
+  }
+
+  async runRoutine(routineId: string): Promise<void> {
+    await this.request(`/api/routines/${encodeURIComponent(routineId)}/run`, { method: "POST" });
+  }
+
+  async routineOccurrences(from: number, to: number): Promise<RoutineOccurrence[]> {
+    const query = new URLSearchParams({ from: String(from), to: String(to), limit: "256" });
+    const body = await this.request(`/api/routines/occurrences?${query.toString()}`);
+    return Array.isArray(body.occurrences) ? body.occurrences.flatMap((value) => {
+      if (!isRecord(value) || typeof value.routineId !== "string" || typeof value.scheduledFor !== "number") return [];
+      return [{ routineId: value.routineId, scheduledFor: value.scheduledFor }];
+    }) : [];
   }
 
   async messages(agentId: string, before?: string | null): Promise<MessagesPage> {
@@ -472,7 +582,10 @@ export class HostClient {
       ? body.messages.map(rawMessage).filter((message): message is RawMessage => message !== null)
       : [];
     const bot = this.bots.get(agentId);
-    if (bot) this.rememberBot({ ...bot, messages: mergeRawMessages(bot.messages ?? [], messages) });
+    const activeLeafId = typeof body.activeLeafId === "string" || body.activeLeafId === null
+      ? body.activeLeafId
+      : bot?.activeLeafId ?? null;
+    if (bot) this.rememberBot({ ...bot, activeLeafId, messages: mergeRawMessages(bot.messages ?? [], messages) });
     const page = isRecord(body.page) ? body.page : null;
     const nextCursor = page && typeof page.nextBefore === "string"
       ? page.nextBefore
@@ -482,6 +595,7 @@ export class HostClient {
     return {
       messages: messages.map((message) => mapMessage(agentId, message)),
       nextCursor,
+      activeLeafId,
     };
   }
 
@@ -589,11 +703,54 @@ export class HostClient {
     };
   }
 
-  async sendMessage(agentId: string, text: string, attachmentIds: string[] = []): Promise<void> {
-    await this.request(`/api/bots/${encodeURIComponent(agentId)}/messages`, {
+  async sendMessage(agentId: string, text: string, attachmentIds: string[] = []): Promise<{ queued: boolean; taskId?: string }> {
+    const body = await this.request(`/api/bots/${encodeURIComponent(agentId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ text, attachmentIds }),
     });
+    return { queued: body.queued === true, ...(typeof body.taskId === "string" ? { taskId: body.taskId } : {}) };
+  }
+
+  async startContext(agentId: string): Promise<void> {
+    await this.request(`/api/bots/${encodeURIComponent(agentId)}/contexts`, {
+      method: "POST",
+      body: JSON.stringify({ label: "New task" }),
+    });
+  }
+
+  async cancelQueued(taskId: string): Promise<void> {
+    await this.request(`/api/tasks/${encodeURIComponent(taskId)}/queue`, { method: "DELETE" });
+  }
+
+  async editMessage(agentId: string, messageId: string, text: string): Promise<{ message: ChatMessage; activeLeafId: string }> {
+    const body = await this.request(
+      `/api/bots/${encodeURIComponent(agentId)}/messages/${encodeURIComponent(messageId)}/edit`,
+      { method: "POST", body: JSON.stringify({ text }) },
+    );
+    const message = rawMessage(body.message);
+    if (!message || typeof body.activeLeafId !== "string") {
+      throw new Error("The host returned an incomplete edited message.");
+    }
+    const bot = this.bots.get(agentId);
+    if (bot) {
+      this.rememberBot({
+        ...bot,
+        activeLeafId: body.activeLeafId,
+        messages: mergeRawMessages(bot.messages ?? [], [message]),
+      });
+    }
+    return { message: mapMessage(agentId, message), activeLeafId: body.activeLeafId };
+  }
+
+  async switchBranch(agentId: string, messageId: string): Promise<string> {
+    const body = await this.request(`/api/bots/${encodeURIComponent(agentId)}/active-branch`, {
+      method: "POST",
+      body: JSON.stringify({ messageId }),
+    });
+    if (typeof body.activeLeafId !== "string") throw new Error("The host did not select that conversation version.");
+    const bot = this.bots.get(agentId);
+    if (bot) this.rememberBot({ ...bot, activeLeafId: body.activeLeafId }, true);
+    return body.activeLeafId;
   }
 
   async createAgent(name: string, title: string, options: { temporary?: boolean } = {}): Promise<AgentSummary> {

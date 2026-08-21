@@ -72,7 +72,20 @@ describe("safe document preview", () => {
     expect(classifyPreviewFile("report.md", Buffer.from("# Report"))).toMatchObject({ kind: "markdown" });
     expect(classifyPreviewFile("report.pdf", Buffer.from("%PDF-1.7\n1 0 obj\n%%EOF"))).toMatchObject({ kind: "pdf" });
     expect(() => classifyPreviewFile("report.pdf", Buffer.from("<script>alert(1)</script>%%EOF"))).toThrow(/signature/i);
-    expect(() => classifyPreviewFile("report.html", Buffer.from("safe"))).toThrow(/Markdown, PDF, and DOCX/i);
+    expect(classifyPreviewFile("report.html", Buffer.from("<!doctype html><html><body>Safe</body></html>"))).toMatchObject({
+      kind: "html",
+      mime: "text/html; charset=utf-8",
+    });
+    expect(() => classifyPreviewFile("report.html", Buffer.from("safe"))).toThrow(/signature/i);
+    expect(() => classifyPreviewFile("report.html", Buffer.from("<script>alert(1)</script>"))).toThrow(/signature/i);
+    expect(() => classifyPreviewFile(
+      "report.html",
+      Buffer.from('<!doctype html><html><head><meta http-equiv="ref&#x72;esh" content="0;url=https://attacker.invalid"></head></html>'),
+    )).toThrow(/http-equiv/i);
+    expect(() => classifyPreviewFile(
+      "report.html",
+      Buffer.concat([Buffer.from("<!doctype html><html>"), Buffer.alloc(2 * 1024 * 1024)]),
+    )).toThrow(/2 MB/i);
   });
 
   it("extracts semantic text blocks without producing HTML", async () => {

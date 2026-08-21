@@ -17,20 +17,26 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 
 const mode = process.env.FAKE_ACP_MODE ?? "happy";
-const argv = process.argv.slice(2);
+const rawArgv = process.argv.slice(2);
+const testDumpIndex = rawArgv.indexOf("--cumea-test-dump");
+const testDump = testDumpIndex >= 0 ? rawArgv[testDumpIndex + 1] : undefined;
+const argv = testDumpIndex >= 0
+  ? rawArgv.filter((_, index) => index !== testDumpIndex && index !== testDumpIndex + 1)
+  : rawArgv;
 if (argv.includes("--version")) {
   console.log("fake-acp 1.0.0");
   process.exit(0);
 }
-if (process.env.FAKE_ACP_DUMP) {
-  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: process.env, calls: [] }, null, 2));
+const dumpPath = testDump || process.env.FAKE_ACP_DUMP;
+if (dumpPath) {
+  writeFileSync(dumpPath, JSON.stringify({ argv, env: process.env, calls: [] }, null, 2));
 }
 
 const calls: any[] = [];
 function dumpCall(msg: any) {
-  if (!process.env.FAKE_ACP_DUMP || !msg.method) return;
+  if (!dumpPath || !msg.method) return;
   calls.push({ method: msg.method, params: msg.params });
-  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: process.env, calls }, null, 2));
+  writeFileSync(dumpPath, JSON.stringify({ argv, env: process.env, calls }, null, 2));
 }
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
@@ -95,6 +101,11 @@ function driveMcp(entry: McpEntry, calls: Array<{ name: string; args: (prev: str
 }
 
 function playTurn() {
+  const reflected = mode === "reflect-secret" ? process.env.FAKE_ACP_REFLECT_SECRET : undefined;
+  if (reflected) {
+    out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: `provider echo ${reflected}` } } } });
+    return;
+  }
   out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: "hello from fake acp" } } } });
   out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "run" } } });
   out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "tc-1", status: "completed" } } });
@@ -180,6 +191,10 @@ function handle(msg: any) {
         return;
       }
       playTurn();
+      if (mode === "reflect-secret") {
+        out({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: `provider raw error ${process.env.FAKE_ACP_REFLECT_SECRET ?? ""}` } });
+        return;
+      }
       if (mode === "permission") {
         // ask the client to approve a tool, then complete once answered
         pendingPermissionId = 9001;

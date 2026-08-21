@@ -21,6 +21,24 @@ const argAfter = (flag: string): string | null => {
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
 
+if (argv.length === 1 && argv[0] === "--version") {
+  process.stdout.write("2.1.211\n");
+  process.exit(0);
+}
+
+if (argv[0] === "auth" && argv[1] === "status") {
+  if (mode === "auth-logged-out") {
+    out({ loggedIn: false, authMethod: "none" });
+    process.exit(1);
+  }
+  if (mode === "auth-malformed") {
+    process.stdout.write("unexpected legacy output\n");
+    process.exit(2);
+  }
+  out({ loggedIn: true, authMethod: "claude.ai" });
+  process.exit(0);
+}
+
 let stdin = "";
 process.stdin.on("data", (c) => (stdin += c));
 process.stdin.on("end", () => {

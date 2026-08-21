@@ -1,9 +1,18 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, FileText, Loader2, Mic, Plus, Square, X } from "lucide-react";
-import { api, uploadAttachment, useStore, type AttachmentRef, type Bot } from "@/state/store";
+import { ArrowUp, Brain, FileText, Loader2, Mic, Paperclip, Plus, Square, X } from "lucide-react";
+import { api, uploadAttachment, useStore, visibleMessages, type AttachmentRef, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { CumeaAvatar } from "./Avatar";
 import { avatarForBot } from "@/lib/mote";
+import { readComposerDraft, writeComposerDraft } from "@/lib/drafts";
+import {
+  LONG_PASTE_MAX_BYTES,
+  pastedTextBytes,
+  pastedTextFile,
+  shouldAttachPastedText,
+} from "@/lib/composer-paste";
+import { pendingRequests } from "@/lib/pending-requests";
+import { PendingRequestPanel } from "./PendingRequestPanel";
 
 /** The active @mention query at the caret: the text between an `@` that
  * starts a word and the caret. null = no mention being typed. */
@@ -55,9 +64,9 @@ function speechIssueFor(reason: string | undefined, code: number | null): Speech
   }
 }
 
-export function Composer({ bot }: { bot: Bot }) {
-  const { state, dispatch, sendMessage } = useStore();
-  const [text, setText] = useState("");
+export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => void }) {
+  const { state, dispatch, sendMessage, startContext, answerCard } = useStore();
+  const [text, setText] = useState(() => readComposerDraft(bot.id));
   const [recording, setRecording] = useState(false);
   const [speechError, setSpeechError] = useState<SpeechIssue | null>(null);
   const [caret, setCaret] = useState(0);
@@ -68,8 +77,15 @@ export function Composer({ bot }: { bot: Bot }) {
   const [uploading, setUploading] = useState(false);
   const [sending, setSending] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [limitsOpen, setLimitsOpen] = useState(false);
+  const [durationMinutes, setDurationMinutes] = useState("");
+  const [toolCallLimit, setToolCallLimit] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const draftTextRef = useRef(text);
+  draftTextRef.current = text;
   const activeBotIdRef = useRef(bot.id);
   const previousBotIdRef = useRef(bot.id);
   const operationGenerationRef = useRef(0);
@@ -77,6 +93,18 @@ export function Composer({ bot }: { bot: Bot }) {
   const sendingRef = useRef(false);
   // what was typed before the mic went on — partials append after it
   const baseText = useRef("");
+  const dragDepth = useRef(0);
+  const addMenuRef = useRef<HTMLDivElement>(null);
+
+  const queuedTasks = state.workspace.tasks.filter(
+    (task) => task.botId === bot.id && task.source === "message" && task.status === "queued",
+  );
+  const requests = useMemo(
+    () => pendingRequests(visibleMessages(bot)),
+    [bot.activeLeafId, bot.messages],
+  );
+  const activeRequest = requests[0] ?? null;
+  const hasPendingRequest = activeRequest !== null;
 
   // ── @mention picker (tag another bot; the agent reaches it via ask_bot) ──
   const mention = mentionQueryAt(text, caret);
@@ -91,6 +119,38 @@ export function Composer({ bot }: { bot: Bot }) {
   const pickerOpen = candidates.length > 0;
 
   useEffect(() => setHighlight(0), [mention?.start, mention?.query]);
+
+  useEffect(() => {
+    if (!hasPendingRequest) return;
+    setRecording(false);
+    setAddMenuOpen(false);
+    setLimitsOpen(false);
+    setDragActive(false);
+    dragDepth.current = 0;
+  }, [hasPendingRequest]);
+
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!addMenuRef.current?.contains(event.target as Node)) setAddMenuOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAddMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [addMenuOpen]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => writeComposerDraft(bot.id, text), 120);
+    return () => clearTimeout(timer);
+  }, [bot.id, text]);
+
+  useEffect(() => () => writeComposerDraft(bot.id, draftTextRef.current), [bot.id]);
 
   const pickMention = (peer: Bot) => {
     if (!mention) return;
@@ -122,8 +182,9 @@ export function Composer({ bot }: { bot: Bot }) {
     previousBotIdRef.current = bot.id;
     attachmentsRef.current = [];
     sendingRef.current = false;
-    setText("");
-    setCaret(0);
+    const restoredDraft = readComposerDraft(bot.id);
+    setText(restoredDraft);
+    setCaret(restoredDraft.length);
     setDismissedAt(null);
     setCompletedMention(null);
     setAttachments([]);
@@ -131,6 +192,7 @@ export function Composer({ bot }: { bot: Bot }) {
     setSending(false);
     setAttachmentError(null);
     setRecording(false);
+    setAddMenuOpen(false);
   }, [bot.id]);
 
   useLayoutEffect(() => {
@@ -141,7 +203,7 @@ export function Composer({ bot }: { bot: Bot }) {
   }, [text]);
 
   const send = async () => {
-    if ((!text.trim() && !attachments.length) || bot.busy || uploading || sending) return;
+    if (hasPendingRequest || (!text.trim() && !attachments.length) || uploading || sending) return;
     const targetBotId = bot.id;
     const generation = operationGenerationRef.current;
     const draftText = text;
@@ -156,6 +218,10 @@ export function Composer({ bot }: { bot: Bot }) {
         botId: targetBotId,
         text: draftText.trim() || "Please review the attached files.",
         attachments: draftAttachments,
+        budget: durationMinutes || toolCallLimit ? {
+          ...(durationMinutes ? { durationMs: Number(durationMinutes) * 60_000 } : {}),
+          ...(toolCallLimit ? { toolCalls: Number(toolCallLimit) } : {}),
+        } : undefined,
       });
     } catch {
       // On the same agent the untouched draft remains ready to retry. If the
@@ -182,7 +248,10 @@ export function Composer({ bot }: { bot: Bot }) {
       activeBotIdRef.current === targetBotId
       && operationGenerationRef.current === generation
     ) {
-      setText((current) => (current === draftText ? "" : current));
+      if (draftTextRef.current === draftText) {
+        writeComposerDraft(targetBotId, "");
+        setText("");
+      }
       setAttachments((current) => {
         const next = current.filter((attachment) => !attachmentIds.has(attachment.id));
         attachmentsRef.current = next;
@@ -191,12 +260,13 @@ export function Composer({ bot }: { bot: Bot }) {
     }
   };
 
-  const addFiles = async (files: FileList | null) => {
-    if (!files?.length) return;
+  const addFiles = async (files: FileList | File[] | null) => {
+    if (hasPendingRequest || !files?.length) return;
     setAttachmentError(null);
+    const incoming = [...files];
     const available = Math.max(0, 10 - attachments.length);
-    const selected = [...files].slice(0, available);
-    if (files.length > available) setAttachmentError("A message can include up to 10 files.");
+    const selected = incoming.slice(0, available);
+    if (incoming.length > available) setAttachmentError("A message can include up to 10 files.");
     if (!selected.length) {
       if (fileRef.current) fileRef.current.value = "";
       return;
@@ -257,6 +327,44 @@ export function Composer({ bot }: { bot: Bot }) {
       }
     }
   };
+
+  useEffect(() => {
+    const hasFiles = (event: DragEvent) => [...(event.dataTransfer?.types ?? [])].includes("Files");
+    const enter = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      if (hasPendingRequest) return;
+      dragDepth.current += 1;
+      setDragActive(true);
+    };
+    const over = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    };
+    const leave = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragActive(false);
+    };
+    const drop = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      dragDepth.current = 0;
+      setDragActive(false);
+      if (!hasPendingRequest && !uploading && !sending) void addFiles(event.dataTransfer?.files ?? null);
+    };
+    document.addEventListener("dragenter", enter);
+    document.addEventListener("dragover", over);
+    document.addEventListener("dragleave", leave);
+    document.addEventListener("drop", drop);
+    return () => {
+      document.removeEventListener("dragenter", enter);
+      document.removeEventListener("dragover", over);
+      document.removeEventListener("dragleave", leave);
+      document.removeEventListener("drop", drop);
+    };
+  }, [bot.id, attachments.length, hasPendingRequest, uploading, sending]);
 
   const removeAttachment = (attachment: AttachmentRef) => {
     setAttachments((current) => {
@@ -332,8 +440,30 @@ export function Composer({ bot }: { bot: Bot }) {
 
   const hasPayload = text.trim().length > 0 || attachments.length > 0;
 
+  if (activeRequest) {
+    return (
+      <div className="px-3 pb-3 pt-2 sm:px-5 sm:pb-5">
+        <div className="mx-auto max-w-[900px]">
+          <PendingRequestPanel
+            botName={bot.name}
+            request={activeRequest}
+            count={requests.length}
+            busy={Boolean(bot.busy)}
+            onAnswer={(answer) => answerCard({ botId: bot.id, messageId: activeRequest.message.id, answer })}
+            onStop={() => dispatch({ type: "interrupt", botId: bot.id })}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="px-5 pb-5 pt-2">
+      {dragActive ? (
+        <div className="pointer-events-none fixed inset-3 z-50 flex items-center justify-center rounded-[28px] border-2 border-dashed border-accent/60 bg-app/90 backdrop-blur-md" aria-hidden="true">
+          <div className="rounded-2xl bg-raised px-5 py-3 text-[15px] font-semibold text-ink shadow-xl">Drop files to attach</div>
+        </div>
+      ) : null}
       {speechError && (
         <div
           role="alert"
@@ -398,7 +528,14 @@ export function Composer({ bot }: { bot: Bot }) {
             ))}
           </div>
         )}
-        <div className="flex items-center gap-2 rounded-full border border-hairline/40 bg-raised/60 py-2 pl-2 pr-2">
+        {limitsOpen && (
+          <div className="mb-2 grid grid-cols-2 gap-2 rounded-xl border border-hairline/40 bg-card p-2.5" aria-label="Task limits">
+            <label className="grid gap-1 text-[10px] text-ink-secondary">Duration (minutes)<input type="number" min={1} max={10080} step={1} value={durationMinutes} onChange={(event) => setDurationMinutes(event.target.value)} className="rounded-md bg-inset px-2 py-1.5 text-[11px] text-ink outline-none" /></label>
+            <label className="grid gap-1 text-[10px] text-ink-secondary">Tool calls<input type="number" min={1} max={100000} step={1} value={toolCallLimit} onChange={(event) => setToolCallLimit(event.target.value)} className="rounded-md bg-inset px-2 py-1.5 text-[11px] text-ink outline-none" /></label>
+            <div className="col-span-2 text-[10px] leading-4 text-ink-secondary">Optional limits apply to this task. Token limits activate only after canonical provider telemetry establishes a baseline.</div>
+          </div>
+        )}
+        <div className="composer-shell flex items-end gap-1.5 rounded-[22px] border border-hairline/40 bg-raised/60 p-2">
         <input
           ref={fileRef}
           type="file"
@@ -406,16 +543,35 @@ export function Composer({ bot }: { bot: Bot }) {
           className="hidden"
           onChange={(event) => void addFiles(event.target.files)}
         />
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          disabled={uploading || sending || attachments.length >= 10 || bot.busy}
-          className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
-          title="Attach files (25 MB each)"
-          aria-label="Attach files"
-        >
-          {uploading ? <Loader2 size={17} className="animate-spin" /> : <Plus size={20} />}
-        </button>
+        <div ref={addMenuRef} className="relative shrink-0">
+          {addMenuOpen ? (
+            <div className="composer-add-menu absolute bottom-11 left-0 z-30 w-[280px] overflow-hidden rounded-[14px] border border-hairline/45 bg-panel p-1.5 shadow-2xl" role="menu" aria-label="Add to conversation">
+              <button type="button" role="menuitem" onClick={() => { setAddMenuOpen(false); fileRef.current?.click(); }} disabled={uploading || sending || attachments.length >= 10} className="composer-menu-item">
+                <span className="composer-menu-icon"><Paperclip size={16} /></span>
+                <span className="min-w-0"><span className="block text-[13px] font-medium text-ink">Attach files</span><span className="mt-0.5 block text-[11px] text-ink-secondary">Up to 10 files, 25 MB each</span></span>
+              </button>
+              <button type="button" role="menuitem" onClick={() => { setAddMenuOpen(false); void startContext(bot.id, "Fresh context"); }} disabled={Boolean(bot.busy) || queuedTasks.length > 0 || hasPayload} className="composer-menu-item">
+                <span className="composer-menu-icon"><Brain size={16} /></span>
+                <span className="min-w-0"><span className="block text-[13px] font-medium text-ink">Start a fresh context</span><span className="mt-0.5 block text-[11px] leading-4 text-ink-secondary">Keep the agent, separate the next task’s context</span></span>
+              </button>
+              <button type="button" role="menuitem" onClick={() => { setAddMenuOpen(false); setLimitsOpen((open) => !open); }} className="composer-menu-item">
+                <span className="composer-menu-icon"><Square size={14} /></span>
+                <span className="min-w-0"><span className="block text-[13px] font-medium text-ink">Task limits</span><span className="mt-0.5 block text-[11px] text-ink-secondary">Bound duration and tool use</span></span>
+              </button>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setAddMenuOpen((open) => !open)}
+            disabled={uploading || sending}
+            className="composer-icon-button"
+            title="Add files or start a fresh context"
+            aria-label="Add files or start a fresh context"
+            aria-expanded={addMenuOpen}
+          >
+            {uploading ? <Loader2 size={17} className="animate-spin" /> : <Plus size={20} />}
+          </button>
+        </div>
         <textarea
           ref={inputRef}
           rows={1}
@@ -441,6 +597,22 @@ export function Composer({ bot }: { bot: Bot }) {
               // never inserts a duplicate filename beside the attachment.
               event.preventDefault();
               void addFiles(files);
+              return;
+            }
+            const pasted = event.clipboardData.getData("text/plain");
+            if (
+              shouldAttachPastedText(pasted)
+              && attachments.length < 10
+              && !uploading
+              && !sending
+            ) {
+              event.preventDefault();
+              if (pastedTextBytes(pasted) > LONG_PASTE_MAX_BYTES) {
+                setAttachmentError("Pasted text is larger than 5 MB. Save it as a file and attach it instead.");
+                return;
+              }
+              const ordinal = attachments.filter((attachment) => attachment.name.startsWith("pasted-text")).length + 1;
+              void addFiles([pastedTextFile(pasted, ordinal)]);
             }
           }}
           onKeyUp={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
@@ -464,6 +636,19 @@ export function Composer({ bot }: { bot: Bot }) {
                 return;
               }
             }
+            if (
+              e.key === "ArrowUp"
+              && !text
+              && attachments.length === 0
+              && !uploading
+              && !sending
+              && !bot.busy
+              && onEditLast
+            ) {
+              e.preventDefault();
+              onEditLast();
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void send();
@@ -473,48 +658,44 @@ export function Composer({ bot }: { bot: Bot }) {
           disabled={uploading || sending}
           aria-label={`Message ${bot.name}`}
           placeholder={
-            recording ? "Listening…" : bot.busy ? `${bot.name} is working…` : `Message ${bot.name}`
+            recording ? "Listening…" : bot.busy ? `Queue another task for ${bot.name}` : `Message ${bot.name}`
           }
-          className="max-h-40 min-h-6 w-full resize-none overflow-y-auto bg-transparent py-0.5 text-[15px] leading-5 text-ink placeholder:text-ink-secondary focus:outline-none"
+          className="composer-input max-h-40 min-h-8 w-full resize-none overflow-y-auto bg-transparent px-1.5 py-1.5 text-[15px] leading-5 text-ink placeholder:text-ink-secondary/80 outline-none"
         />
-        {bot.busy ? (
-          <button
-            type="button"
-            onClick={() => dispatch({ type: "interrupt", botId: bot.id })}
-            className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
-            title="Stop"
-            aria-label={`Stop ${bot.name}`}
-          >
-            <Square size={14} className="fill-current" />
-          </button>
-        ) : hasPayload ? (
+        {hasPayload ? (
           <button
             type="button"
             onClick={() => void send()}
             disabled={uploading || sending}
-            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink text-app transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
-            title={sending ? "Sending…" : "Send"}
-            aria-label={sending ? "Sending message" : `Send message to ${bot.name}`}
+            className="composer-send-button"
+            title={sending ? "Sending…" : bot.busy ? "Add to queue" : "Send"}
+            aria-label={sending ? "Sending message" : bot.busy ? `Queue message for ${bot.name}` : `Send message to ${bot.name}`}
           >
             {sending ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={17} strokeWidth={2.4} />}
           </button>
-        ) : (
+        ) : null}
+        <button
+          type="button"
+          onClick={toggleMic}
+          disabled={uploading || sending}
+          className={cn("composer-icon-button", recording ? "bg-danger/15 text-danger" : "")}
+          title={recording ? "Stop dictation (Esc)" : "Dictate with Apple Speech"}
+          aria-label={recording ? "Stop dictation" : "Start dictation"}
+          aria-pressed={recording}
+        >
+          <Mic size={18} />
+        </button>
+        {bot.busy ? (
           <button
             type="button"
-            onClick={toggleMic}
-            className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-full",
-              recording
-                ? "animate-pulse bg-danger/20 text-danger"
-                : "text-ink-secondary hover:bg-raised hover:text-ink",
-            )}
-            title={recording ? "Stop dictation (Esc)" : "Dictate"}
-            aria-label={recording ? "Stop dictation" : "Start dictation"}
-            aria-pressed={recording}
+            onClick={() => dispatch({ type: "interrupt", botId: bot.id })}
+            className="composer-stop-button"
+            title="Stop the active task"
+            aria-label={`Stop ${bot.name}'s active task`}
           >
-            <Mic size={18} />
+            <Square size={13} className="fill-current" />
           </button>
-        )}
+        ) : null}
         </div>
       </div>
     </div>

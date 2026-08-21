@@ -20,6 +20,7 @@ import type {
   SendTurnInput,
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
+import { boxErrorMessage } from "../box.ts";
 import { appendNative } from "./native.ts";
 
 const DRIVER_KIND = "boxAgent";
@@ -35,6 +36,23 @@ const MODELS = {
 };
 
 const providerFor = (model: string) => (model.startsWith("gpt") ? "codex" : "claude-code");
+
+export function boxPromptId(started: any): string | null {
+  const value = started?.promptRun?.id ?? started?.prompt?.id ?? started?.promptId ?? null;
+  return typeof value === "string" && value ? value : null;
+}
+
+export function boxEventText(event: any): string | null {
+  const value = event?.text ?? event?.message ?? event?.data?.text ?? event?.data?.content ?? null;
+  return typeof value === "string" ? value : null;
+}
+
+export function boxPromptState(status: any, lastText = ""): { status: string; result: string } {
+  const run = status?.promptRun ?? status?.prompt ?? status ?? {};
+  const state = String(run?.status ?? status?.status ?? "");
+  const rawResult = run?.result ?? run?.output ?? status?.result ?? lastText;
+  return { status: state, result: typeof rawResult === "string" ? rawResult : lastText };
+}
 
 export interface BoxAgentConfig {
   pollMs: number;
@@ -77,7 +95,9 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
       });
       const body: any = await res.json().catch(() => null);
       if (!res.ok || body?.ok === false) {
-        throw new Error(body?.code ?? body?.error ?? `box HTTP ${res.status}`);
+        // Provider bodies may contain account data, echoed prompts, or other
+        // secrets. Keep user-visible/runtime failures deterministic and safe.
+        throw new Error(boxErrorMessage(res.status, "the Box agent request", body));
       }
       return body;
     };
@@ -105,7 +125,9 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
         body: JSON.stringify({ provider: providerFor(model), model, prompt }),
       });
       appendNative(threadId, { dir: "out", source: "box.prompt", msg: { model, prompt, response: started } });
-      const promptId = started?.prompt?.id ?? started?.promptId ?? started?.id ?? null;
+      // Current Box responses include the run under promptRun. A top-level
+      // `id` can be the Box itself, so it must never be treated as a prompt.
+      const promptId = boxPromptId(started);
 
       let cancelled = false;
       active.set(threadId, {
@@ -136,8 +158,8 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
               seen.add(id);
               appendNative(threadId, { dir: "in", source: "box.events", msg: ev });
               const kind = String(ev.type ?? ev.kind ?? "");
-              const text = ev.text ?? ev.message ?? ev.data?.text ?? null;
-              if (/assistant|message|output/i.test(kind) && typeof text === "string" && text.trim()) {
+              const text = boxEventText(ev);
+              if (/assistant|message|output|response/i.test(kind) && typeof text === "string" && text.trim()) {
                 lastText = text;
                 emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: text });
               } else if (/tool|command|exec|browse/i.test(kind)) {
@@ -152,10 +174,11 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
             }
             if (promptId) {
               const status: any = await api(`/boxes/${boxId}/prompts/${promptId}`).catch(() => null);
-              const state = String(status?.prompt?.status ?? status?.status ?? "");
+              const decoded = boxPromptState(status, lastText);
+              const state = decoded.status;
               appendNative(threadId, { dir: "in", source: "box.prompt.status", msg: status });
-              if (/completed|succeeded|done/i.test(state)) {
-                const result = status?.prompt?.result ?? status?.result ?? lastText;
+              if (/completed|succeeded|done|finished/i.test(state)) {
+                const result = decoded.result;
                 if (typeof result === "string" && result.trim() && result !== lastText) {
                   emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: result });
                 }

@@ -1,9 +1,11 @@
 # Cumea roadmap
 
-This is the bootstrap backlog as of 2026-08-13. It is deliberately ordered: reliability, privacy,
+This is the bootstrap backlog as of 2026-08-14. It is deliberately ordered: reliability, privacy,
 and consent come before provider count or visual expansion.
 
 ## P0 — trustworthy foundation
+
+- [x] Deterministic, UTF-8-bounded replay context compaction with active-branch provenance and honest structural estimates.
 
 - [x] Establish an independent Cumea identity, bundle ID, data directory, and runtime namespace.
 - [x] Remove embedded upstream analytics and remote email identification.
@@ -19,12 +21,19 @@ and consent come before provider count or visual expansion.
 - [x] Confirm the first Cumea CI matrix is green on macOS, Ubuntu, and Windows
   ([run 31627113168](https://github.com/metaforismo/Cumea/actions/runs/31627113168)).
 - [x] Add focused regression tests for origin rejection and malformed JSON.
-- [ ] Add a raw-request regression test for encoded static traversal attempts.
+- [x] Add a raw-request regression test for encoded static traversal attempts.
 - [x] Persist every operational message as a task/run with tool steps, approval state, handoffs,
   artifacts, failure recovery, and bounded history.
 - [x] Replace the placeholder routine UI with durable interval/daily/weekly schedules, pause,
   run-now, due dispatch, failure history, and “Teach as routine”.
 - [x] Add a “Needs you” approval inbox and remembered per-bot Ask / Always / Never policies.
+- [x] Keep unresolved provider decisions at the composer as one focused oldest-first surface, with
+  read-only transcript history, preserved drafts, commit-on-success answers, and retryable failures.
+- [x] Scope Box, xAI, Composio, Expo, and Cumea capability credentials to their owning adapters;
+  run user-configured Custom ACP children with a minimal host environment while documenting that
+  environment filtering is not an operating-system sandbox.
+- [x] Share one bounded Markdown URL/control-character and streaming-fence policy between desktop
+  and mobile without widening desktop file capabilities or giving mobile local-path access.
 - [x] Add an opt-in authenticated mobile listener with expiring single-use pairing, hashed device
   tokens, local revocation, allowlisted mobile projections, and sanitized SSE events.
 
@@ -34,19 +43,38 @@ and consent come before provider count or visual expansion.
   ([upstream PR #27](https://github.com/milind-soni/OpenMausBot/pull/27)).
 - [ ] Rebase the Linux desktop work onto Cumea's hardened core; validate both Xorg and Wayland
   before calling it supported ([upstream PR #32](https://github.com/milind-soni/OpenMausBot/pull/32)).
-- [ ] Build one shared platform abstraction for executable shims, process trees, sockets/pipes,
-  paths, and icons before taking a Windows port
-  ([upstream PR #10](https://github.com/milind-soni/OpenMausBot/pull/10)).
-- [ ] Reassess the default provider fleet and authentication expectations
+- [x] Build one shared platform abstraction for executable shims, process trees, authenticated
+  sockets/named pipes, PATH handling, and native title-bar controls. The implementation selectively
+  adapts the useful merged work from
+  [upstream PR #17](https://github.com/milind-soni/OpenMausBot/pull/17); hands-on Windows package
+  acceptance remains a separate open gate.
+- [x] Let each bot select a different local subscription/model through validated configurable ACP
+  profiles, while leaving sign-in, quotas, and billing with the user-installed CLI
   ([upstream issue #28](https://github.com/milind-soni/OpenMausBot/issues/28)).
-- [ ] Add a privacy/settings page showing exactly which integrations are enabled and where data goes.
+- [x] Add a desktop-local privacy/settings inventory showing which integrations are enabled and
+  where data can go, with allowlisted data categories, trigger/consent/storage boundaries, honest
+  CLI uncertainty, redacted runtime-derived status, and authenticated-mobile exclusion verified by
+  a real loopback HTTP test.
 - [x] Make sidebar search functional and add persistent sections with create, rename, delete, and
   bot assignment flows.
+- [x] Re-probe the existing provider inventory on renderer focus with a monotonic throttle,
+  in-flight deduplication, cleanup, and last-known-snapshot preservation on failure.
 - [x] Add bounded local attachments with task artifacts and audited HTTP upload/download/delete.
+- [x] Add full-workspace and selective per-agent backup with a versioned integrity manifest,
+  secret/session exclusions, bounded dry-run validation, same-volume atomic restore, rollback, and
+  a retained pre-restore snapshot. Administrative restore remains desktop-local.
 - [x] Resolve agent-produced paths only inside per-agent workspaces and render bounded Markdown,
-  PDF, and semantic DOCX previews through short-lived same-origin capabilities.
+  PDF, semantic DOCX, and static HTML previews through short-lived capabilities. HTML remains an
+  opaque-origin, non-interactive surface with scripts, network, forms, navigation, popups, and
+  downloads disabled; uploaded HTML stays download-only.
 - [x] Add 24-hour Quick bots with conservative expiry blockers and explicit conversion to a
   permanent agent on desktop or a paired phone.
+- [x] Add a host-local Box auto-sleep cost guard with per-agent timers, activity reconciliation,
+  turn/queue/routine/approval/screen/resource/delete blockers, configurable Off/10/30/60 minute UI,
+  and no provider retry loop after an unconfirmed request.
+- [x] Add desktop routine details with write-only prompt replacement, lossless multi-attempt history
+  from canonical task/run records, next occurrences, IANA/DST-safe schedule editing, and multi-day
+  weekly round-trips.
 - [ ] Add audit-aware attachment retention and storage management so long-lived agents can reclaim
   quota without deleting the agent or silently breaking historical artifacts.
 - [x] Add unsigned Linux/Windows packaging targets and explicit feature degradation. These targets
@@ -63,7 +91,9 @@ and consent come before provider count or visual expansion.
 
 ## P2 — extensibility
 
-- [ ] Define an out-of-process provider/plugin contract before adding experimental drivers.
+- [x] Add a local out-of-process ACP profile contract with exact argument vectors, configurable
+  model catalogs, explicit consent mode, and automatic peer-agent MCP mounting. A broader signed
+  plugin marketplace remains intentionally out of scope.
 - [ ] Evaluate Antigravity only with per-action consent or a clearly labeled explicit full-auto mode
   ([upstream PR #30](https://github.com/milind-soni/OpenMausBot/pull/30)).
 - [ ] Treat AI Counsel as an optional adapter, not a built-in dependency
@@ -84,19 +114,47 @@ and consent come before provider count or visual expansion.
 - [x] Consume an authenticated, allowlisted mobile SSE projection for low-latency agent updates,
   reconcile from bootstrap after each connection, pause in the background, and reconnect with
   bounded backoff.
-- [ ] Add push/background notification delivery for completed and Needs-you work; the phone must not
-  pretend a foreground poll runs while the app is suspended.
+- [x] Add opt-in push/background notification delivery for completed and Needs-you work, with
+  per-device pairing tokens, bounded payloads, Expo batching/receipts, revocation, and deep links.
+  Physical APNs/FCM delivery remains a signed-device release gate, not a source-level claim.
 - [x] Wire bounded paired-host attachment upload with best-effort rollback, least-privilege mobile
   bot creation, mark-read updates, and a capability-gated read-only computer preview.
+- [x] Preserve privacy-projected agent handoffs as bounded structured mobile cards, with textual
+  status and navigation only while the destination remains in the visible roster.
 - [x] Add older-message pagination with cursor-based loading and stable anchored rendering.
+- [x] Add non-destructive message editing with durable parent-linked branches, legacy transcript
+  migration, safe provider-session replay, accessible version switching, and desktop/mobile SSE
+  synchronization ([upstream PR #45](https://github.com/milind-soni/OpenMausBot/pull/45)).
+- [x] Add bounded durable per-agent message queues and explicit clean task-context boundaries so a
+  long-running named agent can accept later work without interrupting or contaminating its active
+  turn.
+- [x] Convert long pasted text into bounded UTF-8 attachments and accept file drops through the
+  same ownership, quota, rollback, and deletion contracts as picker uploads.
 - [x] Keep the newest edge stable during live updates and show an accessible new-message affordance
   when someone is reading older history instead of forcing a scroll jump.
 - [x] Add editable native dictation backed by an Expo SDK 57-compatible module, including bounded
   lifecycle cleanup and honest Expo Go/platform error states. Physical-device permission and
   accessibility acceptance remain part of the release gate above.
-- [ ] Add paired-host routine editing without widening provider or device-administration access.
+- [x] Add paired-host routine editing with an exact field allowlist, hidden-agent ownership checks,
+  and no provider, verification-policy, or device-administration access.
 - [ ] Profile long streaming Markdown and global state fan-out in release builds on physical iOS
   and Android devices before changing list engines or adding another virtualization dependency.
+  Desktop token deltas now live in a paint-batched context separate from durable app state; mobile
+  already batches deltas and uses cursor-paged, anchored FlatList rendering.
+- [x] Add strict durable per-task budgets for active execution time, canonical tool/computer/
+  delegation events, and provider token deltas only when trustworthy telemetry is available.
+- [x] Add an optional revisioned memory-provider contract with per-revision provenance, bounded
+  search/context, retention, optimistic conflicts, hard deletion, exact successful-use accounting,
+  and opt-in permissioned agent writes; connectors do not become opaque memory automatically.
+- [x] Add selective local MCP management with exact stdio argv, write-only environment values,
+  owner-only persistence, provider capability gates, and explicit per-agent assignment.
+- [x] Add confined, versioned, instruction-only local skill packages with strict provenance,
+  explicit assignment/update/rollback, and no executable or network-install surface. Signed and
+  executable package formats remain separate future designs.
+- [x] Add one exclusive workspace Coordinator that uses the existing visible peer-agent handoff,
+  permission, depth, and accounting boundaries and fails closed when peer tools are unavailable.
+- [x] Add objective completion evidence and explicit resumable checkpoints within the existing
+  audited task/run state machine, with mobile-safe projections and uncertain effects blocking resume.
 
 ## Explicitly deferred
 
@@ -108,7 +166,8 @@ and consent come before provider count or visual expansion.
   backends and hands-on evidence; current preview builds expose honest unavailable states.
 - Provider drivers that require blanket approval will not become defaults.
 - Laptop-off execution requires the user to keep Cumea running on their own authenticated always-on
-  host. Cumea does not provide a managed VM, and pairing a phone does not move provider execution.
+  host. Cumea does not provide a managed cloud VM. The optional Local VM is a Cua desktop container
+  on that same host; pairing a phone does not move provider execution or keep the host online.
 - “Teach as routine” reuses a completed task and its audited run; recording arbitrary human desktop
   demonstrations and replaying them safely still needs a dedicated recorder and consent model.
 - Production mobile distribution remains deferred until signed physical-device and notification

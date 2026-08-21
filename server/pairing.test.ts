@@ -59,4 +59,28 @@ describe("PairingStore", () => {
     expect(store.isActive(claimed.device.id)).toBe(false);
     expect(store.authenticate(claimed.token)).toBeNull();
   });
+
+  it("keeps push tokens private and scoped to an active paired device", () => {
+    let now = 10_000;
+    const { store, file } = fixture(() => now);
+    const session = store.createSession("https://host.example");
+    const claimed = store.claim(session.id, session.secret, "phone");
+    const token = "ExpoPushToken[abcdefghijklmnop]";
+
+    expect(store.setPushRegistration(claimed.device.id, { token, platform: "ios" })).toMatchObject({
+      id: claimed.device.id,
+      pushEnabled: true,
+      pushPlatform: "ios",
+    });
+    expect(store.list()[0]).not.toHaveProperty("push");
+    expect(store.list()[0]).not.toHaveProperty("token");
+    expect(store.pushTargets()).toEqual([{ deviceId: claimed.device.id, token, platform: "ios" }]);
+    expect(readFileSync(file, "utf8")).toContain(token);
+    expect(() => store.setPushRegistration(claimed.device.id, { token: "bad", platform: "ios" })).toThrow(/invalid/);
+
+    now += 1;
+    store.clearPushToken(token);
+    expect(store.pushTargets()).toEqual([]);
+    expect(store.list()[0].pushEnabled).toBe(false);
+  });
 });

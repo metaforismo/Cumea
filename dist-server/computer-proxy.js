@@ -11,6 +11,7 @@
 // CUA itself uses on Linux.
 //
 // stdout is the MCP channel — never console.log here.
+import { normalizeBrowserUrl, ObservationCoordinator, parseBrowserTargets, safeBrowserUrl, } from "./computer-observation.js";
 const BOX_API = "https://ascii.dev/api/box/v1";
 const boxId = process.env.CUMEA_BOX_ID ?? "";
 const token = process.env.CUMEA_BOX_TOKEN ?? "";
@@ -48,6 +49,38 @@ async function cuaCmd(command, params, timeoutMs = 30_000) {
     }
 }
 const X = "export DISPLAY=${DISPLAY:-:0}; ";
+const observations = new ObservationCoordinator();
+async function browserTargets(countObservation = true) {
+    const out = await runOnBox("curl -sf --max-time 2 http://127.0.0.1:9222/json/list", 5_000);
+    const targets = out.ok ? parseBrowserTargets(out.stdout) : [];
+    if (countObservation && targets.length)
+        observations.noteStructuredObservation();
+    return targets;
+}
+async function waitForNavigation(value, attempts = 3) {
+    const expected = normalizeBrowserUrl(value);
+    if (!expected) {
+        observations.noteVerification(false);
+        return { ok: false, targets: [] };
+    }
+    let targets = [];
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+        if (attempt > 0) {
+            observations.noteRetry();
+            await new Promise((resolve) => setTimeout(resolve, 1_000));
+        }
+        targets = await browserTargets(false);
+        if (targets.some((target) => target.comparisonUrl === expected)) {
+            observations.noteVerification(true);
+            return { ok: true, targets };
+        }
+    }
+    observations.noteVerification(false);
+    return { ok: false, targets };
+}
+function shellQuote(value) {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 // capture to a file on the box, read back via the files API — base64 over
 // command stdout corrupts (probed 2026-08-12), never ship binary that way
 const SHOT_WIDTH = 1280;
@@ -79,7 +112,26 @@ const text = (id, t, isError = false) => send({ jsonrpc: "2.0", id, result: { co
 const TOOLS = [
     {
         name: "screenshot",
-        description: "See the bot's cloud computer screen (returns an image). Call before and after acting to ground yourself — the desktop runs Chrome and a full Linux GUI.",
+        description: "See the bot's cloud computer screen when visual state is needed. Prefer browser_state for Chrome title and URL checks. Byte-identical frames are not resent.",
+        inputSchema: { type: "object", properties: {} },
+    },
+    {
+        name: "browser_state",
+        description: "Read structured Chrome page titles and safe URLs. Credentials, query strings and fragments are removed.",
+        inputSchema: { type: "object", properties: {} },
+    },
+    {
+        name: "wait_for_navigation",
+        description: "Verify one exact http(s) destination with at most three bounded structured checks.",
+        inputSchema: {
+            type: "object",
+            properties: { url: { type: "string" } },
+            required: ["url"],
+        },
+    },
+    {
+        name: "observation_metrics",
+        description: "Return this turn's observation, action, retry and verification counters.",
         inputSchema: { type: "object", properties: {} },
     },
     {
@@ -138,12 +190,35 @@ async function call(id, name, args) {
         const data = await readBoxFile("/tmp/cumea-shot.png");
         if (!data)
             return text(id, "screenshot failed: could not read the frame back", true);
+        if (!observations.observeFrame(data).changed) {
+            return text(id, "the screen is identical to the last frame; no duplicate image attached");
+        }
         return send({
             jsonrpc: "2.0",
             id,
             result: { content: [{ type: "image", data, mimeType: "image/png" }] },
         });
     }
+    if (name === "browser_state") {
+        const targets = await browserTargets();
+        return text(id, targets.length
+            ? `Structured browser state:\n${targets.map((target) => `- ${target.title || "Untitled"}: ${target.url}`).join("\n")}`
+            : "Structured browser state unavailable. Use screenshot only when visual state is necessary.");
+    }
+    if (name === "wait_for_navigation") {
+        const url = String(args.url ?? "");
+        const publicUrl = safeBrowserUrl(url);
+        if (!normalizeBrowserUrl(url) || !publicUrl) {
+            observations.noteVerification(false);
+            return text(id, "wait_for_navigation needs a valid http(s) URL", true);
+        }
+        const result = await waitForNavigation(url);
+        return text(id, result.ok
+            ? `navigation verified: ${publicUrl}`
+            : `navigation not verified after 3 checks; current safe URLs: ${result.targets.map((target) => target.url).join(", ") || "unavailable"}`, !result.ok);
+    }
+    if (name === "observation_metrics")
+        return text(id, JSON.stringify(observations.metrics));
     if (name === "click") {
         const x = Math.round(Number(args.x));
         const y = Math.round(Number(args.y));
@@ -163,6 +238,7 @@ async function call(id, name, args) {
         const out = await runOnBox(`${X}xdotool mousemove ${sx} ${sy} click ${rep}${btn}`);
         if (!out.ok)
             return text(id, `click failed: ${out.stderr.slice(0, 200)}`, true);
+        observations.noteAction();
         return text(id, `clicked ${x},${y}${scale !== 1 ? ` (scaled to ${sx},${sy} on the ${geometry.width}x${geometry.height} display)` : ""}${args.double ? " (double)" : ""}${args.button === "right" ? " (right)" : ""} — screenshot to verify`);
     }
     if (name === "type_text") {
@@ -176,6 +252,7 @@ async function call(id, name, args) {
             if (!out.ok)
                 return text(id, `type failed: ${out.stderr.slice(0, 200)}`, true);
         }
+        observations.noteAction();
         return text(id, `typed ${t.length} chars`);
     }
     if (name === "press_key") {
@@ -183,6 +260,8 @@ async function call(id, name, args) {
         if (!keys)
             return text(id, "press_key needs keys", true);
         const out = await runOnBox(`${X}xdotool key ${keys}`);
+        if (out.ok)
+            observations.noteAction();
         return out.ok ? text(id, `pressed ${keys}`) : text(id, `key failed: ${out.stderr.slice(0, 200)}`, true);
     }
     if (name === "scroll") {
@@ -195,19 +274,27 @@ async function call(id, name, args) {
             if (!out.ok)
                 return text(id, `scroll failed: ${out.stderr.slice(0, 200)}`, true);
         }
+        observations.noteAction();
         return text(id, `scrolled ${args.direction} ${clicks}`);
     }
     if (name === "computer_exec") {
+        observations.noteAction();
         const out = await runOnBox(String(args.command ?? "").slice(0, 4000), 120_000);
         return text(id, `exit ${out.exitCode}\n${out.stdout.slice(-6000)}${out.stderr ? `\n[stderr]\n${out.stderr.slice(-2000)}` : ""}`);
     }
     if (name === "open_url") {
         const url = String(args.url ?? "");
-        if (!/^https?:\/\//.test(url))
-            return text(id, "only http(s) URLs", true);
-        const q = url.replace(/'/g, "%27");
-        await runOnBox(`${X}(google-chrome '${q}' || chromium '${q}' || chromium-browser '${q}' || xdg-open '${q}') >/dev/null 2>&1 & sleep 3; echo opened`, 30_000);
-        return text(id, `opened ${url} — take a screenshot to see it`);
+        const normalized = normalizeBrowserUrl(url);
+        const publicUrl = safeBrowserUrl(url);
+        if (!normalized || !publicUrl)
+            return text(id, "only valid http(s) URLs", true);
+        const quoted = shellQuote(normalized);
+        observations.noteAction();
+        await runOnBox(`${X}mkdir -p /tmp/cumea-chrome; (google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/cumea-chrome ${quoted} || chromium --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/cumea-chrome ${quoted} || chromium-browser --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/cumea-chrome ${quoted} || xdg-open ${quoted}) >/dev/null 2>&1 & sleep 3; echo opened`, 30_000);
+        const verification = await waitForNavigation(normalized, 1);
+        return text(id, verification.ok
+            ? `opened and navigation verified: ${publicUrl}`
+            : `opened ${publicUrl}; structured verification is unavailable, so use screenshot only if needed`);
     }
     return text(id, `unknown tool ${name}`, true);
 }
@@ -257,4 +344,3 @@ process.stdin.on("data", (chunk) => {
     }
 });
 process.stdin.on("end", () => process.exit(0));
-export {};

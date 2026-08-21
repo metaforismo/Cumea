@@ -2,12 +2,14 @@
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
 // one). messages-<threadId>.json holds the folded transcript.
-import { readFileSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
 import { purgeCommittedFileDeletions, stageFilesForDeletion, } from "./delete-files.js";
 import { writeFileAtomic } from "./atomic.js";
 import { newId } from "./contracts.js";
+import { assertPersistenceWritable, loadPersistentJson } from "./persistence-health.js";
+import { SKILL_MAX_ASSIGNMENTS, validateSkillAssignment } from "./skill-registry.js";
 export const MOTE_SHAPE_IDS = ["orb", "soft", "tile", "capsule", "peak", "gem", "ripple", "drop"];
 const MOTE_MOTION_LEVELS = new Set(["calm", "playful", "kinetic"]);
 const MOTE_SHAPE_SET = new Set(MOTE_SHAPE_IDS);
@@ -121,22 +123,55 @@ const onboardingCard = () => ({
 });
 export class Store {
     bots = [];
-    messages = new Map();
+    threads = new Map();
     defaultSelection;
-    constructor(defaultSelection) {
+    sanitizeMessage;
+    constructor(defaultSelection, sanitizeMessage = (message) => message) {
         this.defaultSelection = defaultSelection;
+        this.sanitizeMessage = sanitizeMessage;
+        this.reloadFromDisk();
+    }
+    /** Reopen the durable roster after an atomic backup restore.
+     * Callers must hold the server-wide maintenance gate so cached transcript
+     * state cannot race an active turn while it is discarded. */
+    reloadFromDisk() {
         mkdirSync(DATA_DIR, { recursive: true });
-        try {
-            this.bots = JSON.parse(readFileSync(BOTS_FILE, "utf8"));
-        }
-        catch {
-            this.bots = [];
-        }
+        this.threads.clear();
+        this.bots = loadPersistentJson(BOTS_FILE, {
+            label: "Agent roster", missing: () => [], resetValue: [], maxBytes: 8 * 1024 * 1024,
+            validate: (value) => {
+                if (!Array.isArray(value) || value.length > 1_000)
+                    throw new Error("invalid agent roster schema");
+                const seen = new Set();
+                for (const row of value) {
+                    if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.id !== "string" || typeof row.threadId !== "string" || seen.has(row.id)) {
+                        throw new Error("invalid agent roster schema");
+                    }
+                    const assignments = row.skillAssignments;
+                    if (assignments !== undefined) {
+                        if (!Array.isArray(assignments) || assignments.length > SKILL_MAX_ASSIGNMENTS)
+                            throw new Error("invalid agent skill assignments");
+                        const decoded = assignments.map((assignment) => validateSkillAssignment(assignment));
+                        if (new Set(decoded.map((assignment) => assignment.id)).size !== decoded.length)
+                            throw new Error("duplicate agent skill assignments");
+                    }
+                    seen.add(row.id);
+                }
+                return value;
+            },
+        });
         // busy never survives a restart — no turn does either. Old bot records
         // are upgraded in place so every renderer receives a durable Mote config.
         let migrated = false;
+        let coordinatorSeen = false;
         for (const [index, b] of this.bots.entries()) {
             b.busy = false;
+            if (Object.prototype.hasOwnProperty.call(b, "approvalPolicy")) {
+                // Legacy allow/deny covered the bot's entire permission surface. It
+                // cannot be translated to a least-privilege key without guessing.
+                delete b.approvalPolicy;
+                migrated = true;
+            }
             const avatar = parseBotAvatar(b.avatar);
             if (avatar) {
                 b.avatar = avatar;
@@ -159,41 +194,210 @@ export class Store {
                     migrated = true;
                 }
             }
+            if (b.coordinator === true && !coordinatorSeen) {
+                coordinatorSeen = true;
+                if (b.collaborationEnabled !== true) {
+                    b.collaborationEnabled = true;
+                    migrated = true;
+                }
+            }
+            else if (Object.prototype.hasOwnProperty.call(b, "coordinator")) {
+                // Canonical storage omits false, malformed and duplicate roles. The
+                // first row wins because bots are already ordered newest-first.
+                delete b.coordinator;
+                migrated = true;
+            }
         }
         if (migrated)
             this.saveBots();
     }
     saveBots() {
+        assertPersistenceWritable(BOTS_FILE);
         writeFileAtomic(BOTS_FILE, JSON.stringify(this.bots, null, 2));
     }
-    messagesFor(threadId) {
-        let list = this.messages.get(threadId);
-        if (!list) {
-            try {
-                list = JSON.parse(readFileSync(messagesFile(threadId), "utf8"));
-            }
-            catch {
-                list = [];
-            }
-            this.messages.set(threadId, list);
+    thread(threadId) {
+        const cached = this.threads.get(threadId);
+        if (cached)
+            return cached;
+        const path = messagesFile(threadId);
+        const raw = loadPersistentJson(path, {
+            label: `Transcript ${threadId}`, missing: () => [], resetValue: { messages: [], activeLeafId: null }, maxBytes: 64 * 1024 * 1024,
+            validate: (value) => {
+                const container = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+                const rows = Array.isArray(value) ? value : container?.messages;
+                if (!Array.isArray(rows) || rows.length > 50_000 || rows.some((row) => !row || typeof row !== "object" || Array.isArray(row) || typeof row.id !== "string")) {
+                    throw new Error("invalid transcript schema");
+                }
+                return value;
+            },
+        });
+        const container = raw && typeof raw === "object" && !Array.isArray(raw)
+            ? raw
+            : null;
+        const input = Array.isArray(raw) ? raw : Array.isArray(container?.messages) ? container.messages : [];
+        const messages = input.filter((candidate) => Boolean(candidate && typeof candidate === "object" && typeof candidate.id === "string"));
+        const ids = new Set(messages.map((message) => message.id));
+        let previous = null;
+        for (const message of messages) {
+            // Legacy arrays were a single chain. Existing tree rows fail closed to
+            // a root if their parent is malformed or no longer exists.
+            if (message.parentId === undefined)
+                message.parentId = previous;
+            else if (message.parentId !== null && (!ids.has(message.parentId) || message.parentId === message.id))
+                message.parentId = null;
+            previous = message.id;
         }
-        return list;
+        const requestedLeaf = typeof container?.activeLeafId === "string" ? container.activeLeafId : null;
+        const state = {
+            messages,
+            activeLeafId: requestedLeaf && ids.has(requestedLeaf) ? requestedLeaf : messages.at(-1)?.id ?? null,
+        };
+        this.threads.set(threadId, state);
+        return state;
+    }
+    saveThread(threadId) {
+        const thread = this.thread(threadId);
+        const path = messagesFile(threadId);
+        assertPersistenceWritable(path);
+        writeFileAtomic(path, JSON.stringify(thread, null, 2));
+    }
+    /** Every durable branch, in creation order. Use activePath for provider
+     * context and ordinary conversation rendering. */
+    messagesFor(threadId) {
+        return this.thread(threadId).messages;
+    }
+    activeLeaf(threadId) {
+        return this.thread(threadId).activeLeafId;
+    }
+    /** The visible root-to-leaf path. Corrupt/cyclic legacy data is bounded by
+     * the visited set rather than hanging the host. */
+    activePath(threadId) {
+        const thread = this.thread(threadId);
+        const byId = new Map(thread.messages.map((message) => [message.id, message]));
+        const path = [];
+        const visited = new Set();
+        let current = thread.activeLeafId ? byId.get(thread.activeLeafId) : undefined;
+        while (current && !visited.has(current.id)) {
+            visited.add(current.id);
+            path.push(current);
+            current = current.parentId ? byId.get(current.parentId) : undefined;
+        }
+        return path.reverse();
     }
     appendMessage(threadId, message) {
-        const full = { id: newId(), at: Date.now(), ...message };
-        const list = this.messagesFor(threadId);
-        list.push(full);
-        writeFileAtomic(messagesFile(threadId), JSON.stringify(list, null, 2));
+        const thread = this.thread(threadId);
+        const previousLeaf = thread.activeLeafId;
+        // Callers may preserve an explicit timestamp for migrations/tests, but
+        // they must not be able to splice arbitrary parents into the tree.
+        const full = this.sanitizeMessage({
+            ...message,
+            id: newId(),
+            at: message.at ?? Date.now(),
+            parentId: thread.activeLeafId,
+        });
+        thread.messages.push(full);
+        thread.activeLeafId = full.id;
+        try {
+            this.saveThread(threadId);
+        }
+        catch (error) {
+            thread.messages.pop();
+            thread.activeLeafId = previousLeaf;
+            throw error;
+        }
         return full;
     }
+    /** Persist queued work without changing the active conversation branch.
+     * It is attached to the then-current leaf only when dispatch begins, so
+     * output from the in-flight turn cannot become a reply to future work. */
+    appendDetachedMessage(threadId, message) {
+        const thread = this.thread(threadId);
+        const full = this.sanitizeMessage({
+            ...message,
+            id: newId(),
+            at: message.at ?? Date.now(),
+            parentId: thread.activeLeafId,
+        });
+        thread.messages.push(full);
+        try {
+            this.saveThread(threadId);
+        }
+        catch (error) {
+            thread.messages.pop();
+            throw error;
+        }
+        return full;
+    }
+    /** Create a sibling replacement for a user text message. Attachments stay
+     * attached to the replacement so editing prose never silently drops the
+     * files that were part of that turn. */
+    branchMessage(threadId, sourceId, text) {
+        const thread = this.thread(threadId);
+        const source = thread.messages.find((message) => message.id === sourceId);
+        if (!source || source.role !== "user" || source.kind !== "text")
+            return null;
+        const full = this.sanitizeMessage({
+            id: newId(),
+            parentId: source.parentId ?? null,
+            at: Date.now(),
+            role: "user",
+            kind: "text",
+            text,
+            ...(source.attachments?.length ? { attachments: source.attachments.map((attachment) => ({ ...attachment })) } : {}),
+        });
+        thread.messages.push(full);
+        const previousLeaf = thread.activeLeafId;
+        thread.activeLeafId = full.id;
+        try {
+            this.saveThread(threadId);
+        }
+        catch (error) {
+            thread.messages.pop();
+            thread.activeLeafId = previousLeaf;
+            throw error;
+        }
+        return full;
+    }
+    /** Activate the selected version and its newest descendant. */
+    setActiveLeaf(threadId, messageId) {
+        const thread = this.thread(threadId);
+        if (!thread.messages.some((message) => message.id === messageId))
+            return null;
+        const visited = new Set();
+        let current = messageId;
+        while (!visited.has(current)) {
+            visited.add(current);
+            const children = thread.messages.filter((message) => message.parentId === current && !visited.has(message.id));
+            if (!children.length)
+                break;
+            current = children.reduce((latest, candidate) => candidate.at >= latest.at ? candidate : latest).id;
+        }
+        const previousLeaf = thread.activeLeafId;
+        thread.activeLeafId = current;
+        try {
+            this.saveThread(threadId);
+        }
+        catch (error) {
+            thread.activeLeafId = previousLeaf;
+            throw error;
+        }
+        return current;
+    }
     patchMessage(threadId, messageId, patch) {
-        const list = this.messagesFor(threadId);
-        const idx = list.findIndex((m) => m.id === messageId);
+        const thread = this.thread(threadId);
+        const idx = thread.messages.findIndex((m) => m.id === messageId);
         if (idx === -1)
             return null;
-        list[idx] = { ...list[idx], ...patch, card: patch.card ?? list[idx].card };
-        writeFileAtomic(messagesFile(threadId), JSON.stringify(list, null, 2));
-        return list[idx];
+        const previous = thread.messages[idx];
+        thread.messages[idx] = this.sanitizeMessage({ ...previous, ...patch, card: patch.card ?? previous.card });
+        try {
+            this.saveThread(threadId);
+        }
+        catch (error) {
+            thread.messages[idx] = previous;
+            throw error;
+        }
+        return thread.messages[idx];
     }
     bot(id) {
         return this.bots.find((b) => b.id === id) ?? null;
@@ -217,7 +421,7 @@ export class Store {
             resumeCursors: {},
             appsEnabled: true,
             collaborationEnabled: true,
-            approvalPolicy: "ask",
+            memoryWriteEnabled: false,
             ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
             createdAt: Date.now(),
         };
@@ -268,7 +472,7 @@ export class Store {
         // The durable bot record is gone. Purge is post-commit garbage
         // collection: a filesystem failure may leave private quarantine bytes,
         // but must never resurrect metadata whose transcript was partly purged.
-        purgeCommittedFileDeletions([files], (error) => console.error("could not purge committed bot transcript quarantine", error));
+        purgeCommittedFileDeletions([files], () => console.error("could not purge committed bot transcript quarantine"));
         return true;
     }
     botDeletionFiles(id) {
@@ -311,7 +515,7 @@ export class Store {
             finalize: () => {
                 if (settled)
                     return;
-                this.messages.delete(bot.threadId);
+                this.threads.delete(bot.threadId);
                 settled = true;
             },
         };
@@ -320,9 +524,24 @@ export class Store {
         const bot = this.bot(id);
         if (!bot)
             return null;
+        const effectivePatch = patch.coordinator === true && patch.collaborationEnabled !== true
+            ? { ...patch, collaborationEnabled: true }
+            : patch;
         const touched = new Map();
-        for (const key of Object.keys(patch)) {
+        for (const key of Object.keys(effectivePatch)) {
             touched.set(key, { present: Object.prototype.hasOwnProperty.call(bot, key), value: bot[key] });
+        }
+        const displacedCoordinators = new Map();
+        if (effectivePatch.coordinator === true) {
+            for (const candidate of this.bots) {
+                if (candidate !== bot && candidate.coordinator === true) {
+                    displacedCoordinators.set(candidate, {
+                        present: Object.prototype.hasOwnProperty.call(candidate, "coordinator"),
+                        value: candidate.coordinator,
+                    });
+                    delete candidate.coordinator;
+                }
+            }
         }
         if (options.clearLifecycle && !touched.has("lifecycle")) {
             touched.set("lifecycle", {
@@ -330,7 +549,9 @@ export class Store {
                 value: bot.lifecycle,
             });
         }
-        Object.assign(bot, patch);
+        Object.assign(bot, effectivePatch);
+        if (effectivePatch.coordinator === false)
+            delete bot.coordinator;
         if (options.clearLifecycle)
             delete bot.lifecycle;
         try {
@@ -347,6 +568,12 @@ export class Store {
                 else {
                     delete bot[key];
                 }
+            }
+            for (const [candidate, previous] of displacedCoordinators) {
+                if (previous.present)
+                    candidate.coordinator = previous.value;
+                else
+                    delete candidate.coordinator;
             }
             throw error;
         }

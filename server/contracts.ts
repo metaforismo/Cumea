@@ -112,6 +112,10 @@ export interface SendTurnInput {
      * through the harness so this bot can message other bots. The harness
      * owns turns, permissions, and recursion limits; the proxy only forwards. */
     agents?: { command: string; args: string[]; env: Record<string, string> };
+    /** Capability-scoped durable-memory MCP proxy for this bot/turn. */
+    memory?: { command: string; args: string[]; env: Record<string, string> };
+    /** Explicitly assigned local stdio MCP servers. */
+    mcpServers?: Array<{ name: string; command: string; args: string[]; env: Record<string, string> }>;
   };
   cwd?: string;
 }
@@ -124,6 +128,11 @@ export interface ProviderAdapter {
   readonly provider: DriverKind;
   readonly capabilities: {
     sessionModelSwitch: "in-session" | "unsupported";
+    /** Driver understands a provider-native resume cursor. Checkpoint resume
+     * still verifies instance, model, branch and cursor digest server-side. */
+    sessionResume?: boolean;
+    /** Driver consumes SendTurnInput.transcript as replay context. */
+    transcriptReplay?: boolean;
     /** True when the driver mounts turn.integrations.agents as MCP tools —
      * the harness only offers agents tooling (and prompts about it) to
      * drivers that can actually hand it to the agent. */
@@ -134,6 +143,8 @@ export interface ProviderAdapter {
     localComputerMcp?: boolean;
     /** True when the cloud computer MCP integration can be mounted. */
     cloudComputerMcp?: boolean;
+    customMcp?: boolean;
+    memoryMcp?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;
@@ -153,6 +164,16 @@ export interface ProviderSnapshot {
   reason?: string;
   authenticated?: boolean;
   version?: string | null;
+}
+
+// How a local CLI-backed engine is installed. Keeping this on the driver
+// avoids provider-specific setup copy in onboarding and the model picker.
+// Commands are only ever displayed/copied: Cumea never executes installers.
+export interface EngineInstall {
+  command?: Partial<Record<"darwin" | "win32" | "linux", string>>;
+  docsUrl?: string;
+  signInCommand?: string;
+  needsNode?: boolean;
 }
 
 // ── driver SPI (upstream ProviderDriver — a plain record, not a service) ─
@@ -188,6 +209,8 @@ export interface ProviderInstance {
 export interface ProviderDriver<Config = unknown> {
   readonly driverKind: DriverKind;
   readonly metadata: { displayName: string; supportsMultipleInstances?: boolean };
+  /** Omit for API-key/cloud drivers and user-defined executables. */
+  readonly install?: EngineInstall;
   /** Decode the opaque config envelope; throw on invalid (→ shadow). */
   decodeConfig(raw: unknown): Config;
   defaultConfig(): Config;

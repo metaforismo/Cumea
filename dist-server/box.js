@@ -21,6 +21,7 @@ const SCREENSHOT_MAX_PIXELS = 32 * 1024 * 1024;
 const BOX_DELETE_CLEANUP_TIMEOUT_MS = 5_000;
 const BOX_DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const provisionFlights = new Map();
+const boxIdCache = new Map();
 function boxFetch(cfg, path, opts = {}) {
     const signal = opts.signal ?? AbortSignal.timeout(BOX_DEFAULT_REQUEST_TIMEOUT_MS);
     return fetch(`${BOX_API}${path}`, {
@@ -38,6 +39,101 @@ async function boxJson(cfg, path, opts = {}) {
     const body = await res.json().catch(() => null);
     return { ok: res.ok && body?.ok !== false, status: res.status, body };
 }
+function credentialIdentity(cfg) {
+    return createHash("sha256").update(String(cfg.box?.token ?? "")).digest("hex");
+}
+function boxCacheKey(cfg, botId) {
+    return `${botId}:${credentialIdentity(cfg)}`;
+}
+function rememberBoxId(cfg, botId, boxId) {
+    boxIdCache.set(boxCacheKey(cfg, botId), boxId);
+}
+function forgetCachedBoxId(boxId) {
+    for (const [key, value] of boxIdCache)
+        if (value === boxId)
+            boxIdCache.delete(key);
+}
+function trustedBillingUrl(body) {
+    const candidate = body?.error?.details?.billingUrl;
+    if (typeof candidate !== "string" || candidate.length > 2_048)
+        return null;
+    try {
+        const parsed = new URL(candidate);
+        const host = parsed.hostname.toLowerCase();
+        if (parsed.protocol !== "https:" ||
+            parsed.port !== "" ||
+            (host !== "ascii.dev" && host !== "box.ascii.dev"))
+            return null;
+        parsed.username = "";
+        parsed.password = "";
+        parsed.search = "";
+        parsed.hash = "";
+        return parsed.toString();
+    }
+    catch {
+        return null;
+    }
+}
+/** Safe, deterministic provider failures. Provider response bodies are never
+ * reflected, except for a validated ascii.dev billing URL on HTTP 402. */
+export function boxErrorMessage(status, operation, body) {
+    if (status === 401 || status === 403) {
+        return "ascii.dev rejected the Box token. Open App Settings and paste a current Box API token.";
+    }
+    if (status === 402) {
+        const billingUrl = trustedBillingUrl(body);
+        return `An ascii.dev Box plan is required for this action.${billingUrl ? ` Manage the plan at ${billingUrl}` : ""}`;
+    }
+    if (status === 429)
+        return "ascii.dev is rate-limiting this account. Wait a minute and try again.";
+    if (status >= 500 || status <= 0)
+        return `ascii.dev is unavailable, so ${operation} could not be completed. Try again shortly.`;
+    return `ascii.dev refused ${operation} (HTTP ${status}). Try again or check the Box account.`;
+}
+/** Verify a newly supplied credential before it is persisted. */
+export async function verifyBoxToken(token, options = {}) {
+    const candidate = token.trim();
+    if (!candidate || candidate.length > 4_096 || /[\u0000-\u001f\u007f]/.test(candidate)) {
+        return {
+            ok: false,
+            code: "invalid-credential",
+            status: 400,
+            message: "Enter a valid Box API token from ascii.dev.",
+        };
+    }
+    try {
+        const response = await fetch(`${BOX_API}/boxes`, {
+            headers: { authorization: `Bearer ${candidate}` },
+            signal: AbortSignal.timeout(options.timeoutMs ?? 20_000),
+        });
+        if (response.ok)
+            return { ok: true };
+        const body = response.status === 402 ? await response.json().catch(() => null) : null;
+        if (response.status === 401 || response.status === 403) {
+            return { ok: false, code: "invalid-credential", status: 401, message: boxErrorMessage(response.status, "token verification") };
+        }
+        if (response.status === 402) {
+            return { ok: false, code: "billing-required", status: 402, message: boxErrorMessage(402, "token verification", body) };
+        }
+        if (response.status === 429) {
+            return { ok: false, code: "rate-limited", status: 429, message: boxErrorMessage(429, "token verification") };
+        }
+        return {
+            ok: false,
+            code: "provider-unavailable",
+            status: 503,
+            message: boxErrorMessage(response.status >= 500 ? response.status : 0, "token verification"),
+        };
+    }
+    catch {
+        return {
+            ok: false,
+            code: "provider-unavailable",
+            status: 503,
+            message: boxErrorMessage(0, "token verification"),
+        };
+    }
+}
 // deterministic per-bot name; the hash kills truncated-uuid collisions
 async function boxNameFor(botId) {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(botId));
@@ -54,8 +150,16 @@ export async function runCommand(cfg, boxId, command, { timeoutMs = 120_000 } = 
         signal: AbortSignal.timeout(timeoutMs),
     });
     const body = await res.json().catch(() => null);
+    if (!res.ok || body?.ok === false) {
+        return {
+            ok: false,
+            exitCode: null,
+            stdout: "",
+            stderr: boxErrorMessage(res.status, "the Box command", body),
+        };
+    }
     return {
-        ok: res.ok && body?.exitCode === 0,
+        ok: body?.exitCode === 0,
         exitCode: body?.exitCode ?? null,
         stdout: body?.stdout ?? "",
         stderr: body?.stderr ?? "",
@@ -69,7 +173,10 @@ export async function runCommand(cfg, boxId, command, { timeoutMs = 120_000 } = 
 async function mintDesktopUrl(cfg, boxId, { vncBudgetMs = 60_000 } = {}) {
     const t0 = Date.now();
     while (Date.now() - t0 < vncBudgetMs) {
-        const { body } = await boxJson(cfg, `/boxes/${boxId}/desktop?vnc=1`, { method: "POST" });
+        const result = await boxJson(cfg, `/boxes/${boxId}/desktop?vnc=1`, { method: "POST" });
+        if (!result.ok)
+            throw new Error(boxErrorMessage(result.status, "desktop access", result.body));
+        const { body } = result;
         const url = body?.desktopUrl ?? body?.url;
         if (url)
             return url;
@@ -77,33 +184,67 @@ async function mintDesktopUrl(cfg, boxId, { vncBudgetMs = 60_000 } = {}) {
             break;
         await new Promise((r) => setTimeout(r, 3000));
     }
-    const { body } = await boxJson(cfg, `/boxes/${boxId}/desktop`, { method: "POST" });
+    const result = await boxJson(cfg, `/boxes/${boxId}/desktop`, { method: "POST" });
+    if (!result.ok)
+        throw new Error(boxErrorMessage(result.status, "desktop access", result.body));
+    const { body } = result;
     return body?.desktopUrl ?? body?.url ?? null;
 }
 async function waitReady(cfg, boxId, budgetMs = 90_000) {
     const t0 = Date.now();
     while (Date.now() - t0 < budgetMs) {
-        const { body } = await boxJson(cfg, `/boxes/${boxId}`);
+        const result = await boxJson(cfg, `/boxes/${boxId}`);
+        if (!result.ok)
+            throw new Error(boxErrorMessage(result.status, "computer status", result.body));
+        const { body } = result;
         const state = body?.box?.state;
         if (READY.has(state))
             return body.box;
         if (state === "error")
             return null;
         // an archiving box can't resume until the snapshot lands — nudge after
-        if (state === "archived")
-            await boxJson(cfg, `/boxes/${boxId}/resume`, { method: "POST" });
+        if (state === "archived") {
+            const resumed = await boxJson(cfg, `/boxes/${boxId}/resume`, { method: "POST" });
+            if (!resumed.ok)
+                throw new Error(boxErrorMessage(resumed.status, "computer resume", resumed.body));
+        }
         await new Promise((r) => setTimeout(r, 2500));
     }
     return null;
 }
 async function findBoxResult(cfg, botId, opts = {}) {
     const name = await boxNameFor(botId);
+    const cacheKey = boxCacheKey(cfg, botId);
+    const cachedId = boxIdCache.get(cacheKey);
+    if (cachedId) {
+        try {
+            const direct = await boxJson(cfg, `/boxes/${encodeURIComponent(cachedId)}`, opts);
+            const candidate = direct.body?.box;
+            if (direct.ok &&
+                String(candidate?.id ?? "") === cachedId &&
+                candidate?.name === name &&
+                candidate?.state !== "error") {
+                return { ...direct, ownedBox: candidate };
+            }
+        }
+        catch {
+            // A stale credential/account or provider interruption must not make the
+            // cached id authoritative. The owner-scoped list below re-establishes it.
+        }
+        boxIdCache.delete(cacheKey);
+    }
     const response = await boxJson(cfg, "/boxes", opts);
-    const ownedBox = (response.body?.boxes ?? []).find((b) => b.name === name && b.state !== "error") ?? null;
+    const boxes = Array.isArray(response.body?.boxes) ? response.body.boxes : [];
+    const ownedBox = boxes.find((b) => b.name === name && b.state !== "error") ?? null;
+    if (response.ok && ownedBox?.id)
+        rememberBoxId(cfg, botId, String(ownedBox.id));
     return { ...response, ownedBox };
 }
 export async function findBox(cfg, botId, opts = {}) {
-    return (await findBoxResult(cfg, botId, opts)).ownedBox;
+    const result = await findBoxResult(cfg, botId, opts);
+    if (!result.ok)
+        throw new Error(boxErrorMessage(result.status, "the Box lookup", result.body));
+    return result.ownedBox;
 }
 export function boxConfigured(cfg) {
     return Boolean(cfg.box?.token);
@@ -144,12 +285,21 @@ async function provisionBoxOnce(cfg, botId, botName) {
             });
         }
         if (!createRes.ok || !createRes.body?.box?.id) {
-            const why = createRes.body?.message ?? createRes.body?.error?.message ?? "";
-            throw new Error(`box create failed (${createRes.status})${why ? `: ${why}` : ""}`);
+            throw new Error(boxErrorMessage(createRes.status, "computer creation", createRes.body));
         }
         box = createRes.body.box;
         created = true;
-        await boxJson(cfg, `/boxes/${box.id}`, { method: "PATCH", body: JSON.stringify({ name: vmName }) });
+        const renamed = await boxJson(cfg, `/boxes/${encodeURIComponent(String(box.id))}`, {
+            method: "PATCH",
+            body: JSON.stringify({ name: vmName }),
+        });
+        if (!renamed.ok) {
+            await boxJson(cfg, `/boxes/${encodeURIComponent(String(box.id))}/stop`, { method: "POST" }).catch(() => { });
+            forgetCachedBoxId(String(box.id));
+            throw new Error(boxErrorMessage(renamed.status, "computer ownership setup", renamed.body));
+        }
+        box = { ...box, name: vmName };
+        rememberBoxId(cfg, botId, String(box.id));
     }
     const ready = await waitReady(cfg, box.id);
     if (!ready)
@@ -203,7 +353,7 @@ export function provisionBox(cfg, botId, botName) {
         ...cfg,
         ...(cfg.box ? { box: { ...cfg.box } } : {}),
     };
-    const tokenIdentity = createHash("sha256").update(String(flightCfg.box?.token ?? "")).digest("hex");
+    const tokenIdentity = credentialIdentity(flightCfg);
     const flightKey = `${botId}:${tokenIdentity}`;
     const current = provisionFlights.get(flightKey);
     if (current)
@@ -316,10 +466,14 @@ export async function readWorkspaceFile(cfg, botId, requestedValue) {
             typeof metadata.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(metadata.sha256)) {
             throw Object.assign(new Error("cloud workspace returned unsafe file metadata"), { status: 502 });
         }
-        const { ok, body } = await boxJson(cfg, `/boxes/${box.id}/files?path=${encodeURIComponent(snapshotPath)}&encoding=base64`);
+        const snapshotRead = await boxJson(cfg, `/boxes/${box.id}/files?path=${encodeURIComponent(snapshotPath)}&encoding=base64`);
+        const { ok, body } = snapshotRead;
         const encoded = body?.content;
         const maxEncodedLength = Math.ceil((metadata.size * 4) / 3) + 8;
-        if (!ok || typeof encoded !== "string" || encoded.length > maxEncodedLength) {
+        if (!ok) {
+            throw Object.assign(new Error(boxErrorMessage(snapshotRead.status, "workspace file read", body)), { status: 502 });
+        }
+        if (typeof encoded !== "string" || encoded.length > maxEncodedLength) {
             throw Object.assign(new Error("cloud workspace snapshot could not be read"), { status: 502 });
         }
         const bytes = Buffer.from(encoded, "base64");
@@ -350,7 +504,9 @@ export async function sleepBox(cfg, botId) {
     const box = await findBox(cfg, botId);
     if (!box)
         throw new Error("no computer for this bot");
-    await boxJson(cfg, `/boxes/${box.id}/stop`, { method: "POST" }).catch(() => { });
+    const stopped = await boxJson(cfg, `/boxes/${box.id}/stop`, { method: "POST" });
+    if (!stopped.ok)
+        throw new Error(boxErrorMessage(stopped.status, "computer sleep", stopped.body));
     return { ok: true };
 }
 /**
@@ -395,6 +551,8 @@ export async function archiveBoxByIdForDeletion(cfg, boxId, options = {}) {
     const signal = options.signal ?? AbortSignal.timeout(options.timeoutMs ?? BOX_DELETE_CLEANUP_TIMEOUT_MS);
     try {
         const stopped = await boxJson(cfg, `/boxes/${encodeURIComponent(boxId)}/stop`, { method: "POST", signal });
+        if (stopped.ok)
+            forgetCachedBoxId(boxId);
         return stopped.ok ? { outcome: "stop-requested" } : { outcome: "warning", warning };
     }
     catch {
@@ -505,9 +663,10 @@ export async function screenshotBox(cfg, botId) {
         if (!/captured/.test(out.stdout)) {
             throw new Error(out.stderr.slice(0, 200) || "screen capture failed on the box");
         }
-        const { ok, body } = await boxJson(cfg, `/boxes/${box.id}/files?path=${encodeURIComponent(snapshotPath)}&encoding=base64`);
+        const screenshotRead = await boxJson(cfg, `/boxes/${box.id}/files?path=${encodeURIComponent(snapshotPath)}&encoding=base64`);
+        const { ok, body } = screenshotRead;
         if (!ok)
-            throw new Error("could not read the frame back from the box");
+            throw new Error(boxErrorMessage(screenshotRead.status, "screenshot read", body));
         const png = decodeScreenshotPng(body?.content).toString("base64");
         return { png, format: "png" };
     }

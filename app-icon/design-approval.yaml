@@ -1,0 +1,46 @@
+schema_version: 1
+status: corrected-production-revision
+concept:
+  id: cumea-a3r1-corrected-safe-area
+  path: concepts/cumea-a3r1-corrected-safe-area.png
+  sha256: fba0d5a207e96f646dd5477330b21ba893062f8abf4283d36026744564b49dee
+approval:
+  explicitly_approved: true
+  approved_at: 2026-08-13
+  evidence_note: User explicitly requested removal of the violet fold artifact and a smaller composition in Apple Icon Composer.
+design_lock:
+  product_promise: A council of agents presented through one clear interface.
+  recognition_anchor: Three folded triangular oracle agents with tall pill eyes.
+  metaphor: A visible council of independent agents.
+  silhouette: Three separate soft triangular sheets, each curled once along its lower edge.
+  composition: Ivory lead in front; smaller orange agent behind-left; violet agent behind upper-right; complete council scaled down with safe padding for the Apple mask.
+  palette:
+    - { name: background, value: "#101115" }
+    - { name: lead, value: "#EDECE7" }
+    - { name: lead-underside, value: "#A7A8A6" }
+    - { name: orange, value: "#F56A16" }
+    - { name: orange-underside, value: "#A93C0B" }
+    - { name: violet, value: "#AAA2CA" }
+    - { name: violet-underside, value: "#59468A" }
+    - { name: eyes, value: "#101115" }
+  protected_invariants:
+    - Exactly three separate triangular oracle agents.
+    - Ivory lead remains largest and foregrounded.
+    - Orange remains behind-left; violet remains behind upper-right.
+    - Every agent has exactly two tall pill eyes and no mouth.
+    - Every agent is one sheet with exactly one same-color underside fold.
+    - No cross-color tongue, nested fold, or second flap.
+  permitted_production_translations:
+    - Preserve the approved PNG as the master image layer.
+    - Keep per-layer Icon Composer effects disabled when they alter the approved pixels.
+production_plan:
+  authorized: true
+  delivery_route: apple-icon-composer
+  composer_feasibility: exact-approved-png-as-master-layer
+  composer_adaptation_requires_reapproval: false
+  layers:
+    - { order: 1, id: cumea-a3r1-single-fold-council, role: approved full-color master, source_decision: png, reason: preserve the approved gradients, folds, texture, and composition exactly }
+  reapproval_triggers:
+    - Changed metaphor or recognition anchor.
+    - Materially changed silhouette, composition, focal scale, palette, or fold ownership.
+    - Layer composite no longer matches the approved concept at full size and 32 px.

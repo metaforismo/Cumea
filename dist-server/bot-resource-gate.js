@@ -102,6 +102,12 @@ function deletionConflict(message) {
  */
 export class BotResourceGate {
     states = new Map();
+    /** Read-only host safety probe. Detached provider callbacks count because
+     * they may still make a Box resource current after an await. */
+    hasActive(botId) {
+        const state = this.states.get(botId);
+        return Boolean(state && (state.active > 0 || state.detached > 0));
+    }
     createState(botId) {
         const state = {
             active: 0,

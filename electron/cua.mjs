@@ -9,6 +9,7 @@ import { app, ipcMain, shell } from "electron";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { normalizeCuaPermissions, toPublicCuaStatus } from "./cua-contract.mjs";
 
 const INSTALLED_DRIVER = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
@@ -20,6 +21,41 @@ let embeddedHost = null;
 let connection = null;
 let activeGeneration = null;
 let transition = Promise.resolve();
+
+const CUA_ENTRYPOINTS = {
+  index: "index.js",
+  electron: "electron.js",
+  embedded: "embedded.js",
+};
+
+function cuaModuleSpecifier(entrypoint) {
+  const file = CUA_ENTRYPOINTS[entrypoint];
+  if (!file) throw new Error(`Unknown CUA module entrypoint: ${entrypoint}`);
+  if (!app.isPackaged) {
+    if (entrypoint === "index") return "@trycua/cua-driver";
+    return `@trycua/cua-driver/${entrypoint}`;
+  }
+  // Native libraries cannot be opened from the virtual app.asar filesystem.
+  // Import the unpacked SDK itself so its package-relative resolveLibPath()
+  // returns real .node/.dylib paths suitable for dlopen.
+  return pathToFileURL(
+    path.join(
+      process.resourcesPath,
+      "app.asar.unpacked",
+      "node_modules",
+      "@trycua",
+      "cua-driver",
+      "dist",
+      file,
+    ),
+  ).href;
+}
+
+function logCuaFailure(context, error) {
+  // Keep file paths and loader internals out of the renderer. They are useful
+  // in the host log when diagnosing a broken package, not in onboarding/chat.
+  console.error(`[cua] ${context}`, error);
+}
 
 function persistConnection(value) {
   const temporary = `${CONNECTION_PATH}.tmp-${process.pid}`;
@@ -68,8 +104,8 @@ function socketAlive(socketPath) {
 
 async function permissionApi() {
   const [sdk, electronSdk] = await Promise.all([
-    import("@trycua/cua-driver"),
-    import("@trycua/cua-driver/electron"),
+    import(cuaModuleSpecifier("index")),
+    import(cuaModuleSpecifier("electron")),
   ]);
   return {
     current: sdk.currentMacOsPermissionStatus,
@@ -129,7 +165,7 @@ function observeExit(host, generation) {
 }
 
 async function startOrRestartEmbedded(binary, { restart = false } = {}) {
-  const { EmbeddedCuaDriverHost } = await import("@trycua/cua-driver/embedded");
+  const { EmbeddedCuaDriverHost } = await import(cuaModuleSpecifier("embedded"));
   if (!embeddedHost) embeddedHost = new EmbeddedCuaDriverHost(binary, HOST_BUNDLE_ID);
   if (!restart && activeGeneration && connection?.state === "ready") return publicCuaStatus();
   setConnection({ mode: "embedded", state: "starting", permissions: { accessibility: true, screenRecording: true } });
@@ -158,11 +194,12 @@ async function reconcileEmbedded(binary, { request = false, restart = false } = 
   try {
     permissions = await readHostPermissions({ request });
   } catch (error) {
+    logCuaFailure("could not read local-computer permissions", error);
     await stopEmbedded().catch(() => undefined);
     return setConnection({
       mode: "error",
       state: "error",
-      reason: `could not read local computer permissions: ${error?.message ?? error}`,
+      reason: "Local computer support could not start. Reinstall Cumea or try again.",
     });
   }
 
@@ -179,8 +216,13 @@ async function reconcileEmbedded(binary, { request = false, restart = false } = 
   try {
     return await startOrRestartEmbedded(binary, { restart });
   } catch (error) {
+    logCuaFailure("embedded host failed", error);
     await stopEmbedded().catch(() => undefined);
-    return setConnection({ mode: "error", state: "error", reason: `embedded host failed: ${error?.message ?? error}` });
+    return setConnection({
+      mode: "error",
+      state: "error",
+      reason: "Local computer support could not start. Reinstall Cumea or try again.",
+    });
   }
 }
 

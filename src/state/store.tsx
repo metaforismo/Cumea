@@ -10,6 +10,7 @@ import {
   useMemo,
   useReducer,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 import type { CumeaColor, CumeaExpression, CumeaMotion } from "@/lib/mascot";
@@ -47,14 +48,23 @@ export interface HandoffData {
   reply?: string;
 }
 
+export interface BotContext {
+  id: string;
+  label: string;
+  startedAt: number;
+}
+
 export interface Message {
   id: string;
+  parentId?: string | null;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen" | "handoff";
+  kind: "text" | "options" | "activity" | "screen" | "handoff" | "context";
   text?: string;
   card?: OptionCardData;
   attachments?: AttachmentRef[];
   handoff?: HandoffData;
+  context?: BotContext;
+  delivery?: "queued" | "sent" | "cancelled" | "failed";
   /** activity messages: tool name + outcome */
   tool?: { name: string; ok?: boolean };
   /** screen messages: a frame of the bot's computer (base64) */
@@ -87,15 +97,53 @@ export interface Bot {
   busy?: boolean;
   modelSelection: ModelSelection;
   /** Where this bot's computer runs; unset = auto (cloud box if one exists, else local). */
-  computer?: "cloud" | "local" | "off";
+  computer?: "cloud" | "vm" | "local" | "off";
   pinned?: boolean;
   hidden?: boolean;
   sectionId?: string | null;
   appsEnabled?: boolean;
   collaborationEnabled?: boolean;
-  approvalPolicy?: "ask" | "allow" | "deny";
+  /** Exclusive workspace role for planning and peer delegation. */
+  coordinator?: boolean;
+  /** Local MCP registry ids assigned explicitly to this bot. */
+  mcpServerIds?: string[];
+  skillAssignments?: Array<{ id: string; version: string }>;
+  memoryWriteEnabled?: boolean;
   lifecycle?: BotLifecycle | null;
+  context?: BotContext;
+  activeLeafId?: string | null;
   messages: Message[];
+}
+
+/** Messages on the selected root-to-leaf branch. The visited set prevents a
+ * malformed imported transcript from hanging the renderer. */
+export function visibleMessages(bot: Pick<Bot, "messages" | "activeLeafId">): Message[] {
+  if (!bot.messages.length) return [];
+  const byId = new Map(bot.messages.map((message) => [message.id, message]));
+  const leafId = bot.activeLeafId ?? bot.messages.at(-1)?.id ?? null;
+  const visible: Message[] = [];
+  const visited = new Set<string>();
+  let current = leafId ? byId.get(leafId) : undefined;
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    visible.push(current);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return visible.reverse();
+}
+
+/** Sibling user messages are the editable versions of the same turn. */
+export function messageVersions(bot: Pick<Bot, "messages">, message: Message): Message[] {
+  return bot.messages
+    .filter((candidate) =>
+      candidate.role === "user"
+      && candidate.kind === "text"
+      && candidate.delivery !== "queued"
+      && candidate.delivery !== "cancelled"
+      && candidate.delivery !== "failed"
+      && (candidate.parentId ?? null) === (message.parentId ?? null),
+    )
+    .sort((left, right) => left.at === right.at ? left.id.localeCompare(right.id) : left.at - right.at);
 }
 
 export interface SectionRecord {
@@ -124,6 +172,45 @@ export interface RunArtifact {
   createdAt: number;
 }
 
+export interface EvidenceRequirement {
+  id: string;
+  label: string;
+  createdAt: number;
+}
+
+export interface EvidenceRecord {
+  id: string;
+  requirementId: string;
+  level: "claimed" | "observed" | "verified" | "rejected";
+  source: "user" | "system" | "verifier";
+  label: string;
+  reference?: { kind: "step" | "artifact"; id: string; runId: string };
+  digest?: string;
+  verifier?: { id: string; version: string };
+  recordedAt: number;
+}
+
+export interface ExternalEffectRecord {
+  id: string;
+  runId: string;
+  taskId: string;
+  botId: string;
+  stepId?: string;
+  itemId?: string;
+  origin: "controlled" | "provider_observation";
+  descriptor: { boundary: string; action: string; targetHint?: string };
+  requestHash: string;
+  idempotencyKey: string;
+  fingerprint: string;
+  attempt: number;
+  retryOf?: string;
+  state: "intended" | "applying" | "applied" | "failed" | "unknown";
+  result?: { ok: boolean; kind: string; code?: string; reference?: string; digest: string };
+  audit: Array<{ id: string; event: string; at: number; note?: string }>;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface TaskRecord {
   id: string;
   botId: string;
@@ -132,9 +219,15 @@ export interface TaskRecord {
   source: "message" | "routine" | "handoff";
   sourceBotId?: string;
   routineId?: string;
-  status: "queued" | "running" | "needs_attention" | "completed" | "failed" | "cancelled";
+  scheduledFor?: number;
+  status: "queued" | "running" | "needs_attention" | "interrupted" | "completed" | "failed" | "cancelled";
   attachmentIds: string[];
+  messageId?: string;
   latestRunId?: string;
+  evidenceRequirements?: EvidenceRequirement[];
+  verificationStatus?: "not_required" | "pending" | "claimed" | "observed" | "verified" | "failed";
+  budget?: { durationMs?: number; toolCalls?: number; computerActions?: number; delegations?: number; tokens?: number };
+  budgetDurationUsedMs?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -145,9 +238,36 @@ export interface RunRecord {
   botId: string;
   routineId?: string;
   turnId?: string;
-  status: "running" | "needs_attention" | "completed" | "failed" | "cancelled";
+  status: "running" | "needs_attention" | "interrupted" | "completed" | "failed" | "cancelled";
   steps: RunStep[];
   artifacts: RunArtifact[];
+  evidence?: EvidenceRecord[];
+  budgetUsage?: { startedAt: number; activeSince?: number; durationUsedMs: number; toolCalls: number; computerActions: number; delegations: number; tokens?: number; exhaustedAt?: number; exhaustionReason?: "durationMs" | "toolCalls" | "computerActions" | "delegations" | "tokens" };
+  effects?: ExternalEffectRecord[];
+  compaction?: {
+    policyVersion: 1; compacted: boolean; originalMessages: number; submittedMessages: number;
+    originalBytes: number; submittedBytes: number; omittedMessages: number;
+    estimatedSubmittedTokens: number; selectedIdentityDigest: string;
+  };
+  checkpoint?: {
+    version: 1;
+    id: string;
+    phase: "created" | "turn_accepted" | "session" | "tool" | "approval" | "provider";
+    status: "available" | "unsafe" | "consumed";
+    activeLeafId: string;
+    provider: { instanceId: string; model: string };
+    cursor?: { instanceId: string; digest: string };
+    sequence: number;
+    createdAt: number;
+    updatedAt: number;
+    unsafeReason?: "turn_not_accepted" | "unknown_effect" | "missing_transcript" | "branch_mismatch" | "provider_unavailable";
+    resumedByRunId?: string;
+  };
+  resumeStatus?: "available" | "unsafe" | "resumed";
+  resumeUnsafeReason?: "turn_not_accepted" | "unknown_effect" | "missing_transcript" | "branch_mismatch" | "provider_unavailable";
+  resumeOfRunId?: string;
+  resumedFromCheckpointId?: string;
+  attempt?: number;
   startedAt: number;
   completedAt?: number;
   error?: string;
@@ -165,11 +285,13 @@ export interface RoutineRecord {
   prompt: string;
   schedule: RoutineSchedule;
   enabled: boolean;
+  catchUpPolicy?: "latest" | "skip";
   nextRunAt: number | null;
   createdAt: number;
   updatedAt: number;
   lastRunAt?: number;
-  lastStatus?: "running" | "completed" | "failed";
+  lastScheduledFor?: number;
+  lastStatus?: "queued" | "running" | "completed" | "failed" | "missed";
   lastError?: string;
 }
 
@@ -196,6 +318,14 @@ export interface ConfigStatus {
   box: { configured: boolean };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
+  acpProfiles?: { count: number };
+}
+
+export interface EngineInstall {
+  command?: Partial<Record<"darwin" | "win32" | "linux", string>>;
+  docsUrl?: string;
+  signInCommand?: string;
+  needsNode?: boolean;
 }
 
 /** One row of GET /api/instances — the model picker's data. */
@@ -216,23 +346,26 @@ export interface InstanceInfo {
     composioMcp?: boolean;
     localComputerMcp?: boolean;
     cloudComputerMcp?: boolean;
+    customMcp?: boolean;
+    memoryMcp?: boolean;
   };
+  install?: EngineInstall;
 }
 
 interface AppState {
   bots: Bot[];
   instances: InstanceInfo[];
+  instancesLoaded: boolean;
   config: ConfigStatus | null;
   selectedId: string;
   settingsOpen: boolean;
   pluginsOpen: boolean;
   computerOpen: boolean;
   appSettingsOpen: boolean;
+  appSettingsTab: "profile" | "models" | "connections" | "mobile" | "data" | "about";
   workOpen: boolean;
   workTab: "attention" | "activity" | "routines" | "sections";
   workspace: WorkspaceSnapshot;
-  /** in-flight assistant text per threadId (content.delta fold) */
-  streaming: Record<string, string>;
   /** latest live frame of a bot's computer, per botId */
   screens: Record<string, { png: string; mime: string }>;
   /** bots whose cloud computer is being provisioned */
@@ -262,8 +395,7 @@ type Action =
   | { type: "botPatched"; bot: Partial<Bot> & { id: string } }
   | { type: "messageAdded"; threadId: string; message: Message }
   | { type: "messagePatched"; threadId: string; message: Message }
-  | { type: "streamDelta"; threadId: string; delta: string }
-  | { type: "streamClear"; threadId: string }
+  | { type: "threadActive"; threadId: string; activeLeafId: string | null }
   | { type: "screenFrame"; botId: string; png: string; mime: string }
   | { type: "provisioning"; botId: string; on: boolean }
   | { type: "setModel"; botId: string; selection: ModelSelection }
@@ -273,7 +405,7 @@ type Action =
   | { type: "toggleSettings"; open?: boolean }
   | { type: "togglePlugins"; open?: boolean }
   | { type: "toggleComputer"; open?: boolean }
-  | { type: "toggleAppSettings"; open?: boolean }
+  | { type: "toggleAppSettings"; open?: boolean; tab?: AppState["appSettingsTab"] }
   | { type: "toggleWork"; open?: boolean; tab?: "attention" | "activity" | "routines" | "sections" }
   | { type: "previewMascotMotion"; botId: string; kind: Exclude<CumeaMotion, "none"> }
   | {
@@ -295,7 +427,9 @@ type Action =
           | "sectionId"
           | "appsEnabled"
           | "collaborationEnabled"
-          | "approvalPolicy"
+          | "coordinator"
+          | "mcpServerIds"
+          | "memoryWriteEnabled"
         >
       >;
     };
@@ -338,7 +472,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, bots: action.bots, selectedId };
     }
     case "instances":
-      return { ...state, instances: action.instances };
+      return { ...state, instances: action.instances, instancesLoaded: true };
     case "configStatus":
       return { ...state, config: action.config };
     case "workspaceHydrated":
@@ -366,21 +500,17 @@ function reducer(state: AppState, action: Action): AppState {
         selectedId: action.bot.id,
       }, action.bot.id, "arrive");
     case "botDeleted": {
-      const deleted = state.bots.find((bot) => bot.id === action.botId);
       const bots = state.bots.filter((b) => b.id !== action.botId);
       const selectedId =
         state.selectedId === action.botId ? (bots.find((b) => !b.hidden)?.id ?? bots[0]?.id ?? "") : state.selectedId;
       const { [action.botId]: _screen, ...screens } = state.screens;
       const { [action.botId]: _provisioning, ...provisioning } = state.provisioning;
-      const streaming = { ...state.streaming };
-      if (deleted) delete streaming[deleted.threadId];
       return {
         ...state,
         bots,
         selectedId,
         screens,
         provisioning,
-        streaming,
         workspace: {
           ...state.workspace,
           attachments: state.workspace.attachments.filter((attachment) => attachment.botId !== action.botId),
@@ -412,7 +542,11 @@ function reducer(state: AppState, action: Action): AppState {
       const next = updateBot(state, bot.id, (b) =>
         b.messages.some((m) => m.id === action.message.id)
           ? b
-          : { ...b, messages: [...b.messages, action.message] },
+          : {
+              ...b,
+              ...(action.message.delivery === "queued" ? {} : { activeLeafId: action.message.id }),
+              messages: [...b.messages, action.message],
+            },
       );
       const motion =
         action.message.kind === "options"
@@ -427,12 +561,11 @@ function reducer(state: AppState, action: Action): AppState {
               ? "blink"
               : null;
       const animated = motion ? withMascotMotion(next, bot.id, motion) : next;
-      // a settled assistant bubble replaces the in-flight stream
-      if (action.message.role === "bot" && action.message.kind === "text") {
-        const { [action.threadId]: _, ...rest } = animated.streaming;
-        return { ...animated, streaming: rest };
-      }
       return animated;
+    }
+    case "threadActive": {
+      const bot = state.bots.find((candidate) => candidate.threadId === action.threadId);
+      return bot ? updateBot(state, bot.id, (candidate) => ({ ...candidate, activeLeafId: action.activeLeafId })) : state;
     }
     case "messagePatched": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
@@ -450,18 +583,6 @@ function reducer(state: AppState, action: Action): AppState {
         ...b,
         messages: b.messages.map((m) => (m.id === action.message.id ? action.message : m)),
       }));
-    }
-    case "streamDelta":
-      return {
-        ...state,
-        streaming: {
-          ...state.streaming,
-          [action.threadId]: (state.streaming[action.threadId] ?? "") + action.delta,
-        },
-      };
-    case "streamClear": {
-      const { [action.threadId]: _, ...rest } = state.streaming;
-      return { ...state, streaming: rest };
     }
     case "screenFrame":
       return {
@@ -513,6 +634,7 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         appSettingsOpen: open,
+        appSettingsTab: action.tab ?? state.appSettingsTab,
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
@@ -552,16 +674,17 @@ function reducer(state: AppState, action: Action): AppState {
 const initialState: AppState = {
   bots: [],
   instances: [],
+  instancesLoaded: false,
   config: null,
   selectedId: "",
   settingsOpen: false,
   pluginsOpen: false,
   computerOpen: false,
   appSettingsOpen: false,
+  appSettingsTab: "profile",
   workOpen: false,
   workTab: "attention",
   workspace: EMPTY_WORKSPACE,
-  streaming: {},
   screens: {},
   provisioning: {},
   connected: false,
@@ -599,6 +722,14 @@ export async function uploadAttachment(
   return body.attachment as AttachmentRef;
 }
 
+export interface ThreadStreamingState {
+  assistantText: string;
+  reasoningText: string;
+}
+
+const EMPTY_THREAD_STREAM: ThreadStreamingState = { assistantText: "", reasoningText: "" };
+const StreamingContext = createContext<Record<string, ThreadStreamingState> | null>(null);
+
 const StoreContext = createContext<{
   state: AppState;
   dispatch: React.Dispatch<Action>;
@@ -607,15 +738,23 @@ const StoreContext = createContext<{
     text: string;
     attachments?: AttachmentRef[];
     track?: boolean;
+    budget?: TaskRecord["budget"];
   }) => Promise<void>;
   answerCard: (input: { botId: string; messageId: string; answer: string }) => Promise<void>;
   dismissCard: (input: { botId: string; messageId: string }) => Promise<void>;
   deleteBot: (botId: string) => Promise<void>;
   makeBotPermanent: (botId: string) => Promise<void>;
+  startContext: (botId: string, label?: string) => Promise<void>;
+  editMessage: (input: { botId: string; messageId: string; text: string }) => Promise<void>;
+  switchBranch: (input: { botId: string; messageId: string }) => Promise<void>;
+  refreshInstances: () => Promise<InstanceInfo[]>;
 } | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, rawDispatch] = useReducer(reducer, initialState);
+  // Token deltas live in a dedicated context. Updating them no longer
+  // invalidates every sidebar/settings/work consumer of the durable store.
+  const [streaming, setStreaming] = useState<Record<string, ThreadStreamingState>>({});
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -627,19 +766,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Browser EventSource can deliver provider token deltas much faster than a
   // paint. Coalesce them to one reducer/context update per animation frame;
   // durable message and turn boundaries flush synchronously below.
-  const pendingStreamDeltas = useRef(new Map<string, string>());
+  const pendingStreamDeltas = useRef(new Map<string, ThreadStreamingState>());
   const streamFrame = useRef<number | null>(null);
 
   const flushStreamDeltas = useCallback((threadId?: string) => {
+    const updates: Array<[string, ThreadStreamingState]> = [];
     if (threadId) {
       const delta = pendingStreamDeltas.current.get(threadId);
       pendingStreamDeltas.current.delete(threadId);
-      if (delta) rawDispatch({ type: "streamDelta", threadId, delta });
+      if (delta) updates.push([threadId, delta]);
     } else {
-      for (const [id, delta] of pendingStreamDeltas.current) {
-        rawDispatch({ type: "streamDelta", threadId: id, delta });
-      }
+      updates.push(...pendingStreamDeltas.current);
       pendingStreamDeltas.current.clear();
+    }
+    if (updates.length) {
+      setStreaming((current) => {
+        const next = { ...current };
+        for (const [id, delta] of updates) {
+          const before = next[id] ?? EMPTY_THREAD_STREAM;
+          next[id] = {
+            assistantText: before.assistantText + delta.assistantText,
+            reasoningText: before.reasoningText + delta.reasoningText,
+          };
+        }
+        return next;
+      });
     }
     if (pendingStreamDeltas.current.size === 0 && streamFrame.current !== null) {
       cancelAnimationFrame(streamFrame.current);
@@ -647,9 +798,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const queueStreamDelta = useCallback((threadId: string, delta: string) => {
+  const queueStreamDelta = useCallback((threadId: string, streamKind: "assistant_text" | "reasoning_text", delta: string) => {
     if (!delta) return;
-    pendingStreamDeltas.current.set(threadId, `${pendingStreamDeltas.current.get(threadId) ?? ""}${delta}`);
+    const before = pendingStreamDeltas.current.get(threadId) ?? EMPTY_THREAD_STREAM;
+    pendingStreamDeltas.current.set(threadId, {
+      assistantText: before.assistantText + (streamKind === "assistant_text" ? delta : ""),
+      reasoningText: before.reasoningText + (streamKind === "reasoning_text" ? delta : ""),
+    });
     if (streamFrame.current !== null) return;
     streamFrame.current = requestAnimationFrame(() => {
       streamFrame.current = null;
@@ -657,9 +812,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }, [flushStreamDeltas]);
 
+  const clearStream = useCallback((threadId: string) => {
+    pendingStreamDeltas.current.delete(threadId);
+    setStreaming((current) => {
+      if (!current[threadId]) return current;
+      const next = { ...current };
+      delete next[threadId];
+      return next;
+    });
+  }, []);
+
   const showError = useCallback((error: unknown) => {
     rawDispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
     setTimeout(() => rawDispatch({ type: "error", message: null }), 6000);
+  }, []);
+
+  const refreshInstances = useCallback(async () => {
+    const body = await api("/api/instances");
+    const instances = Array.isArray(body.instances) ? body.instances as InstanceInfo[] : [];
+    rawDispatch({ type: "instances", instances });
+    return instances;
   }, []);
 
   const sendMessage = useCallback(async (input: {
@@ -667,6 +839,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     text: string;
     attachments?: AttachmentRef[];
     track?: boolean;
+    budget?: TaskRecord["budget"];
   }) => {
     try {
       await api(`/api/bots/${input.botId}/messages`, {
@@ -675,6 +848,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           text: input.text,
           attachmentIds: input.attachments?.map((attachment) => attachment.id) ?? [],
           track: input.track,
+          budget: input.budget,
         }),
       });
       rawDispatch({ type: "previewMascotMotion", botId: input.botId, kind: "working" });
@@ -762,6 +936,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (pendingBotDeletes.current.has(botId)) return;
     const operationId = crypto.randomUUID();
     pendingBotDeletes.current.set(botId, operationId);
+    const threadId = stateRef.current.bots.find((bot) => bot.id === botId)?.threadId;
     try {
       await api(`/api/bots/${botId}`, {
         method: "DELETE",
@@ -770,6 +945,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const pendingPatch = patchTimers.current.get(botId);
       if (pendingPatch) clearTimeout(pendingPatch.timer);
       patchTimers.current.delete(botId);
+      if (threadId) clearStream(threadId);
       rawDispatch({ type: "botDeleted", botId });
     } catch (error) {
       showError(error);
@@ -779,7 +955,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         pendingBotDeletes.current.delete(botId);
       }
     }
-  }, [showError]);
+  }, [clearStream, showError]);
 
   const makeBotPermanent = useCallback(async (botId: string) => {
     try {
@@ -790,6 +966,54 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Optional fields omitted by JSON cannot clear a prior reducer value,
       // so carry the lifecycle tombstone explicitly.
       rawDispatch({ type: "botPatched", bot: { ...bot, lifecycle: null } });
+    } catch (error) {
+      showError(error);
+      throw error;
+    }
+  }, [showError]);
+
+  const startContext = useCallback(async (botId: string, label = "Fresh context") => {
+    try {
+      const body = await api(`/api/bots/${botId}/contexts`, {
+        method: "POST",
+        body: JSON.stringify({ label }),
+      });
+      const bot = stateRef.current.bots.find((candidate) => candidate.id === botId);
+      if (bot && body.message) rawDispatch({ type: "messageAdded", threadId: bot.threadId, message: body.message });
+      if (body.context) rawDispatch({ type: "botPatched", bot: { id: botId, context: body.context } });
+    } catch (error) {
+      showError(error);
+      throw error;
+    }
+  }, [showError]);
+
+  const editMessage = useCallback(async (input: { botId: string; messageId: string; text: string }) => {
+    try {
+      const body = await api(`/api/bots/${input.botId}/messages/${input.messageId}/edit`, {
+        method: "POST",
+        body: JSON.stringify({ text: input.text }),
+      });
+      const bot = stateRef.current.bots.find((candidate) => candidate.id === input.botId);
+      if (bot && body.message) rawDispatch({ type: "messageAdded", threadId: bot.threadId, message: body.message });
+      if (bot && typeof body.activeLeafId === "string") {
+        rawDispatch({ type: "threadActive", threadId: bot.threadId, activeLeafId: body.activeLeafId });
+      }
+    } catch (error) {
+      showError(error);
+      throw error;
+    }
+  }, [showError]);
+
+  const switchBranch = useCallback(async (input: { botId: string; messageId: string }) => {
+    try {
+      const body = await api(`/api/bots/${input.botId}/active-branch`, {
+        method: "POST",
+        body: JSON.stringify({ messageId: input.messageId }),
+      });
+      const bot = stateRef.current.bots.find((candidate) => candidate.id === input.botId);
+      if (bot && (typeof body.activeLeafId === "string" || body.activeLeafId === null)) {
+        rawDispatch({ type: "threadActive", threadId: bot.threadId, activeLeafId: body.activeLeafId });
+      }
     } catch (error) {
       showError(error);
       throw error;
@@ -828,7 +1052,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   sectionId: source.sectionId ?? null,
                   appsEnabled: source.appsEnabled ?? true,
                   collaborationEnabled: source.collaborationEnabled ?? true,
-                  approvalPolicy: source.approvalPolicy ?? "ask",
+                  memoryWriteEnabled: source.memoryWriteEnabled ?? false,
                 }),
               }).then(({ bot: patched }) =>
                 rawDispatch({ type: "botAdded", bot: { ...bot, ...patched, messages: bot.messages } }),
@@ -914,11 +1138,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       switch (frame.kind) {
         case "message":
           flushStreamDeltas(frame.threadId);
+          if (frame.message?.role === "bot" && frame.message?.kind === "text") clearStream(frame.threadId);
           rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
           break;
         case "message.patch":
           flushStreamDeltas(frame.threadId);
+          if (frame.message?.role === "bot" && frame.message?.kind === "text") clearStream(frame.threadId);
           rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message });
+          break;
+        case "thread":
+          if (typeof frame.threadId === "string" && (typeof frame.activeLeafId === "string" || frame.activeLeafId === null)) {
+            flushStreamDeltas(frame.threadId);
+            rawDispatch({ type: "threadActive", threadId: frame.threadId, activeLeafId: frame.activeLeafId });
+          }
           break;
         case "bot": {
           const bot = frame.bot as Partial<Bot> & { id: string };
@@ -936,11 +1168,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         case "runtime": {
           const event = frame.event;
-          if (event.type === "content.delta" && event.streamKind === "assistant_text") {
-            queueStreamDelta(event.threadId, event.delta);
+          if (event.type === "content.delta" && (event.streamKind === "assistant_text" || event.streamKind === "reasoning_text")) {
+            queueStreamDelta(event.threadId, event.streamKind, event.delta);
           } else if (event.type === "turn.completed") {
             flushStreamDeltas(event.threadId);
-            rawDispatch({ type: "streamClear", threadId: event.threadId });
+            clearStream(event.threadId);
           }
           break;
         }
@@ -958,6 +1190,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             typeof frame.operationId !== "string"
             || pendingBotDeletes.current.get(frame.botId) !== frame.operationId
           ) {
+            const threadId = stateRef.current.bots.find((bot) => bot.id === frame.botId)?.threadId;
+            if (threadId) clearStream(threadId);
             rawDispatch({ type: "botDeleted", botId: frame.botId });
           }
           break;
@@ -966,7 +1200,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "config":
           rawDispatch({
             type: "configStatus",
-            config: { xai: frame.xai, composio: frame.composio, box: frame.box, profile: frame.profile },
+            config: {
+              xai: frame.xai,
+              composio: frame.composio,
+              box: frame.box,
+              profile: frame.profile,
+              acpProfiles: frame.acpProfiles,
+            },
           });
           api("/api/instances")
             .then(({ instances }) => rawDispatch({ type: "instances", instances }))
@@ -976,26 +1216,48 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
     return () => {
       alive = false;
-      flushStreamDeltas();
       if (streamFrame.current !== null) {
         cancelAnimationFrame(streamFrame.current);
         streamFrame.current = null;
       }
+      pendingStreamDeltas.current.clear();
       es.close();
     };
-  }, [flushStreamDeltas, queueStreamDelta]);
+  }, [clearStream, flushStreamDeltas, queueStreamDelta]);
 
   const value = useMemo(
-    () => ({ state, dispatch, sendMessage, answerCard, dismissCard, deleteBot, makeBotPermanent }),
-    [state, dispatch, sendMessage, answerCard, dismissCard, deleteBot, makeBotPermanent],
+    () => ({
+      state,
+      dispatch,
+      sendMessage,
+      answerCard,
+      dismissCard,
+      deleteBot,
+      makeBotPermanent,
+      startContext,
+      editMessage,
+      switchBranch,
+      refreshInstances,
+    }),
+    [state, dispatch, sendMessage, answerCard, dismissCard, deleteBot, makeBotPermanent, startContext, editMessage, switchBranch, refreshInstances],
   );
-  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
+  return (
+    <StoreContext.Provider value={value}>
+      <StreamingContext.Provider value={streaming}>{children}</StreamingContext.Provider>
+    </StoreContext.Provider>
+  );
 }
 
 export function useStore() {
   const ctx = useContext(StoreContext);
   if (!ctx) throw new Error("useStore outside provider");
   return ctx;
+}
+
+export function useStreaming(threadId: string): ThreadStreamingState {
+  const streams = useContext(StreamingContext);
+  if (!streams) throw new Error("useStreaming outside provider");
+  return streams[threadId] ?? EMPTY_THREAD_STREAM;
 }
 
 export function formatTime(at: number) {

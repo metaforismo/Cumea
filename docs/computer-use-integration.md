@@ -1,7 +1,8 @@
 # Computer use & browser use in Cumea
 
-Decision doc, 2026-08-12. How bots in Cumea get local computer use and
-browser use, out of the box, with no separate installs. Based on a survey of
+Decision doc, updated 2026-08-14. How bots in Cumea get host computer use,
+isolated Local VM use, and browser use. The macOS host path is bundled; the
+Local VM path is opt-in and requires Docker, Podman, or Apple container. Based on a survey of
 OSS chat-app MCP hosts, macOS control servers, browser-automation stacks, and
 the local `cua` / `axstream` code on this machine.
 
@@ -15,7 +16,8 @@ Electron main process
 │     driven via webContents.debugger (CDP) — zero-install browser use
 └── server/ harness (drivers spawn agent CLIs with --mcp-config)
       ├── computer-proxy-local.ts  ──▶ forwards MCP tool calls to driver socket
-      └── computer-proxy.ts (existing) ──▶ remote/cloud box
+      ├── computer-proxy.ts (existing) ──▶ remote/cloud box
+      └── local-vm-mcp.ts ──▶ official Cua MCP inside an isolated container
 ```
 
 - **Plugins = MCP servers over stdio.** The Plugins panel toggles which MCP
@@ -36,10 +38,11 @@ Electron main process
 
 ## Computer use: CUA only — bundle cua-driver, spawn from Electron main
 
-**Current decision (2026-08-12): CUA is the only computer-use provider.
+**Current decision (updated 2026-08-14): CUA is the only computer-use implementation.
 No cliclick, no robotjs/nut.js, no Python computer-server, no fallbacks.**
 Everything that touches the user's screen/mouse/keyboard goes through the
-bundled `cua-driver` binary. Alternatives evaluated and rejected:
+bundled macOS `cua-driver` binary or the pinned driver inside the isolated Local VM.
+Alternatives evaluated and rejected:
 
 | Option | Verdict |
 | --- | --- |
@@ -139,6 +142,24 @@ capability is missing (e.g. OCR-anchored clicking, macro record/replay), it is
 added to cua-driver upstream or requested as a driver tool — never bolted on
 beside it. This keeps one TCC identity, one binary to sign/notarize, and one
 behavior contract.
+
+### Opt-in Local VM: same Cua protocol, separate trust boundary
+
+Choosing **Local VM** never falls through to the host desktop or a cloud box. Cumea detects a
+supported container runtime, then asks the user separately to prepare, create/start, stop, or remove
+the managed desktop. It does not install a runtime or mutate container state merely because Settings
+or the Computer panel was opened.
+
+The derivative desktop image pins `trycua/xfce-cua` by digest and Cua Driver 0.19.3 wheels by exact
+SHA-256 for x86_64 and aarch64. The container publishes only its viewer on loopback, is capped at
+4 GiB RAM, 2 CPUs and 512 PIDs, drops all capabilities, and adds back only `SETUID`/`SETGID`. Labels,
+image identity, port binding and hardening are revalidated before the provider becomes ready.
+
+Agents receive Cua's official stdio MCP bridge executed as the unprivileged container user. A
+per-thread exclusive lease prevents two active turns from controlling the same desktop; completion,
+failure, cancellation and deletion release it. A hash-fragment viewer password stays out of server
+requests, and the API exposes lifecycle actions only to the loopback desktop client. Real runtime
+acceptance still requires a supported container engine and must be reported separately from unit tests.
 
 ## Browser use: three tiers
 

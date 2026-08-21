@@ -12,13 +12,16 @@ export class EventBus {
   private unsubscribes: Array<() => void> = [];
   private readonly eventLog: EventLogWriter;
   private readonly shouldDeliver: (event: RuntimeEvent) => boolean;
+  private readonly sanitize: (event: RuntimeEvent) => RuntimeEvent;
 
   constructor(
     eventLog = new EventLogWriter(),
     shouldDeliver: (event: RuntimeEvent) => boolean = () => true,
+    sanitize: (event: RuntimeEvent) => RuntimeEvent = (event) => event,
   ) {
     this.eventLog = eventLog;
     this.shouldDeliver = shouldDeliver;
+    this.sanitize = sanitize;
   }
 
   attach(instances: ProviderInstance[]) {
@@ -40,16 +43,17 @@ export class EventBus {
     // Correlation/liveness filtering belongs before both diagnostics and fanout:
     // a rejected event must not reach peer-agent waiters or any future listener.
     if (!this.shouldDeliver(event)) return;
+    const safeEvent = this.sanitize(event);
     try {
-      this.eventLog.append(event.threadId, event);
+      this.eventLog.append(safeEvent.threadId, safeEvent);
     } catch {
       /* logging must never take down the stream */
     }
     for (const listener of [...this.listeners]) {
       try {
-        listener(event);
-      } catch (e) {
-        console.error("bus: listener threw", e);
+        listener(safeEvent);
+      } catch {
+        console.error("bus: listener failed");
       }
     }
   }

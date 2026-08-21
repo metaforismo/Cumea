@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { CUA_DRIVER_RELEASE } from "./cua-driver-release.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -78,6 +78,9 @@ const required = [
   ["app.asar", 1024],
   ["ui/index.html", 64],
   ["server/index.js", 64],
+  ["server/node_modules/jszip/package.json", 64],
+  ["server/node_modules/readable-stream/package.json", 64],
+  ["server/runtime-manifest.json", 64],
   ["LICENSE", 64],
   ["THIRD_PARTY_NOTICES.md", 64],
   ["licenses/mote-studio-MIT.txt", 64],
@@ -93,6 +96,19 @@ const required = [
 for (const [relative, minimumBytes] of required) {
   await requireFile(path.join(resources, relative), minimumBytes);
 }
+
+const packagedExecutable = path.join(resources, "..", "MacOS", "Cumea");
+await requireFile(packagedExecutable, 1024);
+await access(packagedExecutable, constants.X_OK);
+const documentPreviewUrl = pathToFileURL(path.join(resources, "server", "document-preview.js")).href;
+await exec(
+  packagedExecutable,
+  ["--input-type=module", "--eval", `await import(${JSON.stringify(documentPreviewUrl)})`],
+  {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    timeout: 15_000,
+  },
+);
 
 const pdfWorker = await findMatchingFile(
   path.join(resources, "ui", "assets"),
@@ -185,6 +201,30 @@ for (const nativeRuntime of [cuaRuntime, cuaSdkLibrary, ubjsRuntime]) {
     throw new Error(`Packaged native runtime has no arm64 slice: ${nativeRuntime}`);
   }
 }
+
+// Presence is not enough: a path inside app.asar can still make dlopen fail
+// even when an unpacked copy exists. Import the packaged SDK from its physical
+// app.asar.unpacked entrypoint and execute a harmless native status call.
+const packagedCuaEntry = path.join(
+  unpacked,
+  "node_modules",
+  "@trycua",
+  "cua-driver",
+  "dist",
+  "index.js",
+);
+await requireFile(packagedCuaEntry, 256);
+await exec(
+  packagedExecutable,
+  [
+    "--input-type=module",
+    "--eval",
+    `const sdk = await import(${JSON.stringify(pathToFileURL(packagedCuaEntry).href)}); ` +
+      `const status = sdk.currentMacOsPermissionStatus(); ` +
+      `if (!status || typeof status !== "object") throw new Error("invalid CUA permission status");`,
+  ],
+  { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, timeout: 15_000 },
+);
 
 console.log(`Verified unsigned package layout at ${path.relative(root, resources)}.`);
 console.log("This smoke check does not establish signing, notarization, launch, or device behavior.");

@@ -3,6 +3,7 @@ import { AppState } from "react-native";
 import * as Haptics from "expo-haptics";
 import { clearEnrollment, markOnboardingComplete, onboardingComplete, readEnrollment, writeEnrollment } from "@/host/enrollment";
 import { claimPairing, HostClient } from "@/host/host-client";
+import { disablePushNotifications, syncPushRegistration } from "@/notifications/push";
 import type {
   AgentSummary,
   AttentionItem,
@@ -13,13 +14,18 @@ import type {
   MobileSnapshot,
   PairingClaimInput,
   PendingAttachment,
+  QueuedMessageSummary,
   RoutineSummary,
+  RoutineSchedule,
+  RoutineOccurrence,
 } from "@/host/types";
 import {
   mergeChronological,
+  newestBranchLeaf,
   pagingAfterPage,
   StreamDeltaBatcher,
   UNINITIALIZED_MESSAGE_PAGING,
+  visibleBranch,
   type AgentMessagePaging,
 } from "./chat-state";
 import { DEMO_MESSAGES, DEMO_SNAPSHOT } from "./demo-data";
@@ -37,6 +43,7 @@ interface CumeaState {
   agents: AgentSummary[];
   attention: AttentionItem[];
   routines: RoutineSummary[];
+  queuedMessages: QueuedMessageSummary[];
   messages: Record<string, ChatMessage[]>;
   streaming: Record<string, string>;
   messagePaging: Record<string, AgentMessagePaging>;
@@ -53,11 +60,18 @@ interface CumeaActions {
   loadOlderMessages(agentId: string): Promise<void>;
   markRead(agentId: string): void;
   sendMessage(agentId: string, text: string, attachments: PendingAttachment[]): Promise<void>;
+  editMessage(agentId: string, messageId: string, text: string): Promise<void>;
+  switchBranch(agentId: string, messageId: string): Promise<void>;
   interrupt(agentId: string): Promise<void>;
   respondAttention(item: AttentionItem, choice: AttentionItem["choices"][number]): Promise<void>;
   toggleRoutine(routine: RoutineSummary): Promise<void>;
+  updateRoutine(routine: RoutineSummary, patch: { name?: string; prompt?: string; schedule?: RoutineSchedule; enabled?: boolean }): Promise<void>;
+  runRoutine(routine: RoutineSummary): Promise<void>;
+  routineOccurrences(from: number, to: number): Promise<RoutineOccurrence[]>;
   createAgent(name: string, role: string, options?: { temporary?: boolean }): Promise<AgentSummary>;
   makeAgentPermanent(agentId: string): Promise<void>;
+  startContext(agentId: string): Promise<void>;
+  cancelQueued(taskId: string): Promise<void>;
   clearError(): void;
 }
 
@@ -70,6 +84,7 @@ const initialState: CumeaState = {
   agents: [],
   attention: [],
   routines: [],
+  queuedMessages: [],
   messages: {},
   streaming: {},
   messagePaging: {},
@@ -102,7 +117,10 @@ function messagesEqual(left: ChatMessage, right: ChatMessage): boolean {
     left.text === right.text &&
     left.createdAt === right.createdAt &&
     left.status === right.status &&
+    left.delivery === right.delivery &&
+    left.taskId === right.taskId &&
     left.clientMessageId === right.clientMessageId &&
+    (left.parentId ?? null) === (right.parentId ?? null) &&
     leftAttachments.length === rightAttachments.length &&
     leftAttachments.every((attachment, index) => {
       const other = rightAttachments[index];
@@ -138,6 +156,7 @@ function applySnapshot(previous: CumeaState, snapshot: MobileSnapshot): CumeaSta
     agents: snapshot.agents,
     attention: snapshot.attention,
     routines: snapshot.routines,
+    queuedMessages: snapshot.queuedMessages,
     messages: Object.fromEntries(snapshot.agents.map((agent) => [
       agent.id,
       mergeMessages(previous.messages[agent.id] ?? [], snapshotMessages[agent.id] ?? []),
@@ -164,7 +183,24 @@ function foldHostEvent(previous: CumeaState, event: HostStreamEvent): CumeaState
       messagePaging: withoutKey(previous.messagePaging, event.agentId),
     };
   }
-  if (event.kind === "workspace") return { ...previous, routines: event.routines };
+  if (event.kind === "workspace") {
+    const counts = new Map<string, number>();
+    for (const task of event.queuedMessages) counts.set(task.agentId, (counts.get(task.agentId) ?? 0) + 1);
+    return {
+      ...previous,
+      routines: event.routines,
+      queuedMessages: event.queuedMessages,
+      agents: previous.agents.map((agent) => ({ ...agent, queuedCount: counts.get(agent.id) ?? 0 })),
+    };
+  }
+  if (event.kind === "thread") {
+    return {
+      ...previous,
+      agents: previous.agents.map((agent) => agent.id === event.agentId
+        ? { ...agent, activeLeafId: event.activeLeafId }
+        : agent),
+    };
+  }
   if (event.kind === "agent") {
     return {
       ...previous,
@@ -322,6 +358,7 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
     let active = AppState.currentState === "active";
     let streamAbort: AbortController | null = null;
     const client = new HostClient(enrollment);
+    void syncPushRegistration(enrollment).catch(() => {});
     pagingRequests.current.clear();
     deltaBatcher.current?.clear();
     clientRef.current = client;
@@ -417,6 +454,7 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
   const pair = useCallback(async (input: PairingClaimInput) => {
     const enrollment = await claimPairing(input);
     await writeEnrollment(enrollment);
+    void syncPushRegistration(enrollment).catch(() => {});
     deltaBatcher.current?.clear();
     pagingRequests.current.clear();
     setState({ ...initialState, enrollment, phase: "ready", connection: "connecting", error: null });
@@ -440,6 +478,7 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const disconnect = useCallback(async () => {
+    await disablePushNotifications(stateRef.current.enrollment).catch(() => {});
     await clearEnrollment();
     flushBufferedDeltas();
     deltaBatcher.current?.clear();
@@ -484,6 +523,9 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
             ...current.messages,
             [agentId]: mergeMessages(current.messages[agentId] ?? [], page.messages),
           },
+          agents: current.agents.map((agent) => agent.id === agentId
+            ? { ...agent, activeLeafId: page.activeLeafId }
+            : agent),
           messagePaging: {
             ...current.messagePaging,
             [agentId]: pagingAfterPage(current.messagePaging[agentId], page.nextCursor, initialize),
@@ -553,6 +595,10 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
     if (!typedText && attachments.length === 0) return;
     const text = typedText || "Please review the attached files.";
     const clientMessageId = localId();
+    const currentAgent = stateRef.current.agents.find((agent) => agent.id === agentId);
+    const willQueue = stateRef.current.enrollment?.mode === "host" && currentAgent?.presence === "working";
+    const currentMessages = stateRef.current.messages[agentId] ?? [];
+    const parentId = currentAgent?.activeLeafId ?? currentMessages.at(-1)?.id ?? null;
     const optimistic: ChatMessage = {
       id: clientMessageId,
       clientMessageId,
@@ -562,6 +608,7 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
       text,
       createdAt: Date.now(),
       status: "sending",
+      parentId,
       attachments: attachments.map((attachment, index) => ({
         id: `${clientMessageId}-attachment-${index}`,
         name: attachment.name,
@@ -573,7 +620,13 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
       ...current,
       messages: { ...current.messages, [agentId]: [...(current.messages[agentId] ?? []), optimistic] },
       agents: current.agents.map((agent) =>
-        agent.id === agentId ? { ...agent, preview: text || `Sent ${attachments.length} attachment(s)`, updatedAt: Date.now(), presence: "working" as const } : agent,
+        agent.id === agentId ? {
+          ...agent,
+          ...(willQueue ? {} : { activeLeafId: clientMessageId }),
+          preview: willQueue ? `Queued: ${text}` : text || `Sent ${attachments.length} attachment(s)`,
+          updatedAt: Date.now(),
+          presence: "working" as const,
+        } : agent,
       ),
     }));
 
@@ -599,6 +652,7 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
           const timer = setTimeout(tick, 45);
           demoTimers.current.add(timer);
         } else {
+          const replyId = localId();
           setState((current) => {
             const { [agentId]: _stream, ...streaming } = current.streaming;
             return {
@@ -608,11 +662,26 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
                 ...current.messages,
                 [agentId]: [
                   ...(current.messages[agentId] ?? []),
-                  { id: localId(), agentId, role: "agent", kind: "text", text: built.trim(), createdAt: Date.now(), status: "done" },
+                  {
+                    id: replyId,
+                    parentId: clientMessageId,
+                    agentId,
+                    role: "agent",
+                    kind: "text",
+                    text: built.trim(),
+                    createdAt: Date.now(),
+                    status: "done",
+                  },
                 ],
               },
               agents: current.agents.map((agent) =>
-                agent.id === agentId ? { ...agent, presence: "success" as const, preview: built.trim(), updatedAt: Date.now() } : agent,
+                agent.id === agentId ? {
+                  ...agent,
+                  activeLeafId: replyId,
+                  presence: "success" as const,
+                  preview: built.trim(),
+                  updatedAt: Date.now(),
+                } : agent,
               ),
             };
           });
@@ -641,13 +710,15 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
           },
         }));
       }
-      await client.sendMessage(agentId, text, uploaded.map((attachment) => attachment.id));
+      const delivery = await client.sendMessage(agentId, text, uploaded.map((attachment) => attachment.id));
       setState((current) => ({
         ...current,
         messages: {
           ...current.messages,
           [agentId]: (current.messages[agentId] ?? []).map((message) =>
-            message.id === clientMessageId ? { ...message, status: "done" } : message,
+            message.id === clientMessageId
+              ? { ...message, status: "done", delivery: delivery.queued ? "queued" : "sent", taskId: delivery.taskId }
+              : message,
           ),
         },
       }));
@@ -669,6 +740,73 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
       throw error;
     }
   }, [setError]);
+
+  const editMessage = useCallback(async (agentId: string, messageId: string, rawText: string) => {
+    const text = rawText.trim();
+    if (!text) throw new Error("An edited message cannot be empty.");
+    const source = stateRef.current.messages[agentId]?.find((message) => message.id === messageId);
+    if (!source || source.role !== "user") throw new Error("That message is no longer editable.");
+
+    if (stateRef.current.enrollment?.mode === "demo") {
+      const edited: ChatMessage = {
+        ...source,
+        id: localId(),
+        clientMessageId: undefined,
+        parentId: source.parentId ?? null,
+        text,
+        createdAt: Date.now(),
+        status: "done",
+      };
+      setState((current) => ({
+        ...current,
+        messages: { ...current.messages, [agentId]: mergeMessages(current.messages[agentId] ?? [], [edited]) },
+        agents: current.agents.map((agent) => agent.id === agentId
+          ? { ...agent, activeLeafId: edited.id, preview: text, updatedAt: edited.createdAt, presence: "idle" as const }
+          : agent),
+      }));
+      return;
+    }
+
+    const client = clientRef.current;
+    if (!client) throw new Error("Your Cumea host is offline.");
+    const result = await client.editMessage(agentId, messageId, text);
+    setState((current) => ({
+      ...current,
+      messages: { ...current.messages, [agentId]: mergeMessages(current.messages[agentId] ?? [], [result.message]) },
+      agents: current.agents.map((agent) => agent.id === agentId
+        ? { ...agent, activeLeafId: result.activeLeafId, preview: text, updatedAt: result.message.createdAt, presence: "working" as const }
+        : agent),
+    }));
+  }, []);
+
+  const switchBranch = useCallback(async (agentId: string, messageId: string) => {
+    const message = stateRef.current.messages[agentId]?.find((candidate) => candidate.id === messageId);
+    if (!message) throw new Error("That conversation version is not loaded.");
+    let activeLeafId = newestBranchLeaf(stateRef.current.messages[agentId] ?? [], messageId) ?? messageId;
+    if (stateRef.current.enrollment?.mode === "host") {
+      const client = clientRef.current;
+      if (!client) throw new Error("Your Cumea host is offline.");
+      activeLeafId = await client.switchBranch(agentId, messageId);
+    }
+    setState((current) => {
+      const all = current.messages[agentId] ?? [];
+      const branch = visibleBranch(all, activeLeafId);
+      const last = branch.at(-1);
+      return {
+        ...current,
+        agents: current.agents.map((candidate) => candidate.id === agentId
+          ? {
+            ...candidate,
+            activeLeafId,
+            preview: last?.text || candidate.preview,
+            updatedAt: last?.createdAt ?? candidate.updatedAt,
+            presence: "idle" as const,
+          }
+          : candidate),
+        error: null,
+      };
+    });
+  }, []);
 
   const interrupt = useCallback(async (agentId: string) => {
     flushBufferedDeltas(agentId);
@@ -710,13 +848,59 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const toggleRoutine = useCallback(async (routine: RoutineSummary) => {
-    if (stateRef.current.enrollment?.mode === "host") {
-      setError("Routine editing is local-only. Open Cumea on the paired desktop or VM to change this schedule.");
-      return;
-    }
     const optimistic = { ...routine, enabled: !routine.enabled };
     setState((current) => ({ ...current, routines: current.routines.map((item) => item.id === routine.id ? optimistic : item) }));
+    if (stateRef.current.enrollment?.mode !== "host") return;
+    try {
+      const updated = await clientRef.current?.patchRoutine(routine.id, { enabled: optimistic.enabled });
+      if (updated) setState((current) => ({ ...current, routines: current.routines.map((item) => item.id === routine.id ? updated : item) }));
+    } catch (reason) {
+      setState((current) => ({ ...current, routines: current.routines.map((item) => item.id === routine.id ? routine : item) }));
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
   }, [setError]);
+
+  const updateRoutine = useCallback(async (
+    routine: RoutineSummary,
+    patch: { name?: string; prompt?: string; schedule?: RoutineSchedule; enabled?: boolean },
+  ) => {
+    if (stateRef.current.enrollment?.mode === "host") {
+      const updated = await clientRef.current?.patchRoutine(routine.id, patch);
+      if (!updated) throw new Error("Your Cumea host is offline.");
+      setState((current) => ({ ...current, routines: current.routines.map((item) => item.id === routine.id ? updated : item) }));
+      return;
+    }
+    const { schedule, ...fields } = patch;
+    setState((current) => ({
+      ...current,
+      routines: current.routines.map((item) => item.id === routine.id ? { ...item, ...fields, scheduleSpec: schedule ?? item.scheduleSpec } : item),
+    }));
+  }, []);
+
+  const runRoutine = useCallback(async (routine: RoutineSummary) => {
+    if (stateRef.current.enrollment?.mode === "host") {
+      const client = clientRef.current;
+      if (!client) throw new Error("Your Cumea host is offline.");
+      await client.runRoutine(routine.id);
+    }
+    setState((current) => ({
+      ...current,
+      routines: current.routines.map((item) => item.id === routine.id ? { ...item, lastStatus: "queued" as const } : item),
+    }));
+  }, []);
+
+  const routineOccurrences = useCallback(async (from: number, to: number): Promise<RoutineOccurrence[]> => {
+    if (stateRef.current.enrollment?.mode === "host") {
+      const client = clientRef.current;
+      if (!client) throw new Error("Your Cumea host is offline.");
+      return client.routineOccurrences(from, to);
+    }
+    return stateRef.current.routines.flatMap((routine) =>
+      routine.enabled && routine.nextRunAt !== null && routine.nextRunAt >= from && routine.nextRunAt <= to
+        ? [{ routineId: routine.id, scheduledFor: routine.nextRunAt }]
+        : [],
+    );
+  }, []);
 
   const createAgent = useCallback(async (name: string, role: string, options: { temporary?: boolean } = {}): Promise<AgentSummary> => {
     if (stateRef.current.enrollment?.mode === "host") {
@@ -736,7 +920,7 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
     const colors = ["#19ae7a", "#2f8de3", "#7651d6", "#f56a16"];
     const agent: AgentSummary = {
       id: localId(), threadId: localId(), name, role, preview: "Ready when you are.", updatedAt: Date.now(), unread: false,
-      needsYou: false, presence: "idle", avatar: { version: 1, kind: "mote", shapeId: "orb", color: colors[stateRef.current.agents.length % colors.length], motion: "playful" },
+      needsYou: false, presence: "idle", queuedCount: 0, avatar: { version: 1, kind: "mote", shapeId: "orb", color: colors[stateRef.current.agents.length % colors.length], motion: "playful" },
       ...(options.temporary ? { lifecycle: { kind: "temporary" as const, expiresAt: Date.now() + 24 * 60 * 60_000 } } : {}),
     };
     setState((current) => ({
@@ -765,6 +949,34 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  const startContext = useCallback(async (agentId: string) => {
+    if (stateRef.current.enrollment?.mode === "host") {
+      const client = clientRef.current;
+      if (!client) throw new Error("Your Cumea host is offline.");
+      await client.startContext(agentId);
+      return;
+    }
+    const now = Date.now();
+    const context = { id: localId(), label: "New task", startedAt: now };
+    setState((current) => ({
+      ...current,
+      agents: current.agents.map((agent) => agent.id === agentId ? { ...agent, context } : agent),
+      messages: {
+        ...current.messages,
+        [agentId]: [...(current.messages[agentId] ?? []), {
+          id: localId(), agentId, role: "system", kind: "context", text: context.label, createdAt: now, status: "done",
+        }],
+      },
+    }));
+  }, []);
+
+  const cancelQueued = useCallback(async (taskId: string) => {
+    if (stateRef.current.enrollment?.mode !== "host") return;
+    const client = clientRef.current;
+    if (!client) throw new Error("Your Cumea host is offline.");
+    await client.cancelQueued(taskId);
+  }, []);
+
   const actions = useMemo<CumeaActions>(() => ({
     finishOnboarding,
     pair,
@@ -775,13 +987,20 @@ export function CumeaProvider({ children }: { children: ReactNode }) {
     loadOlderMessages,
     markRead,
     sendMessage,
+    editMessage,
+    switchBranch,
     interrupt,
     respondAttention,
     toggleRoutine,
+    updateRoutine,
+    runRoutine,
+    routineOccurrences,
     createAgent,
     makeAgentPermanent,
+    startContext,
+    cancelQueued,
     clearError: () => setState((current) => ({ ...current, error: null })),
-  }), [createAgent, disconnect, ensureMessages, enterDemo, finishOnboarding, interrupt, loadOlderMessages, makeAgentPermanent, markRead, pair, refresh, respondAttention, sendMessage, toggleRoutine]);
+  }), [cancelQueued, createAgent, disconnect, editMessage, ensureMessages, enterDemo, finishOnboarding, interrupt, loadOlderMessages, makeAgentPermanent, markRead, pair, refresh, respondAttention, routineOccurrences, runRoutine, sendMessage, startContext, switchBranch, toggleRoutine, updateRoutine]);
 
   const value = useMemo(() => ({ state, actions }), [actions, state]);
   return <CumeaContext value={value}>{children}</CumeaContext>;

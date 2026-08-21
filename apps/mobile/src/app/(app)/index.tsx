@@ -5,9 +5,19 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { AgentRow } from "@/components/agent-row";
 import { PressableScale } from "@/components/pressable-scale";
 import { useCumea } from "@/state/cumea-store";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
+
+function SearchGlyph({ color }: { color: string }) {
+  return (
+    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ width: 22, height: 22 }}>
+      <View style={{ width: 15, height: 15, borderRadius: 10, borderWidth: 2.2, borderColor: color }} />
+      <View style={{ position: "absolute", right: 1, bottom: 2, width: 8, height: 2.2, borderRadius: 2, backgroundColor: color, transform: [{ rotate: "45deg" }] }} />
+    </View>
+  );
+}
 
 export default function AgentsScreen() {
+  const { theme } = useCumeaTheme();
   const router = useRouter();
   const { state, actions } = useCumea();
   const [searching, setSearching] = useState(false);
@@ -28,14 +38,14 @@ export default function AgentsScreen() {
 
   return (
     <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1, backgroundColor: theme.background }}>
-      <View style={{ minHeight: 70, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 18, paddingVertical: 10 }}>
+      <View style={{ minHeight: 82, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 27, paddingVertical: 12 }}>
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Open settings"
           onPress={() => router.push("/settings")}
-          style={{ width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: theme.hairline, backgroundColor: theme.card, alignItems: "center", justifyContent: "center" }}
+          style={{ width: 48, height: 48, borderRadius: 24, borderWidth: 1, borderColor: theme.hairline, backgroundColor: theme.control, alignItems: "center", justifyContent: "center", boxShadow: "0 8px 24px rgba(0,0,0,0.08)" }}
         >
-          <Text style={{ color: theme.text, fontSize: 14, fontWeight: "800" }}>{initials}</Text>
+          <Text style={{ color: theme.textSecondary, fontSize: 17, fontWeight: "600" }}>{initials}</Text>
         </PressableScale>
         <View style={{ flex: 1 }}>
           {searching ? (
@@ -47,32 +57,27 @@ export default function AgentsScreen() {
               placeholder="Search bots"
               placeholderTextColor={theme.textSecondary}
               returnKeyType="search"
-              style={{ height: 42, borderRadius: 15, borderCurve: "continuous", backgroundColor: theme.input, color: theme.text, fontSize: 16, paddingHorizontal: 14 }}
+              style={{ height: 46, borderRadius: 23, borderCurve: "continuous", backgroundColor: theme.input, color: theme.text, fontSize: 16, paddingHorizontal: 16 }}
             />
           ) : (
-            <View style={{ gap: 2 }}>
-              <Text accessibilityRole="header" style={{ color: theme.text, fontSize: 20, fontWeight: "800", letterSpacing: -0.35 }}>Your bots</Text>
-              <Text style={{ color: theme.textSecondary, fontSize: 11 }}>
-                {state.connection === "demo" ? "Local demo" : state.connection === "online" ? state.hostName || "Host online" : state.connection === "connecting" ? "Connecting…" : "Host offline"}
-              </Text>
-            </View>
+            <View />
           )}
         </View>
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel={searching ? "Close search" : "Search bots"}
           onPress={() => { setSearching((value) => !value); if (searching) setQuery(""); }}
-          style={{ width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: theme.hairline, alignItems: "center", justifyContent: "center" }}
+          style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.control, alignItems: "center", justifyContent: "center", boxShadow: "0 8px 24px rgba(0,0,0,0.08)" }}
         >
-          <Text style={{ color: theme.text, fontSize: searching ? 22 : 25 }}>{searching ? "×" : "⌕"}</Text>
+          {searching ? <Text style={{ color: theme.text, fontSize: 25, lineHeight: 27 }}>×</Text> : <SearchGlyph color={theme.text} />}
         </PressableScale>
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Add a bot"
           onPress={() => router.push("/new-agent")}
-          style={{ width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: theme.hairline, alignItems: "center", justifyContent: "center" }}
+          style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.control, alignItems: "center", justifyContent: "center", boxShadow: "0 8px 24px rgba(0,0,0,0.08)" }}
         >
-          <Text style={{ color: theme.text, fontSize: 27, lineHeight: 29 }}>＋</Text>
+          <Text style={{ color: theme.text, fontSize: 31, lineHeight: 32, fontWeight: "300" }}>＋</Text>
         </PressableScale>
       </View>
 
@@ -104,9 +109,8 @@ export default function AgentsScreen() {
         keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
         contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={{ paddingBottom: 24, flexGrow: agents.length ? undefined : 1 }}
+        contentContainerStyle={{ paddingBottom: 34, paddingTop: 5, flexGrow: agents.length ? undefined : 1 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} tintColor={theme.textSecondary} />}
-        ItemSeparatorComponent={() => <View style={{ height: 1, marginLeft: 81, backgroundColor: `${theme.hairline}80` }} />}
         ListEmptyComponent={(
           <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 9, padding: 30 }}>
             <Text style={{ color: theme.text, fontSize: 19, fontWeight: "700" }}>{query ? "No matching bots" : "No bots yet"}</Text>
@@ -115,17 +119,6 @@ export default function AgentsScreen() {
             </Text>
           </View>
         )}
-        ListFooterComponent={state.routines.length ? (
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel="View routines"
-            onPress={() => router.push("/routines")}
-            style={{ marginHorizontal: 18, marginTop: 18, minHeight: 48, borderRadius: 15, backgroundColor: theme.card, flexDirection: "row", alignItems: "center", paddingHorizontal: 14 }}
-          >
-            <Text style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>Routines</Text>
-            <Text style={{ marginLeft: "auto", color: theme.textSecondary, fontSize: 13 }}>{state.routines.filter((routine) => routine.enabled).length} active  ›</Text>
-          </PressableScale>
-        ) : null}
       />
     </SafeAreaView>
   );

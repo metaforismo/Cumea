@@ -8,7 +8,7 @@ export interface FileCapabilityView {
   token: string;
   name: string;
   mime: string;
-  kind: "markdown" | "pdf" | "docx";
+  kind: "markdown" | "pdf" | "docx" | "html";
   size: number;
   source: "local" | "cloud";
   expiresAt: number;
@@ -28,6 +28,7 @@ export function FileViewer({ file, onClose }: { file: FileCapabilityView; onClos
   const [preview, setPreview] = useState<Preview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [capabilityExpired, setCapabilityExpired] = useState(file.expiresAt <= Date.now());
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const previewUrl = `/api/files/${file.token}/preview`;
@@ -73,7 +74,15 @@ export function FileViewer({ file, onClose }: { file: FileCapabilityView; onClos
   }, [onClose]);
 
   useEffect(() => {
-    if (file.kind === "pdf") return;
+    const remaining = file.expiresAt - Date.now();
+    setCapabilityExpired(remaining <= 0);
+    if (remaining <= 0) return;
+    const timeout = window.setTimeout(() => setCapabilityExpired(true), Math.min(remaining, 2_147_483_647));
+    return () => window.clearTimeout(timeout);
+  }, [file.expiresAt, file.token]);
+
+  useEffect(() => {
+    if (file.kind === "pdf" || file.kind === "html") return;
     const controller = new AbortController();
     setPreview(null);
     setError(null);
@@ -105,6 +114,29 @@ export function FileViewer({ file, onClose }: { file: FileCapabilityView; onClos
 
       {file.kind === "pdf" ? (
         <PdfViewer token={file.token} fileName={file.name} />
+      ) : file.kind === "html" && capabilityExpired ? (
+        <div className="m-auto max-w-md rounded-2xl border border-warning/30 bg-warning/10 p-5 text-center text-[13px] text-warning">
+          This static preview expired. Close it and open the workspace file again to create a new capability.
+        </div>
+      ) : file.kind === "html" ? (
+        <div className="relative min-h-0 flex-1 bg-white">
+          <iframe
+            src={previewUrl}
+            title={`Static preview of ${file.name}`}
+            // Deliberately no sandbox tokens: the frame has an opaque origin,
+            // no scripts, forms, navigation, popups or downloads. Pointer and
+            // keyboard interaction are disabled because this is a snapshot,
+            // not a miniature browser.
+            sandbox=""
+            referrerPolicy="no-referrer"
+            tabIndex={-1}
+            aria-label={`Static, non-interactive HTML preview of ${file.name}`}
+            className="pointer-events-none h-full min-h-[320px] w-full border-0 bg-white"
+          />
+          <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-ink/80 px-3 py-1 text-[10px] font-medium text-app shadow-sm">
+            Static preview · interaction and network disabled
+          </div>
+        </div>
       ) : error ? (
         <div className="m-auto max-w-md rounded-2xl border border-danger/30 bg-danger/10 p-5 text-center">
           <div className="text-[13px] text-danger">{error}</div>

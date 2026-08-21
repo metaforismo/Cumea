@@ -2,11 +2,12 @@ import { Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { MoteAvatar } from "@/components/mote-avatar";
 import { OnboardingFrame } from "@/components/onboarding-frame";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
 
 const avatar = { version: 1 as const, kind: "mote" as const, shapeId: "soft" as const, color: "#2f8de3", motion: "calm" as const };
 
 export default function RoutinesIntroScreen() {
+  const { theme } = useCumeaTheme();
   const router = useRouter();
   return (
     <OnboardingFrame

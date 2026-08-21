@@ -2,7 +2,7 @@ import { Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { MoteAvatar } from "@/components/mote-avatar";
 import { OnboardingFrame } from "@/components/onboarding-frame";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
 
 const avatars = [
   { version: 1 as const, kind: "mote" as const, shapeId: "drop" as const, color: "#f56a16", motion: "playful" as const },
@@ -11,6 +11,7 @@ const avatars = [
 ];
 
 export default function MeetScreen() {
+  const { theme } = useCumeaTheme();
   const router = useRouter();
   return (
     <OnboardingFrame

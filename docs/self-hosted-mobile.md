@@ -130,16 +130,24 @@ The intentionally narrow first mobile surface is:
 - `GET /api/events` — authenticated event stream for clients capable of
   supplying an Authorization header.
 - `GET /api/bots/:id/messages?limit=…&before=…` — a bounded message page;
+- `POST /api/bots/:id/messages/:messageId/edit` — create a sibling user-message version and rerun
+  from the selected history;
+- `POST /api/bots/:id/active-branch` — select a loaded conversation version while the bot is idle;
   `limit` is capped at 200.
 - `POST /api/bots` — create a bot using only `name` and `title`; provider and
   policy selection stay local.
-- `PATCH /api/bots/:id` — update only the `unread` flag from mobile.
+- `PATCH /api/bots/:id` — update only the `unread` flag or explicitly convert a Quick bot to
+  permanent from mobile.
 - `POST /api/bots/:id/attachments` — upload one raw file, up to 25 MiB, with
   `Content-Type` and an encoded `X-File-Name`; use the returned ID when sending.
   Persistent per-bot quotas cap storage at 100 files and 250 MiB.
 - `DELETE /api/attachments/:id` — best-effort rollback of an unused upload;
   attachments already referenced by the audit trail are retained.
-- `POST /api/bots/:id/messages` — start a bot turn.
+- `POST /api/bots/:id/messages` — start a bot turn, or append a durable FIFO item when that bot is
+  already working (maximum 25 queued messages per bot).
+- `DELETE /api/tasks/:id/queue` — cancel a queued message before dispatch.
+- `POST /api/bots/:id/contexts` — while idle and with an empty queue, mark a fresh task context and
+  clear provider continuation state without creating another bot.
 - `POST /api/bots/:id/respond` — answer a provider question or approval.
 - `POST /api/bots/:id/interrupt` — stop the current turn.
 - `GET /api/bots/:id/computer-preview` — only when the host explicitly enables

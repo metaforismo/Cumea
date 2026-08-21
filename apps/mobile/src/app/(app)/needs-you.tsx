@@ -6,11 +6,12 @@ import { MoteAvatar } from "@/components/mote-avatar";
 import { PressableScale } from "@/components/pressable-scale";
 import type { AttentionItem, AvatarConfig } from "@/host/types";
 import { useCumea } from "@/state/cumea-store";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
 
 const fallback: AvatarConfig = { version: 1, kind: "mote", shapeId: "orb", color: "#ee9e18", motion: "calm" };
 
 export default function NeedsYouScreen() {
+  const { theme } = useCumeaTheme();
   const router = useRouter();
   const { state, actions } = useCumea();
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -88,7 +89,7 @@ export default function NeedsYouScreen() {
               ) : (
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                   {item.choices.map((choice) => {
-                    const destructive = ["Deny", "Never"].includes(choice);
+                    const destructive = ["Deny", "Deny once", "Never"].includes(choice);
                     return (
                       <PressableScale
                         key={choice}

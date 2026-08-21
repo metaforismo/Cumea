@@ -17,7 +17,7 @@ function parseMcpResponse(text: string) {
     : text.split("\n").find((l) => l.startsWith("data: "))?.slice(6);
   if (!line) throw new Error("empty MCP response");
   const msg = JSON.parse(line);
-  if (msg.error) throw new Error(msg.error.message || "MCP error");
+  if (msg.error) throw new Error("Composio MCP returned an error");
   const content = msg.result?.content?.find((c: any) => c.type === "text")?.text;
   if (!content) return msg.result ?? null;
   try {
@@ -84,9 +84,17 @@ export async function authorizeService(cfg: AppConfig, slug: string) {
   // be liberal: any https URL mentioning composio/auth wins, else the first
   const raw = JSON.stringify(out);
   const urls = raw.match(/https:\/\/[^"\\\s]+/g) ?? [];
-  const url = urls.find((u) => /composio|connect|auth/i.test(u)) ?? urls[0];
-  if (!url) throw new Error(`Composio returned no auth link for ${slug}`);
-  return { url };
+  const candidate = urls.find((value) => {
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === "https:" && !parsed.username && !parsed.password &&
+        (parsed.hostname === "composio.dev" || parsed.hostname.endsWith(".composio.dev"));
+    } catch {
+      return false;
+    }
+  });
+  if (!candidate) throw new Error(`Composio returned no trusted auth link for ${slug}`);
+  return { url: candidate };
 }
 
 // ── marketplace catalog ────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { StoreProvider, useStore } from "@/state/store";
 import { Onboarding } from "@/components/Onboarding";
@@ -10,14 +10,30 @@ import { PluginsPanel } from "@/components/PluginsPanel";
 import { ComputerPanel } from "@/components/ComputerPanel";
 import { AppSettingsPanel } from "@/components/AppSettingsPanel";
 import { WorkPanel } from "@/components/WorkPanel";
+import { NoEngines } from "@/components/NoEngines";
+import { installProviderFocusRefresh } from "@/lib/provider-focus-refresh";
 
 function Shell() {
-  const { state } = useStore();
+  const { state, refreshInstances } = useStore();
   const bot = state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0];
+  const hasReadyEngine = state.instances.some(
+    (instance) => instance.snapshot.state === "available" && instance.snapshot.authenticated !== false,
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    return installProviderFocusRefresh({
+      target: window,
+      refresh: refreshInstances,
+    });
+  }, [refreshInstances]);
+
   return (
     <div className="relative flex h-full">
       <Sidebar />
-      {bot ? (
+      {state.connected && state.instancesLoaded && !hasReadyEngine ? (
+        <NoEngines />
+      ) : bot ? (
         <ChatView bot={bot} />
       ) : (
         <main className="flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-app text-ink-secondary">

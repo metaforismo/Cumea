@@ -23,7 +23,10 @@ export interface AgentSummary {
   needsYou: boolean;
   presence: AgentPresence;
   avatar: AvatarConfig;
+  activeLeafId?: string | null;
   lifecycle?: { kind: "temporary"; expiresAt: number };
+  context?: { id: string; label: string; startedAt: number };
+  queuedCount: number;
 }
 
 export interface ChatAttachment {
@@ -34,16 +37,33 @@ export interface ChatAttachment {
   downloadUrl?: string;
 }
 
+export type HandoffStatus = "requested" | "completed" | "failed";
+
+/** Metadata already privacy-projected by the paired host. */
+export interface ChatHandoff {
+  fromAgentId: string;
+  fromName: string;
+  toAgentId: string;
+  toName: string;
+  prompt: string;
+  status: HandoffStatus;
+  result?: string;
+}
+
 export interface ChatMessage {
   id: string;
   agentId: string;
   role: "user" | "agent" | "system";
-  kind: "text" | "activity" | "approval" | "handoff";
+  kind: "text" | "activity" | "approval" | "handoff" | "context";
   text: string;
   createdAt: number;
   status?: "sending" | "streaming" | "done" | "error";
   attachments?: ChatAttachment[];
   clientMessageId?: string;
+  parentId?: string | null;
+  delivery?: "queued" | "sent" | "cancelled" | "failed";
+  taskId?: string;
+  handoff?: ChatHandoff;
 }
 
 export interface PendingAttachment {
@@ -57,6 +77,7 @@ export type HostStreamEvent =
   | { kind: "hello" }
   | { kind: "agent"; agent: AgentSummary; attention: AttentionItem[] }
   | { kind: "agent.deleted"; agentId: string }
+  | { kind: "thread"; agentId: string; activeLeafId: string | null }
   | {
       kind: "message" | "message.patch";
       agent: AgentSummary;
@@ -67,7 +88,7 @@ export type HostStreamEvent =
   | { kind: "turn.started"; agentId: string }
   | { kind: "turn.completed"; agentId: string; ok: boolean }
   | { kind: "runtime.error"; agentId: string; message: string }
-  | { kind: "workspace"; routines: RoutineSummary[] };
+  | { kind: "workspace"; routines: RoutineSummary[]; queuedMessages: QueuedMessageSummary[] };
 
 export interface AttentionItem {
   id: string;
@@ -86,10 +107,31 @@ export interface RoutineSummary {
   agentId: string;
   agentName: string;
   name: string;
+  prompt: string;
   schedule: string;
+  scheduleSpec: RoutineSchedule;
   enabled: boolean;
   nextRunAt: number | null;
-  lastStatus?: "running" | "completed" | "failed";
+  lastRunAt?: number;
+  lastScheduledFor?: number;
+  lastStatus?: "queued" | "running" | "completed" | "failed" | "missed";
+}
+
+export type RoutineSchedule =
+  | { kind: "interval"; everyMinutes: number }
+  | { kind: "daily"; time: string; timezone: string }
+  | { kind: "weekly"; time: string; timezone: string; weekdays: number[] };
+
+export interface RoutineOccurrence {
+  routineId: string;
+  scheduledFor: number;
+}
+
+export interface QueuedMessageSummary {
+  id: string;
+  agentId: string;
+  messageId: string;
+  createdAt: number;
 }
 
 export interface MobileSnapshot {
@@ -99,6 +141,7 @@ export interface MobileSnapshot {
   agents: AgentSummary[];
   attention: AttentionItem[];
   routines: RoutineSummary[];
+  queuedMessages: QueuedMessageSummary[];
   messages?: Record<string, ChatMessage[]>;
   serverTime?: number;
 }
@@ -110,6 +153,7 @@ export type ComputerPreview =
 export interface MessagesPage {
   messages: ChatMessage[];
   nextCursor: string | null;
+  activeLeafId: string | null;
 }
 
 export interface PairClaimResponse {

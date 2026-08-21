@@ -2,6 +2,7 @@ import { app, BrowserWindow, desktopCapturer, ipcMain, session, shell, systemPre
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { publicCuaStatus, startCua, stopCua, registerCuaIpc } from "./cua.mjs";
+import { classifyServerFailure, serverCandidatePorts, startupErrorPage } from "./server-startup.mjs";
 import { startSpeech, stopSpeech } from "./speech.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -11,6 +12,16 @@ const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 let SERVER_PORT = 8799;
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) app.quit();
+app.on("second-instance", () => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
 
 function isSafeExternalUrl(raw) {
   try {
@@ -21,14 +32,15 @@ function isSafeExternalUrl(raw) {
   }
 }
 
-// Packaged: the harness server ships in Resources (compiled JS, zero deps)
-// and runs on Electron's own Node via utilityProcess. It serves the built
+// Packaged: the harness server ships in Resources with its narrowly staged
+// runtime dependencies and runs on Electron's own Node via utilityProcess. It serves the built
 // UI too, so the window talks to one origin and there is no dev proxy.
 // A stray server on the default port must not brick the app — fall back to
 // alternate ports until one binds AND identifies as ours (the probe checks
 // our API shape, not just a 200).
 let serverProc = null;
 let serverReady = true;
+let serverFailure = null;
 async function startServerOn(port) {
   const entry = path.join(process.resourcesPath, "server", "index.js");
   const proc = utilityProcess.fork(entry, [], {
@@ -38,24 +50,42 @@ async function startServerOn(port) {
       CUMEA_PORT: String(port),
       CUMEA_CUA_CONNECTION: path.join(app.getPath("userData"), "cua-connection.json"),
     },
-    stdio: "inherit",
+    stdio: ["ignore", "pipe", "pipe"],
   });
   let exited = false;
-  proc.once("exit", () => {
+  let exitCode = null;
+  let startupLog = "";
+  const capture = (stream, output) => {
+    stream?.on("data", (chunk) => {
+      const text = String(chunk);
+      startupLog = `${startupLog}${text}`.slice(-16_384);
+      output.write(text);
+    });
+  };
+  capture(proc.stdout, process.stdout);
+  capture(proc.stderr, process.stderr);
+  proc.once("exit", (code) => {
     exited = true;
+    exitCode = code;
   });
   // wait for the port to answer (fresh machine: first boot writes data dirs).
   // Identity check is by PID: a dev harness server has the same API shape,
   // so only the child we actually forked (matching pid + static serving)
   // counts as ours.
   for (let i = 0; i < 40; i++) {
-    if (exited) return null;
+    if (exited) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return { proc: null, failure: classifyServerFailure(startupLog, `server-exited-${exitCode ?? "unknown"}`) };
+    }
     try {
       const res = await fetch(`http://127.0.0.1:${port}/api/health`);
       if (res.ok) {
         const body = await res.json().catch(() => null);
-        if (body?.app === "cumea" && body.pid === proc.pid && body.static) return proc;
-        break; // someone else owns this port — try the next one
+        if (body?.app === "cumea" && body.pid === proc.pid && body.static) return { proc, failure: null };
+        try {
+          proc.kill();
+        } catch {}
+        return { proc: null, failure: { kind: "port-in-use", detail: `Loopback port ${port} belongs to another process.` } };
       }
     } catch {
       /* not up yet */
@@ -65,31 +95,23 @@ async function startServerOn(port) {
   try {
     proc.kill();
   } catch {}
-  return null;
+  return { proc: null, failure: classifyServerFailure(startupLog, exited ? "server-exited" : "startup-timeout") };
 }
 
 async function startServerPackaged() {
-  // two passes: a quit-and-reopen relaunch can race the dying instance's
-  // server during teardown — one settle-and-retry covers it
-  for (let attempt = 0; attempt < 2; attempt++) {
-    for (const port of [8799, 18799, 28799]) {
-      const proc = await startServerOn(port);
-      if (proc) {
-        serverProc = proc;
-        SERVER_PORT = port;
-        return true;
-      }
+  let latestFailure = null;
+  for (const port of serverCandidatePorts()) {
+    const result = await startServerOn(port);
+    if (result.proc) {
+      serverProc = result.proc;
+      SERVER_PORT = port;
+      return { ready: true, failure: null };
     }
-    await new Promise((r) => setTimeout(r, 2500));
+    latestFailure = result.failure;
+    if (result.failure?.kind !== "port-in-use") break;
   }
-  return false;
+  return { ready: false, failure: latestFailure };
 }
-
-const ERROR_PAGE =
-  "data:text/html;charset=utf-8," +
-  encodeURIComponent(
-    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">◉</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the agent server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen Cumea — if it keeps happening, restart your computer.</p></div></body>`,
-  );
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -101,7 +123,16 @@ function createWindow() {
     backgroundColor: "#070707",
     ...(process.platform === "darwin"
       ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 16 } }
-      : {}),
+      : process.platform === "win32"
+        ? {
+            titleBarStyle: "hidden",
+            titleBarOverlay: {
+              color: "#111111",
+              symbolColor: "#a3a3a3",
+              height: 44,
+            },
+          }
+        : {}),
     webPreferences: {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
@@ -123,7 +154,7 @@ function createWindow() {
   });
 
   if (app.isPackaged) {
-    win.loadURL(serverReady ? `http://127.0.0.1:${SERVER_PORT}` : ERROR_PAGE);
+    win.loadURL(serverReady ? `http://127.0.0.1:${SERVER_PORT}` : startupErrorPage(serverFailure));
   } else {
     win.loadURL(DEV_URL);
   }
@@ -199,7 +230,11 @@ app.whenReady().then(async () => {
   // descriptor. If TCC is incomplete this records needs-permissions and does
   // not create or start the embedded daemon.
   await startCua().catch((e) => console.error("[cua] start failed:", e));
-  if (app.isPackaged) serverReady = await startServerPackaged();
+  if (app.isPackaged) {
+    const result = await startServerPackaged();
+    serverReady = result.ready;
+    serverFailure = result.failure;
+  }
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

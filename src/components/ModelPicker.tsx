@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { useStore, type Bot, type InstanceInfo } from "@/state/store";
 import { ProviderMark } from "./ProviderIcons";
+import { EngineSetup, needsSignIn } from "./EngineSetup";
 import { cn } from "@/lib/cn";
 
 function modelLabel(instance: InstanceInfo | undefined, model: string): string {
@@ -12,7 +13,7 @@ function modelLabel(instance: InstanceInfo | undefined, model: string): string {
 }
 
 export function ModelPicker({ bot, className }: { bot: Bot; className?: string }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, refreshInstances } = useStore();
   const [open, setOpen] = useState(false);
   const [railId, setRailId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -22,6 +23,10 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
   const railInstance =
     state.instances.find((i) => i.instanceId === (railId ?? selection.instanceId)) ??
     state.instances[0];
+
+  useEffect(() => {
+    if (open) void refreshInstances();
+  }, [open, refreshInstances]);
 
   useEffect(() => {
     if (!open) return;
@@ -65,7 +70,7 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
           {/* instance rail */}
           <div className="flex flex-col gap-1 border-r border-hairline/40 bg-panel p-2">
             {state.instances.map((instance) => {
-              const unavailable = instance.snapshot.state !== "available";
+              const unavailable = instance.snapshot.state !== "available" || needsSignIn(instance);
               const onRail = instance.instanceId === railInstance?.instanceId;
               return (
                 <button
@@ -95,15 +100,20 @@ export function ModelPicker({ bot, className }: { bot: Bot; className?: string }
                 <div className="px-2 pb-1 pt-1">
                   <div className="text-[13px] font-semibold text-ink">{railInstance.displayName}</div>
                   <div className="truncate text-[11px] text-ink-secondary">
-                    {railInstance.snapshot.state === "available"
+                    {railInstance.snapshot.state === "available" && !needsSignIn(railInstance)
                       ? (railInstance.snapshot.version ?? "ready")
-                      : (railInstance.snapshot.reason ?? "unavailable")}
+                      : (railInstance.snapshot.reason ?? (needsSignIn(railInstance) ? "sign-in required" : "unavailable"))}
                   </div>
                 </div>
+                {(railInstance.snapshot.state !== "available" || needsSignIn(railInstance)) && (
+                  <div className="border-b border-hairline/40 px-2 pb-2.5">
+                    <EngineSetup instance={railInstance} />
+                  </div>
+                )}
                 {railInstance.models.options.map((option) => {
                   const current =
                     selection.instanceId === railInstance.instanceId && selection.model === option.id;
-                  const disabled = railInstance.snapshot.state !== "available";
+                  const disabled = railInstance.snapshot.state !== "available" || needsSignIn(railInstance);
                   return (
                     <button
                       key={option.id}

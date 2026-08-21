@@ -6,6 +6,7 @@ import {
   Clock3,
   ClipboardCopy,
   Copy,
+  Crown,
   EyeOff,
   Folder,
   FolderPlus,
@@ -18,7 +19,7 @@ import {
   Settings,
   Trash2,
 } from "lucide-react";
-import { api, useStore, formatTime, type Bot } from "@/state/store";
+import { api, useStore, formatTime, visibleMessages, type Bot } from "@/state/store";
 import { CumeaAvatar, InitialsAvatar } from "./Avatar";
 import { expressionForBot } from "@/lib/mascot";
 import { avatarForBot, avatarStateForBot } from "@/lib/mote";
@@ -27,6 +28,7 @@ import { cn } from "@/lib/cn";
 const electronPlatform = window.cumea?.platform;
 const isElectron = Boolean(electronPlatform);
 const isMacElectron = electronPlatform === "darwin";
+const isWindowsElectron = electronPlatform === "win32";
 
 /** "Ada Lovelace" → "AL", "ada" → "A", "you@x.dev" → "Y", unset → "?" */
 function profileInitials(profile?: { name?: string; email?: string }): string {
@@ -42,9 +44,8 @@ function profileInitials(profile?: { name?: string; email?: string }): string {
   return email ? email[0]!.toUpperCase() : "?";
 }
 
-function preview(bot: Bot): string {
+function preview(bot: Bot, last = visibleMessages(bot).at(-1)): string {
   if (bot.busy) return "Working…";
-  const last = bot.messages[bot.messages.length - 1];
   if (!last) return "";
   if (last.kind === "options" && last.card) return last.card.title;
   if (last.kind === "activity" && last.tool) return last.tool.name;
@@ -97,6 +98,8 @@ function BotContextMenu({
   }, [onClose]);
 
   if (!bot) return null;
+  const instance = state.instances.find((candidate) => candidate.instanceId === bot.modelSelection.instanceId);
+  const canCoordinate = !bot.lifecycle && instance?.capabilities.agentsMcp === true;
   // keep the menu on-screen near the click
   const top = Math.min(menu.y, window.innerHeight - 340);
   const left = Math.min(menu.x, window.innerWidth - 240);
@@ -140,6 +143,11 @@ function BotContextMenu({
           () => dispatch({ type: "updateBot", botId: bot.id, patch: { pinned: !bot.pinned } }),
         ),
         item(<FolderPlus size={16} className="text-ink-secondary" />, "Move to section", () => onMove(bot.id)),
+        item(<Crown size={16} className="text-warning" />, bot.coordinator ? "Remove Coordinator role" : "Make workspace Coordinator", () =>
+          dispatch({ type: "updateBot", botId: bot.id, patch: { coordinator: !bot.coordinator } }), {
+          disabled: !bot.coordinator && !canCoordinate,
+          hint: !bot.coordinator && !canCoordinate ? "Choose a permanent bot with a delegation-capable engine first" : undefined,
+        }),
         item(<BellDot size={16} className="text-ink-secondary" />, "Mark as Unread", () =>
           dispatch({ type: "markUnread", botId: bot.id }),
         ),
@@ -162,8 +170,10 @@ function BotContextMenu({
         }),
         divider("d3"),
         item(<EyeOff size={16} className="text-ink-secondary" />, "Hide from sidebar", () =>
-          dispatch({ type: "updateBot", botId: bot.id, patch: { hidden: true } }),
-        ),
+          dispatch({ type: "updateBot", botId: bot.id, patch: { hidden: true } }), {
+          disabled: bot.coordinator === true,
+          hint: bot.coordinator ? "Remove the Coordinator role before hiding this agent" : undefined,
+        }),
         item(<Trash2 size={16} />, "Delete", () => onDelete(bot.id), {
           danger: true,
         }),
@@ -342,7 +352,11 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
   const { state, dispatch } = useStore();
   const selected = state.selectedId === bot.id;
   const mascotMotion = selected && state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
-  const last = bot.messages[bot.messages.length - 1];
+  // Streaming deltas update the shared context frequently without replacing
+  // the durable message array. Avoid rebuilding the entire branch for every
+  // sidebar row on each token.
+  const branch = useMemo(() => visibleMessages(bot), [bot.activeLeafId, bot.messages]);
+  const last = branch.at(-1);
   return (
     <button
       onClick={() => dispatch({ type: "select", id: bot.id })}
@@ -368,7 +382,9 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5 truncate text-[15px] font-semibold text-ink">
-            {bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
+            {bot.coordinator
+              ? <Crown size={12} className="shrink-0 text-warning" aria-label="Workspace Coordinator" />
+              : bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
             <span className="truncate">{bot.name}</span>
             {bot.lifecycle ? (
               <span
@@ -387,7 +403,7 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
         </div>
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[13px] text-ink-secondary">
-            {preview(bot)}
+            {preview(bot, last)}
           </span>
           {bot.unread && (
             <span className="size-2 shrink-0 rounded-full bg-accent" />
@@ -442,16 +458,24 @@ export function Sidebar() {
       .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
   }, [query, state.bots]);
   const groups = [
+    {
+      id: "coordinator",
+      name: "Coordinator",
+      bots: visibleBots.filter((bot) => bot.coordinator === true),
+    },
     ...state.workspace.sections.map((section) => ({
       id: section.id,
       name: section.name,
-      bots: visibleBots.filter((bot) => bot.sectionId === section.id),
+      bots: visibleBots.filter((bot) => !bot.coordinator && bot.sectionId === section.id),
     })),
-    { id: "unsectioned", name: state.workspace.sections.length ? "Bots" : "", bots: visibleBots.filter((bot) => !bot.sectionId) },
+    { id: "unsectioned", name: state.workspace.sections.length ? "Bots" : "", bots: visibleBots.filter((bot) => !bot.coordinator && !bot.sectionId) },
   ].filter((group) => group.bots.length > 0);
-  const attentionCount = state.bots.reduce(
-    (count, bot) => count + bot.messages.filter((message) => message.kind === "options" && message.card && !message.card.answered && !message.card.dismissed).length,
-    0,
+  const attentionCount = useMemo(
+    () => state.bots.reduce(
+      (count, bot) => count + visibleMessages(bot).filter((message) => message.kind === "options" && message.card && !message.card.answered && !message.card.dismissed).length,
+      0,
+    ),
+    [state.bots],
   );
   const attentionLabel = attentionCount === 0
     ? "Needs you, no pending items"
@@ -467,7 +491,10 @@ export function Sidebar() {
     <aside className="flex h-full w-[320px] shrink-0 flex-col border-r border-hairline/40 bg-panel">
       {/* Electron owns the macOS traffic lights. The browser gets ordinary web chrome. */}
       <div
-        className="flex items-center justify-between px-4 pt-3.5 pb-1"
+        className={cn(
+          "flex items-center justify-between px-4 pt-3.5 pb-1",
+          isWindowsElectron && "pr-[148px]",
+        )}
         style={titlebarStyle}
       >
         {isMacElectron ? <div className="w-14 shrink-0" aria-hidden="true" /> : <span aria-hidden="true" />}
@@ -563,7 +590,7 @@ export function Sidebar() {
             <div key={group.id} className="mb-2">
               {group.name && (
                 <div className="flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-secondary">
-                  <Folder size={12} /> {group.name}
+                  {group.id === "coordinator" ? <Crown size={12} className="text-warning" /> : <Folder size={12} />} {group.name}
                 </div>
               )}
               {group.bots.map((bot) => <BotListItem key={bot.id} bot={bot} onMenu={setMenu} />)}
@@ -577,8 +604,9 @@ export function Sidebar() {
       <div className="px-3 pb-3 pt-2">
         <div className="flex items-center">
           <button
-            onClick={() => dispatch({ type: "toggleAppSettings" })}
+            onClick={() => dispatch({ type: "toggleAppSettings", open: true, tab: "profile" })}
             className="flex min-w-0 flex-1 items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"
+            aria-label="Open profile settings"
           >
             <InitialsAvatar initials={profileInitials(state.config?.profile)} size={28} />
             <span className="truncate text-[14px] text-ink">
@@ -586,9 +614,10 @@ export function Sidebar() {
             </span>
           </button>
           <button
-            onClick={() => dispatch({ type: "toggleAppSettings" })}
+            onClick={() => dispatch({ type: "toggleAppSettings", open: true, tab: "about" })}
             className="rounded-md p-2 text-ink-secondary hover:bg-raised hover:text-ink"
             title="App settings"
+            aria-label="Open app settings"
           >
             <Settings size={18} />
           </button>

@@ -209,8 +209,10 @@ export class FileCapabilityStore {
     capabilities = new Map();
     byteCount = 0;
     now;
-    constructor(now = Date.now) {
+    onChange;
+    constructor(now = Date.now, onChange = () => { }) {
         this.now = now;
+        this.onChange = onChange;
     }
     remove(token) {
         const capability = this.capabilities.get(token);
@@ -218,6 +220,7 @@ export class FileCapabilityStore {
             return;
         this.byteCount -= capability.bytes.length;
         this.capabilities.delete(token);
+        this.onChange();
     }
     sweep() {
         const now = this.now();
@@ -226,7 +229,7 @@ export class FileCapabilityStore {
                 this.remove(token);
         }
     }
-    issue(botId, file) {
+    issue(botId, file, options = {}) {
         validateBotId(botId);
         this.sweep();
         if (!file.bytes.length)
@@ -234,6 +237,9 @@ export class FileCapabilityStore {
         if (file.bytes.length > FILE_CAPABILITY_MAX_FILE_BYTES)
             throw httpError(413, "file is larger than 25 MB");
         const identified = classifyPreviewFile(file.name, file.bytes);
+        if (identified.kind === "html" && options.allowHtml !== true) {
+            throw httpError(415, "HTML preview is limited to generated workspace artifacts");
+        }
         while (this.capabilities.size >= MAX_CAPABILITIES ||
             (this.capabilities.size > 0 && this.byteCount + file.bytes.length > MAX_CAPABILITY_BYTES)) {
             const oldest = this.capabilities.keys().next().value;
@@ -258,6 +264,7 @@ export class FileCapabilityStore {
         };
         this.capabilities.set(capability.token, capability);
         this.byteCount += capability.bytes.length;
+        this.onChange();
         return capability;
     }
     get(token) {
@@ -277,6 +284,16 @@ export class FileCapabilityStore {
             if (capability.botId === botId)
                 this.remove(token);
         }
+    }
+    /** Restore invalidates every byte snapshot, including capabilities whose
+     * public bot id happens to exist in both the old and restored workspace. */
+    clear() {
+        this.capabilities.clear();
+        this.byteCount = 0;
+        this.onChange();
+    }
+    secretValues() {
+        return [...this.capabilities.keys()];
     }
 }
 export function publicFileCapability(capability, source) {

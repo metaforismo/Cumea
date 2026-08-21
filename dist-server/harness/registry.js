@@ -65,6 +65,7 @@ export class ProviderRegistry {
                     snapshot: { state: "unavailable", reason: entry.shadow.reason },
                     models: { default: "", options: [] },
                     capabilities: { sessionModelSwitch: "unsupported" },
+                    install: this.driversByKind.get(entry.shadow.driverKind)?.install,
                 };
             }
             const inst = entry.live;
@@ -82,6 +83,7 @@ export class ProviderRegistry {
                 snapshot,
                 models: inst.models,
                 capabilities: inst.adapter.capabilities,
+                install: this.driversByKind.get(inst.driverKind)?.install,
             };
         }));
     }

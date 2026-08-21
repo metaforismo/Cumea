@@ -3,8 +3,9 @@
 // JSON-RPC handshake, normalize notifications into canonical events, and
 // surface server->client approval requests as request.opened.
 //
-// Spawn-based tests are POSIX-only until Windows CLI spawning lands (the
-// fake is a shebang script — same constraint as codex.cmd itself).
+// Spawn-based tests remain POSIX-only because this fixture is a shebang
+// script. Windows command-shim resolution is covered independently in
+// procs.test.ts.
 import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -55,6 +56,8 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
     delete process.env.FAKE_CODEX_MODE;
     delete process.env.FAKE_CODEX_DUMP;
     delete process.env.OPENAI_API_KEY;
+    delete process.env.XAI_API_KEY;
+    delete process.env.BOX_TOKEN;
     recorder?.stop();
     await instance?.dispose();
     rmSync(scratch, { recursive: true, force: true });
@@ -65,6 +68,8 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
     const dump = join(scratch, "dump.json");
     process.env.FAKE_CODEX_DUMP = dump;
     process.env.OPENAI_API_KEY = "sk-should-not-leak";
+    process.env.XAI_API_KEY = "xai-should-not-leak";
+    process.env.BOX_TOKEN = "box-should-not-leak";
 
     const { turnId } = await instance.adapter.sendTurn({
       threadId: "t-happy",
@@ -99,6 +104,8 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.env.OPENAI_API_KEY).toBeUndefined();
+    expect(seen.env.XAI_API_KEY).toBeUndefined();
+    expect(seen.env.BOX_TOKEN).toBeUndefined();
     const methods = seen.calls.map((c: { method: string }) => c.method);
     expect(methods).toEqual(["initialize", "initialized", "thread/start", "turn/start"]);
     // persona rides in front of the prompt text — codex has no system slot
@@ -176,6 +183,17 @@ posixOnly("CodexDriver turns (fake app-server)", () => {
     expect(done).toMatchObject({ ok: false, stopReason: "rpc_error" });
     expect(recorder.events.find((e) => e.type === "runtime.error")).toMatchObject({
       message: "initialize timed out after 100ms",
+    });
+  });
+
+  it("surfaces nested app-server error notifications", async () => {
+    await create({ mode: "nested-error" });
+    await instance.adapter.sendTurn({ threadId: "t-nested-error", text: "go" });
+
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false, stopReason: "nested app-server failure" });
+    expect(recorder.events.find((e) => e.type === "runtime.error")).toMatchObject({
+      message: "nested app-server failure",
     });
   });
 

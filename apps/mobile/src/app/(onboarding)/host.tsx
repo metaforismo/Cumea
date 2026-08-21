@@ -1,9 +1,10 @@
 import { Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { OnboardingFrame } from "@/components/onboarding-frame";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
 
 export default function HostScreen() {
+  const { theme } = useCumeaTheme();
   const router = useRouter();
   return (
     <OnboardingFrame

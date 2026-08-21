@@ -4,7 +4,7 @@
 // initialize/thread/turn handshake, then plays a scripted turn. Like the
 // real app-server, it never exits on its own — the driver kills it.
 //
-//   FAKE_CODEX_MODE   happy (default) | approval | resume | hang-initialize
+//   FAKE_CODEX_MODE   happy (default) | approval | resume | nested-error | hang-initialize
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
@@ -75,6 +75,11 @@ process.stdin.on("data", (chunk) => {
         break;
       case "turn/start":
         out({ jsonrpc: "2.0", id: msg.id, result: { ok: true } });
+        if (mode === "nested-error") {
+          notify("error", { error: { message: "nested app-server failure" } });
+          notify("turn/completed", { turn: { status: "failed", error: { message: "nested app-server failure" } } });
+          break;
+        }
         notify("item/started", { item: { id: "i1", type: "commandExecution", command: "ls -la" } });
         if (mode === "approval") {
           out({ jsonrpc: "2.0", id: 100, method: "execCommandApproval", params: { command: "rm -rf scratch" } });

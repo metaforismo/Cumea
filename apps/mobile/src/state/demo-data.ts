@@ -20,6 +20,7 @@ export const DEMO_AGENTS: AgentSummary[] = [
     unread: true,
     needsYou: false,
     presence: "idle",
+    queuedCount: 0,
     avatar: avatar("peak", "#d72879"),
   },
   {
@@ -32,6 +33,7 @@ export const DEMO_AGENTS: AgentSummary[] = [
     unread: false,
     needsYou: true,
     presence: "needs-you",
+    queuedCount: 0,
     avatar: avatar("ripple", "#dc2944"),
   },
   {
@@ -44,6 +46,7 @@ export const DEMO_AGENTS: AgentSummary[] = [
     unread: false,
     needsYou: false,
     presence: "idle",
+    queuedCount: 0,
     avatar: avatar("drop", "#f56a16"),
   },
   {
@@ -56,6 +59,7 @@ export const DEMO_AGENTS: AgentSummary[] = [
     unread: false,
     needsYou: true,
     presence: "needs-you",
+    queuedCount: 0,
     avatar: avatar("soft", "#8b633d"),
   },
   {
@@ -68,6 +72,7 @@ export const DEMO_AGENTS: AgentSummary[] = [
     unread: false,
     needsYou: false,
     presence: "idle",
+    queuedCount: 0,
     avatar: avatar("tile", "#2f8de3"),
   },
 ];
@@ -76,6 +81,7 @@ export const DEMO_MESSAGES: Record<string, ChatMessage[]> = {
   "demo-ea": [
     {
       id: "m-ea-1",
+      parentId: null,
       agentId: "demo-ea",
       role: "agent",
       kind: "text",
@@ -85,6 +91,7 @@ export const DEMO_MESSAGES: Record<string, ChatMessage[]> = {
     },
     {
       id: "m-ea-2",
+      parentId: "m-ea-1",
       agentId: "demo-ea",
       role: "user",
       kind: "text",
@@ -94,6 +101,7 @@ export const DEMO_MESSAGES: Record<string, ChatMessage[]> = {
     },
     {
       id: "m-ea-3",
+      parentId: "m-ea-2",
       agentId: "demo-ea",
       role: "agent",
       kind: "text",
@@ -135,7 +143,9 @@ export const DEMO_ROUTINES: RoutineSummary[] = [
     agentId: "demo-chief",
     agentName: "Chief of Staff",
     name: "Morning briefing",
+    prompt: "Prepare a concise morning briefing with priorities and deadlines.",
     schedule: "Every weekday at 8:00 AM",
+    scheduleSpec: { kind: "weekly", time: "08:00", timezone: "Europe/Rome", weekdays: [1, 2, 3, 4, 5] },
     enabled: true,
     nextRunAt: now + 16 * 60 * 60_000,
     lastStatus: "completed",
@@ -145,7 +155,9 @@ export const DEMO_ROUTINES: RoutineSummary[] = [
     agentId: "demo-ea",
     agentName: "EA",
     name: "Inbox cleanup",
+    prompt: "Review the inbox and prepare a triage summary.",
     schedule: "Every 6 hours",
+    scheduleSpec: { kind: "interval", everyMinutes: 360 },
     enabled: true,
     nextRunAt: now + 4 * 60 * 60_000,
     lastStatus: "completed",
@@ -155,8 +167,9 @@ export const DEMO_ROUTINES: RoutineSummary[] = [
 export const DEMO_SNAPSHOT: MobileSnapshot = {
   capabilities: { computerPreview: false },
   profile: { name: "Cumea User" },
-  agents: DEMO_AGENTS,
+  agents: DEMO_AGENTS.map((agent) => agent.id === "demo-ea" ? { ...agent, activeLeafId: "m-ea-3" } : agent),
   attention: DEMO_ATTENTION,
   routines: DEMO_ROUTINES,
+  queuedMessages: [],
   serverTime: now,
 };

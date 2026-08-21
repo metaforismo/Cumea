@@ -8,10 +8,62 @@ const LETTERS = ["A", "B", "C", "D", "E", "F"];
 export function OptionCard({
   botId,
   message,
+  projectionOnly = false,
 }: {
   botId: string;
   message: Message;
+  projectionOnly?: boolean;
 }) {
+  if (projectionOnly) return <OptionCardProjection message={message} />;
+  return <InteractiveOptionCard botId={botId} message={message} />;
+}
+
+export function OptionCardProjection({ message }: { message: Message }) {
+  const card = message.card;
+  if (!card || card.dismissed) return null;
+
+  return (
+    <div className="w-full max-w-[840px] rounded-2xl border border-hairline/40 bg-card/70 p-4" aria-label="Request in conversation history">
+      <div className="flex min-w-0 items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-[15px] font-semibold text-ink">{card.title}</div>
+          <div className="mt-0.5 whitespace-pre-wrap break-words text-[13px] leading-5 text-ink-secondary">
+            {card.subtitle}
+          </div>
+          {card.tool ? <div className="mt-1 truncate font-mono text-[11px] text-ink-secondary">{card.tool}</div> : null}
+        </div>
+        <span className="shrink-0 rounded-full bg-raised px-2 py-1 text-[10px] font-medium text-ink-secondary">
+          {card.answered ? "Answered" : "Needs you"}
+        </span>
+      </div>
+
+      <div className="mt-3 overflow-hidden rounded-lg border border-hairline/30" role="list" aria-label="Request choices">
+        {card.options.map((option, index) => (
+          <div
+            key={option}
+            role="listitem"
+            className={cn(
+              "flex min-h-11 w-full items-center gap-3 px-3 py-2.5 text-left text-[14px] text-ink",
+              index > 0 && "border-t border-hairline/30",
+              card.answered === option && "bg-raised",
+            )}
+          >
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-raised text-[11px] font-medium text-ink-secondary">
+              {LETTERS[index] ?? index + 1}
+            </span>
+            <span className="min-w-0 break-words">{option}</span>
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-3 text-[11px] leading-4 text-ink-secondary">
+        {card.answered ? `Answered: ${card.answered}` : "Answer this request in the focused panel below."}
+      </p>
+    </div>
+  );
+}
+
+function InteractiveOptionCard({ botId, message }: { botId: string; message: Message }) {
   const { answerCard, dismissCard } = useStore();
   const [custom, setCustom] = useState("");
   const [pending, setPending] = useState(false);

@@ -4,11 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   archiveBoxByIdForDeletion,
   archiveBoxForBotDeletion,
+  boxErrorMessage,
   boxStatus,
+  findBox,
   provisionBox,
   readWorkspaceFile,
   resumeBoxAfterDeletionRollback,
   screenshotBox,
+  verifyBoxToken,
 } from "./box.ts";
 
 function response(status: number, body: unknown) {
@@ -17,6 +20,144 @@ function response(status: number, body: unknown) {
     headers: { "content-type": "application/json" },
   });
 }
+
+async function expectedBoxName(botId: string) {
+  const digest = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(botId))).toString("hex");
+  return `cumea-${botId.slice(0, 8).toLowerCase().replace(/[^a-z0-9]/g, "")}-${digest.slice(0, 6)}`;
+}
+
+describe("Box credential verification and safe errors", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("accepts a valid credential without exposing it", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer box_valid_secret");
+      return response(200, { boxes: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(verifyBoxToken(" box_valid_secret ")).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [401, "invalid-credential", /rejected/i],
+    [403, "invalid-credential", /rejected/i],
+    [429, "rate-limited", /rate-limiting/i],
+    [503, "provider-unavailable", /unavailable/i],
+  ] as const)("maps HTTP %s without reflecting provider bodies", async (status, code, expected) => {
+    vi.stubGlobal("fetch", vi.fn(async () => response(status, { message: "raw-secret-provider-body" })));
+    const result = await verifyBoxToken("box_secret_that_must_not_echo");
+    expect(result).toMatchObject({ ok: false, code });
+    if (!result.ok) {
+      expect(result.message).toMatch(expected);
+      expect(result.message).not.toContain("raw-secret-provider-body");
+      expect(result.message).not.toContain("box_secret_that_must_not_echo");
+    }
+  });
+
+  it("returns only a validated ascii.dev billing URL", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response(402, {
+      message: "secret plan details",
+      error: { details: { billingUrl: "https://box.ascii.dev/box/upgrade?account=private#private" } },
+    })));
+    const result = await verifyBoxToken("box_billing");
+    expect(result).toMatchObject({ ok: false, code: "billing-required", status: 402 });
+    if (!result.ok) {
+      expect(result.message).toContain("https://box.ascii.dev/box/upgrade");
+      expect(result.message).not.toContain("account=private");
+      expect(result.message).not.toContain("#private");
+      expect(result.message).not.toContain("secret plan details");
+    }
+    expect(boxErrorMessage(402, "create", {
+      error: { details: { billingUrl: "https://evil.example/steal?token=secret" } },
+    })).not.toContain("evil.example");
+    expect(boxErrorMessage(402, "create", {
+      error: { details: { billingUrl: "https://ascii.dev:8443/upgrade" } },
+    })).not.toContain(":8443");
+  });
+
+  it("fails closed when the provider is unreachable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline with box_secret"); }));
+    const result = await verifyBoxToken("box_offline_secret");
+    expect(result).toMatchObject({ ok: false, code: "provider-unavailable", status: 503 });
+    if (!result.ok) expect(result.message).not.toContain("box_offline_secret");
+  });
+});
+
+describe("Box id cache", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("uses a direct owner-validated GET after the initial listing", async () => {
+    const botId = "cache-hit-bot";
+    const name = await expectedBoxName(botId);
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {
+      const target = String(url);
+      calls.push(target);
+      if (target.endsWith("/boxes")) return response(200, { boxes: [{ id: "box-cache", name, state: "idle" }] });
+      if (target.endsWith("/boxes/box-cache")) return response(200, { box: { id: "box-cache", name, state: "archived" } });
+      throw new Error(`unexpected fetch: ${target}`);
+    }));
+    const cfg = { box: { token: "box_cache_token" } };
+    await expect(findBox(cfg, botId)).resolves.toMatchObject({ id: "box-cache", state: "idle" });
+    await expect(findBox(cfg, botId)).resolves.toMatchObject({ id: "box-cache", state: "archived" });
+    expect(calls.filter((target) => target.endsWith("/boxes"))).toHaveLength(1);
+  });
+
+  it("invalidates ownership mismatches and falls back to one listing", async () => {
+    const botId = "cache-owner-bot";
+    const name = await expectedBoxName(botId);
+    let lists = 0;
+    let direct = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {
+      const target = String(url);
+      if (target.endsWith("/boxes")) {
+        lists += 1;
+        return response(200, { boxes: [{ id: lists === 1 ? "box-old" : "box-new", name, state: "idle" }] });
+      }
+      if (target.endsWith("/boxes/box-old")) {
+        direct += 1;
+        return response(200, { box: { id: "box-old", name: "someone-elses-box", state: "idle" } });
+      }
+      if (target.endsWith("/boxes/box-new")) {
+        direct += 1;
+        return response(200, { box: { id: "box-new", name, state: "idle" } });
+      }
+      throw new Error(`unexpected fetch: ${target}`);
+    }));
+    const cfg = { box: { token: "box_owner_token" } };
+    expect((await findBox(cfg, botId)).id).toBe("box-old");
+    expect((await findBox(cfg, botId)).id).toBe("box-new");
+    expect((await findBox(cfg, botId)).id).toBe("box-new");
+    expect({ lists, direct }).toEqual({ lists: 2, direct: 2 });
+  });
+
+  it("does not reuse a cached id after token rotation", async () => {
+    const botId = "cache-token-bot";
+    const name = await expectedBoxName(botId);
+    let lists = 0;
+    const directAuth: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const target = String(url);
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      if (target.endsWith("/boxes")) {
+        lists += 1;
+        const id = auth.endsWith("token-one") ? "box-one" : "box-two";
+        return response(200, { boxes: [{ id, name, state: "idle" }] });
+      }
+      directAuth.push(auth);
+      const id = auth.endsWith("token-one") ? "box-one" : "box-two";
+      return response(200, { box: { id, name, state: "idle" } });
+    }));
+    const cfg = { box: { token: "token-one" } };
+    expect((await findBox(cfg, botId)).id).toBe("box-one");
+    cfg.box.token = "token-two";
+    expect((await findBox(cfg, botId)).id).toBe("box-two");
+    expect((await findBox(cfg, botId)).id).toBe("box-two");
+    expect(lists).toBe(2);
+    expect(directAuth).toEqual(["Bearer token-two"]);
+  });
+});
 
 describe("Box provisioning", () => {
   afterEach(() => vi.unstubAllGlobals());

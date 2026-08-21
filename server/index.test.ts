@@ -6,6 +6,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { request, type ClientRequest } from "node:http";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,7 @@ const REMOTE_BASE = `http://127.0.0.1:${REMOTE_PORT}`;
 let child: ChildProcess;
 let home: string;
 let stderr = "";
+let staticRoot: string;
 
 const api = async (method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> => {
   const res = await fetch(`${BASE}${path}`, {
@@ -108,16 +110,32 @@ async function openEventStream(headers: Record<string, string>, base = REMOTE_BA
   };
 }
 
+function rawHttp(target: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port: PORT });
+    const chunks: Buffer[] = [];
+    socket.once("error", reject);
+    socket.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    socket.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    socket.once("connect", () => socket.end(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${PORT}\r\nConnection: close\r\n\r\n`));
+  });
+}
+
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "cumea-api-test-"));
   // a fleet of exactly one unknown driver: no CLI probes, no network
   mkdirSync(join(home, ".cumea"), { recursive: true });
+  staticRoot = join(home, "static");
+  mkdirSync(join(staticRoot, "assets"), { recursive: true });
+  writeFileSync(join(staticRoot, "index.html"), "valid-static-index");
+  writeFileSync(join(staticRoot, "assets", "app.js"), "valid-static-asset");
+  writeFileSync(join(home, "outside-static-secret.txt"), "outside-static-secret-sentinel");
   writeFileSync(
     join(home, ".cumea", "config.json"),
     JSON.stringify({ instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } } }),
   );
 
-  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+  child = spawn(process.execPath, ["--import", join(SERVER_DIR, "test-fixtures", "box-fetch.mjs"), join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
@@ -125,6 +143,7 @@ beforeAll(async () => {
       HOME: home,
       USERPROFILE: home,
       CUMEA_PORT: String(PORT),
+      CUMEA_STATIC_DIR: staticRoot,
       CUMEA_REMOTE_ACCESS: "1",
       CUMEA_REMOTE_PORT: String(REMOTE_PORT),
       CUMEA_REMOTE_PUBLIC_URL: REMOTE_BASE,
@@ -165,6 +184,112 @@ describe("harness HTTP API", () => {
     expect(status).toBe(200);
     expect(body.app).toBe("cumea");
     expect(typeof body.pid).toBe("number");
+  });
+
+  it("serves valid assets but never returns outside bytes for raw encoded traversal targets", async () => {
+    expect(await (await fetch(`${BASE}/assets/app.js`)).text()).toBe("valid-static-asset");
+    expect(await (await fetch(`${BASE}/client/route`)).text()).toBe("valid-static-index");
+    const attacks = [
+      "/../outside-static-secret.txt",
+      "/%2e%2e/outside-static-secret.txt",
+      "/.%2e/outside-static-secret.txt",
+      "/%252e%252e/outside-static-secret.txt",
+      "/%2e%2e%2foutside-static-secret.txt",
+      "/%252e%252e%252foutside-static-secret.txt",
+      "/..%5coutside-static-secret.txt",
+      "/%2e%2e%5coutside-static-secret.txt",
+      "/%00outside-static-secret.txt",
+      "/%2500outside-static-secret.txt",
+      "/%0aoutside-static-secret.txt",
+      "/%ZZ",
+      "//outside-static-secret.txt",
+      "/C:%5coutside-static-secret.txt",
+    ];
+    for (const target of attacks) {
+      const response = await rawHttp(target);
+      expect(response, target).toMatch(/^HTTP\/1\.1 4\d\d\b/);
+      expect(response, target).not.toContain("outside-static-secret-sentinel");
+      expect(response, target).not.toContain("valid-static-index");
+    }
+  });
+
+  it("redacts configured secrets from persisted user input and local/remote SSE", async () => {
+    const secret = "KnownSecret+42/sentinel";
+    expect((await api("PUT", "/api/config", { xai: { key: secret } })).status).toBe(200);
+    const session = await api("POST", "/api/pairing/sessions", { ttlMs: 60_000 });
+    const claimResponse = await fetch(`${REMOTE_BASE}/api/pairing/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.body.session.id,
+        secret: session.body.session.secret,
+        deviceName: "Secret egress test",
+      }),
+    });
+    const claimed = await claimResponse.json() as any;
+    const auth = { authorization: `Bearer ${claimed.token}` };
+    const bots = (await api("GET", "/api/bots")).body.bots as any[];
+    const bot = bots.find((candidate) => !candidate.hidden)!;
+    const localEvents = await openEventStream({}, BASE);
+    const remoteEvents = await openEventStream(auth);
+    expect(await localEvents.next()).toEqual({ kind: "hello" });
+    expect(await remoteEvents.next()).toEqual({ kind: "hello" });
+
+    const sent = await api("POST", `/api/bots/${bot.id}/messages`, { text: `please keep ${secret} private` });
+    expect(sent.status).toBe(409);
+    const localMessage = await localEvents.next();
+    const remoteMessage = await remoteEvents.next();
+    expect(localMessage).toMatchObject({ kind: "message" });
+    expect(remoteMessage).toMatchObject({ kind: "message" });
+    expect(JSON.stringify(localMessage)).not.toContain(secret);
+    expect(JSON.stringify(remoteMessage)).not.toContain(secret);
+    localEvents.close();
+    remoteEvents.close();
+
+    const messages = await api("GET", `/api/bots/${bot.id}/messages`);
+    expect(JSON.stringify(messages.body)).not.toContain(secret);
+    const persisted = readFileSync(join(home, ".cumea", `messages-${bot.threadId}.json`), "utf8");
+    expect(persisted).not.toContain(secret);
+
+    const routine = await api("POST", "/api/routines", {
+      botId: bot.id,
+      name: `Routine ${secret}`,
+      prompt: `Never reflect ${secret}`,
+      schedule: { kind: "interval", everyMinutes: 60 },
+      enabled: false,
+    });
+    expect(routine.status).toBe(201);
+    expect(JSON.stringify(routine.body)).not.toContain(secret);
+    const remoteWork = await fetch(`${REMOTE_BASE}/api/work`, { headers: auth });
+    expect(remoteWork.status).toBe(200);
+    expect(JSON.stringify(await remoteWork.json())).not.toContain(secret);
+    expect(readFileSync(join(home, ".cumea", "workspace.json"), "utf8")).not.toContain(secret);
+  });
+
+  it("exports and dry-run validates a local portable backup", async () => {
+    const exported = await fetch(`${BASE}/api/backup/export`);
+    expect(exported.status).toBe(200);
+    expect(exported.headers.get("content-type")).toBe("application/zip");
+    expect(exported.headers.get("cache-control")).toBe("no-store");
+    expect(exported.headers.get("content-disposition")).toMatch(/^attachment; filename="cumea-/);
+    const archive = await exported.arrayBuffer();
+    expect(archive.byteLength).toBeGreaterThan(100);
+
+    const inspected = await fetch(`${BASE}/api/backup/inspect`, {
+      method: "POST",
+      headers: { "content-type": "application/zip" },
+      body: archive,
+    });
+    expect(inspected.status).toBe(200);
+    expect(await inspected.json()).toMatchObject({ dryRun: true, botCount: 1, attachmentCount: 0 });
+
+    const unconfirmed = await fetch(`${BASE}/api/backup/restore`, {
+      method: "POST",
+      headers: { "content-type": "application/zip" },
+      body: archive,
+    });
+    expect(unconfirmed.status).toBe(400);
+    expect(await unconfirmed.json()).toEqual({ error: "restore confirmation header is required" });
   });
 
   it("rejects state-changing requests from foreign browser origins", async () => {
@@ -218,15 +343,45 @@ describe("harness HTTP API", () => {
     expect(bootstrap.status).toBe(200);
     const snapshot = (await bootstrap.json()) as any;
     expect(snapshot.app).toBe("cumea");
+
+    const pushToken = "ExpoPushToken[abcdefghijklmnop]";
+    const registeredPush = await fetch(`${REMOTE_BASE}/api/mobile/push-token`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ token: pushToken, platform: "ios" }),
+    });
+    expect(registeredPush.status).toBe(200);
+    expect(await registeredPush.json()).toEqual({ enabled: true, platform: "ios" });
+    expect(await (await fetch(`${REMOTE_BASE}/api/mobile/push-token`, { headers: auth })).json()).toEqual({
+      enabled: true,
+      platform: "ios",
+    });
+    const localDevicesWithPush = await api("GET", "/api/devices");
+    expect(localDevicesWithPush.body.devices).toContainEqual(expect.objectContaining({
+      id: claimed.device.id,
+      pushEnabled: true,
+      pushPlatform: "ios",
+    }));
+    expect(JSON.stringify(localDevicesWithPush.body)).not.toContain(pushToken);
+    expect((await fetch(`${REMOTE_BASE}/api/mobile/push-token`, { method: "DELETE", headers: auth })).status).toBe(200);
     expect(snapshot.capabilities).toEqual({ computerPreview: false });
     expect(snapshot.bots.length).toBeGreaterThan(0);
     expect(JSON.stringify(snapshot)).not.toContain("resumeCursors");
     expect(JSON.stringify(snapshot)).not.toContain("modelSelection");
     expect(JSON.stringify(snapshot)).not.toContain("approvalPolicy");
     expect(JSON.stringify(snapshot)).not.toContain("configured");
+    expect(JSON.stringify(snapshot)).not.toContain("autoSleep");
 
     const privateConfig = await fetch(`${REMOTE_BASE}/api/config`, { headers: auth });
     expect(privateConfig.status).toBe(403);
+    const privateConfigWrite = await fetch(`${REMOTE_BASE}/api/config`, {
+      method: "PUT",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ box: { token: "tok_secret_value" } }),
+    });
+    expect(privateConfigWrite.status).toBe(403);
+    const privateAcpProfiles = await fetch(`${REMOTE_BASE}/api/acp-profiles`, { headers: auth });
+    expect(privateAcpProfiles.status).toBe(403);
     const eventStream = await openEventStream(auth);
     expect(await eventStream.next()).toEqual({ kind: "hello" });
     const localEventStream = await openEventStream({}, BASE);
@@ -256,6 +411,20 @@ describe("harness HTTP API", () => {
     expect(JSON.stringify(botEvent)).not.toContain("modelSelection");
     expect(JSON.stringify(botEvent)).not.toContain("resumeCursors");
     eventStream.close();
+
+    const hiddenRules = await fetch(`${REMOTE_BASE}/api/bots/${remoteBot.id}/approval-rules`, { headers: auth });
+    expect(hiddenRules.status).toBe(403);
+    const revokeFromMobile = await fetch(`${REMOTE_BASE}/api/bots/${remoteBot.id}/approval-rules/approval-forged`, {
+      method: "DELETE",
+      headers: auth,
+    });
+    expect(revokeFromMobile.status).toBe(403);
+    const resolveEffectFromMobile = await fetch(`${REMOTE_BASE}/api/effects/effect-forged/resolve`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ resolution: "applied", note: "forged" }),
+    });
+    expect(resolveEffectFromMobile.status).toBe(403);
 
     const forbiddenCreate = await fetch(`${REMOTE_BASE}/api/bots`, {
       method: "POST",
@@ -291,6 +460,55 @@ describe("harness HTTP API", () => {
       bot: { id: remoteBot.id, lifecycle: null },
     });
     conversionStream.close();
+
+    const localRoutine = await api("POST", "/api/routines", {
+      botId: remoteBot.id,
+      name: "Mobile-editable routine",
+      prompt: "private routine task",
+      schedule: { kind: "daily", time: "09:00", timezone: "Europe/Rome" },
+    });
+    expect(localRoutine.status).toBe(201);
+    const remoteRoutineId = localRoutine.body.routine.id;
+    const remoteWork = await fetch(`${REMOTE_BASE}/api/work`, { headers: auth });
+    const remoteWorkspace = ((await remoteWork.json()) as any).workspace;
+    expect(remoteWorkspace.routines).toContainEqual(expect.objectContaining({ id: remoteRoutineId, name: "Mobile-editable routine" }));
+    expect(JSON.stringify(remoteWorkspace)).not.toContain("private routine task");
+
+    const allowedRoutinePatch = await fetch(`${REMOTE_BASE}/api/routines/${remoteRoutineId}`, {
+      method: "PATCH",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Updated from mobile", prompt: "new private task", enabled: false }),
+    });
+    expect(allowedRoutinePatch.status).toBe(200);
+    const safeRoutine = ((await allowedRoutinePatch.json()) as any).routine;
+    expect(safeRoutine).toMatchObject({ id: remoteRoutineId, name: "Updated from mobile", enabled: false });
+    expect(JSON.stringify(safeRoutine)).not.toContain("new private task");
+
+    const forbiddenRoutinePatch = await fetch(`${REMOTE_BASE}/api/routines/${remoteRoutineId}`, {
+      method: "PATCH",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ botId: "another-bot", provider: "ghost", computer: "local" }),
+    });
+    expect(forbiddenRoutinePatch.status).toBe(400);
+
+    const lossyRoutinePatch = await fetch(`${REMOTE_BASE}/api/routines/${remoteRoutineId}`, {
+      method: "PATCH",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ enabled: "false" }),
+    });
+    expect(lossyRoutinePatch.status).toBe(400);
+    const oversizedRoutinePatch = await fetch(`${REMOTE_BASE}/api/routines/${remoteRoutineId}`, {
+      method: "PATCH",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "p".repeat(20_001) }),
+    });
+    expect(oversizedRoutinePatch.status).toBe(400);
+
+    const remoteRunNow = await fetch(`${REMOTE_BASE}/api/routines/${remoteRoutineId}/run`, {
+      method: "POST",
+      headers: auth,
+    });
+    expect(remoteRunNow.status).toBe(409);
 
     const uploaded = await fetch(`${REMOTE_BASE}/api/bots/${remoteBot.id}/attachments`, {
       method: "POST",
@@ -422,6 +640,28 @@ describe("harness HTTP API", () => {
     expect(status).toBe(200);
     expect(body.bots.length).toBeGreaterThanOrEqual(1);
     expect(body.bots[0].messages.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("starts an explicit clean context without cloning the agent", async () => {
+    const created = await api("POST", "/api/bots", { name: "Context tester", title: "Research" });
+    expect(created.status).toBe(201);
+    const botId = created.body.bot.id as string;
+
+    const started = await api("POST", `/api/bots/${botId}/contexts`, { label: "Sensitive market scan" });
+    expect(started.status).toBe(201);
+    expect(started.body.context).toMatchObject({ label: "Sensitive market scan", startedAt: expect.any(Number) });
+    expect(started.body.message).toMatchObject({ role: "bot", kind: "context" });
+
+    const refreshed = await api("GET", "/api/bots");
+    const bot = refreshed.body.bots.find((candidate: { id: string }) => candidate.id === botId);
+    expect(bot).toMatchObject({
+      id: botId,
+      context: { id: started.body.context.id, label: "Sensitive market scan" },
+      resumeCursors: {},
+    });
+    expect(bot.messages.at(-1)).toMatchObject({ id: started.body.message.id, kind: "context" });
+
+    expect((await api("DELETE", `/api/bots/${botId}`)).status).toBe(200);
   });
 
   it("describes the configured fleet, shadows included", async () => {
@@ -686,13 +926,11 @@ describe("harness HTTP API", () => {
       sectionId: created.body.section.id,
       appsEnabled: false,
       collaborationEnabled: false,
-      approvalPolicy: "deny",
     });
     expect(patched.body.bot).toMatchObject({
       sectionId: created.body.section.id,
       appsEnabled: false,
       collaborationEnabled: false,
-      approvalPolicy: "deny",
     });
 
     const renamed = await api("PATCH", `/api/sections/${created.body.section.id}`, { name: "Back office" });
@@ -700,7 +938,15 @@ describe("harness HTTP API", () => {
     const work = await api("GET", "/api/work");
     expect(work.body.workspace.sections).toContainEqual(renamed.body.section);
 
-    expect((await api("PATCH", `/api/bots/${bot.id}`, { approvalPolicy: "everything" })).status).toBe(400);
+    expect(await api("PATCH", `/api/bots/${bot.id}`, { approvalPolicy: "allow" })).toMatchObject({
+      status: 400,
+      body: { error: "global approval policies are no longer supported" },
+    });
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { coordinator: "yes" })).status).toBe(400);
+    expect(await api("PATCH", `/api/bots/${bot.id}`, { coordinator: true })).toMatchObject({
+      status: 400,
+      body: { error: "the selected provider does not support Coordinator peer tools" },
+    });
 
     const forgedRemember = await api("POST", `/api/bots/${bot.id}/respond`, {
       requestId: "not-a-pending-request",
@@ -711,11 +957,85 @@ describe("harness HTTP API", () => {
     const afterForgedRemember = (await api("GET", "/api/bots")).body.bots.find(
       (candidate: any) => candidate.id === bot.id,
     );
-    expect(afterForgedRemember.approvalPolicy).toBe("deny");
+    expect(afterForgedRemember).not.toHaveProperty("approvalPolicy");
+    expect(await api("GET", `/api/bots/${bot.id}/approval-rules`)).toMatchObject({
+      status: 200,
+      body: { rules: [] },
+    });
+    expect((await api("DELETE", `/api/bots/${bot.id}/approval-rules/approval-missing`)).status).toBe(404);
 
     expect((await api("DELETE", `/api/sections/${created.body.section.id}`)).status).toBe(200);
     const after = (await api("GET", "/api/bots")).body.bots.find((candidate: any) => candidate.id === bot.id);
     expect(after.sectionId).toBeNull();
+  });
+
+  it("manages local MCP servers with write-only secrets and explicit per-agent assignment", async () => {
+    const secret = "mcp-secret-must-never-be-projected";
+    const created = await api("POST", "/api/mcp-servers", {
+      name: "Private research tools",
+      command: "/usr/local/bin/private-mcp",
+      args: ["--stdio"],
+      environment: { PRIVATE_TOKEN: secret },
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.server).toMatchObject({
+      name: "Private research tools",
+      command: "/usr/local/bin/private-mcp",
+      args: ["--stdio"],
+      environmentKeys: ["PRIVATE_TOKEN"],
+      enabled: true,
+    });
+    expect(JSON.stringify(created.body)).not.toContain(secret);
+
+    const listed = await api("GET", "/api/mcp-servers");
+    expect(listed.status).toBe(200);
+    expect(JSON.stringify(listed.body)).not.toContain(secret);
+    expect(listed.body.servers).toContainEqual(expect.objectContaining({ id: created.body.server.id }));
+
+    const bot = (await api("GET", "/api/bots")).body.bots[0];
+    const assigned = await api("PATCH", `/api/bots/${bot.id}`, { mcpServerIds: [created.body.server.id] });
+    expect(assigned.status).toBe(200);
+    expect(assigned.body.bot.mcpServerIds).toEqual([created.body.server.id]);
+    expect((await api("DELETE", `/api/mcp-servers/${created.body.server.id}`))).toMatchObject({
+      status: 409,
+      body: { error: "Unassign this MCP server from every agent before deleting it." },
+    });
+
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { mcpServerIds: [] })).status).toBe(200);
+    expect((await api("DELETE", `/api/mcp-servers/${created.body.server.id}`)).status).toBe(200);
+  });
+
+  it("keeps revisioned agent memory local, concurrency-safe, and deleted with its owner", async () => {
+    const bot = (await api("POST", "/api/bots", { name: "Memory tester" })).body.bot;
+    const created = await api("POST", `/api/bots/${bot.id}/memories`, {
+      path: "preferences",
+      content: "Prefer concise Italian with source-backed claims.",
+      pinned: true,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.document).toMatchObject({ path: "preferences.md", revision: 1, pinned: true });
+
+    const updated = await api("PUT", `/api/bots/${bot.id}/memories/${created.body.document.id}`, {
+      expectedRevision: 1,
+      content: "Prefer concise Italian with exact verification evidence.",
+    });
+    expect(updated.body.document).toMatchObject({ revision: 2, provenance: { source: "user", threadId: bot.threadId } });
+    expect((await api("PUT", `/api/bots/${bot.id}/memories/${created.body.document.id}`, {
+      expectedRevision: 1,
+      content: "stale overwrite",
+    })).status).toBe(409);
+
+    const revisions = await api("GET", `/api/bots/${bot.id}/memories/${created.body.document.id}/revisions`);
+    expect(revisions.body.revisions.map((revision: any) => revision.revision)).toEqual([2, 1]);
+    expect((await api("POST", `/api/bots/${bot.id}/memories`, {
+      path: "credentials",
+      content: `sk-${"a".repeat(24)}`,
+    })).status).toBe(400);
+
+    const file = join(home, ".cumea", `memory-${bot.id}.json`);
+    expect(existsSync(file)).toBe(true);
+    expect((await api("DELETE", `/api/bots/${bot.id}`)).status).toBe(200);
+    expect(existsSync(file)).toBe(false);
   });
 
   it("uploads, downloads, and removes bot attachments without exposing their disk path", async () => {
@@ -757,6 +1077,37 @@ describe("harness HTTP API", () => {
     expect(preview.headers.get("cache-control")).toBe("no-store");
     expect(await preview.json()).toEqual({ preview: { kind: "markdown", text: "# Private brief\n\nSafe text" } });
 
+    const hostileHtml = [
+      "<!doctype html><html><head>",
+      '</head><body><form action="https://attacker.invalid/form"><button>Send</button></form>',
+      '<script>fetch("https://attacker.invalid/script")</script>',
+      '<img src="https://attacker.invalid/pixel">',
+      '<a href="https://attacker.invalid/nav">Leave</a>',
+      "</body></html>",
+    ].join("");
+    writeFileSync(join(botWorkspace, "artifact.html"), hostileHtml);
+    const htmlResolved = await api("POST", `/api/bots/${bot.id}/files/resolve`, { path: "artifact.html" });
+    expect(htmlResolved.status).toBe(201);
+    expect(htmlResolved.body.file).toMatchObject({ kind: "html", mime: "text/html; charset=utf-8" });
+    const htmlPreview = await fetch(`${BASE}${htmlResolved.body.file.previewUrl}`);
+    expect(htmlPreview.status).toBe(200);
+    expect(htmlPreview.headers.get("cache-control")).toBe("no-store");
+    expect(htmlPreview.headers.get("content-type")).toContain("text/html");
+    expect(htmlPreview.headers.get("content-disposition")).toContain("inline;");
+    expect(htmlPreview.headers.get("x-frame-options")).toBe("SAMEORIGIN");
+    expect(htmlPreview.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(htmlPreview.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(htmlPreview.headers.get("permissions-policy")).toContain("camera=()");
+    const htmlCsp = htmlPreview.headers.get("content-security-policy") ?? "";
+    for (const directive of ["default-src 'none'", "script-src 'none'", "connect-src 'none'", "form-action 'none'", "navigate-to 'none'", "sandbox", "frame-ancestors 'self'"]) {
+      expect(htmlCsp).toContain(directive);
+    }
+    expect(await htmlPreview.text()).toBe(hostileHtml);
+    const htmlDownload = await fetch(`${BASE}${htmlResolved.body.file.downloadUrl}`);
+    expect(htmlDownload.headers.get("content-type")).toContain("application/octet-stream");
+    expect(htmlDownload.headers.get("content-disposition")).toContain("attachment;");
+    expect(await htmlDownload.text()).toBe(hostileHtml);
+
     const download = await fetch(`${BASE}${resolved.body.file.downloadUrl}`);
     expect(download.status).toBe(200);
     expect(download.headers.get("content-disposition")).toContain("attachment;");
@@ -791,6 +1142,23 @@ describe("harness HTTP API", () => {
     const attachmentPreview = await fetch(`${BASE}${attachmentResolved.body.file.previewUrl}`);
     expect(await attachmentPreview.json()).toEqual({ preview: { kind: "markdown", text: "## Uploaded" } });
     await api("DELETE", `/api/attachments/${attachment.id}`);
+
+    const htmlUpload = await fetch(`${BASE}/api/bots/${bot.id}/attachments`, {
+      method: "POST",
+      headers: { "content-type": "text/html", "x-file-name": encodeURIComponent("untrusted-upload.html") },
+      body: "<!doctype html><html><body>Uploaded</body></html>",
+    });
+    expect(htmlUpload.status).toBe(201);
+    const htmlAttachment = ((await htmlUpload.json()) as any).attachment;
+    const htmlAttachmentPreview = await api("POST", `/api/attachments/${htmlAttachment.id}/files/resolve`);
+    expect(htmlAttachmentPreview).toEqual({
+      status: 415,
+      body: { error: "HTML preview is limited to generated workspace artifacts" },
+    });
+    const htmlAttachmentDownload = await fetch(`${BASE}/api/attachments/${htmlAttachment.id}`);
+    expect(htmlAttachmentDownload.headers.get("content-disposition")).toContain("attachment;");
+    expect(await htmlAttachmentDownload.text()).toContain("Uploaded");
+    await api("DELETE", `/api/attachments/${htmlAttachment.id}`);
   });
 
   it("creates, pauses, runs, and deletes a persistent routine", async () => {
@@ -817,6 +1185,104 @@ describe("harness HTTP API", () => {
     });
 
     expect((await api("DELETE", `/api/routines/${created.body.routine.id}`)).status).toBe(200);
+  });
+
+  it("administers acceptance evidence locally without treating completion as verification", async () => {
+    const bot = (await api("GET", "/api/bots")).body.bots[0];
+    const routine = await api("POST", "/api/routines", {
+      botId: bot.id,
+      name: "Evidence fixture",
+      prompt: "Create an auditable failed run",
+      schedule: { kind: "interval", everyMinutes: 30 },
+    });
+    expect((await api("POST", `/api/routines/${routine.body.routine.id}/run`)).status).toBe(409);
+    const initial = await api("GET", "/api/work");
+    const task = initial.body.workspace.tasks.find((candidate: any) => candidate.routineId === routine.body.routine.id);
+    expect(task.verificationStatus).toBe("not_required");
+
+    const created = await api("POST", `/api/tasks/${task.id}/evidence-requirements`, { label: "A canonical result exists" });
+    expect(created).toMatchObject({ status: 201, body: { verificationStatus: "pending" } });
+    expect((await api("POST", `/api/tasks/${task.id}/evidence-requirements`, { label: "x".repeat(501) })).status).toBe(400);
+    expect((await api("POST", `/api/tasks/${task.id}/evidence`, {
+      requirementId: created.body.requirement.id,
+      runId: task.latestRunId,
+      reference: { kind: "step", id: "not-owned" },
+    })).status).toBe(404);
+
+    const after = await api("GET", "/api/work");
+    expect(after.body.workspace.tasks.find((candidate: any) => candidate.id === task.id)).toMatchObject({
+      status: "failed",
+      verificationStatus: "pending",
+      evidenceRequirements: [{ id: created.body.requirement.id, label: "A canonical result exists" }],
+    });
+    expect((await api("DELETE", `/api/tasks/${task.id}/evidence-requirements/${created.body.requirement.id}`)).status).toBe(200);
+    await api("DELETE", `/api/routines/${routine.body.routine.id}`);
+  });
+
+  it("validates and persists provider-neutral task budgets without coercion", async () => {
+    const bot = (await api("GET", "/api/bots")).body.bots[0];
+    for (const budget of [{ toolCalls: "2" }, { durationMs: true }, { tokens: 1.5 }, { unknown: 1 }, {}]) {
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "Invalid budget", budget })).status).toBe(400);
+    }
+    const result = await api("POST", `/api/bots/${bot.id}/messages`, {
+      text: "Bound this task",
+      budget: { durationMs: 60_000, toolCalls: 4, computerActions: 2, delegations: 1, tokens: 10_000 },
+    });
+    expect(result.status).toBe(409);
+    const work = await api("GET", "/api/work");
+    expect(work.body.workspace.tasks.find((task: any) => task.prompt === "Bound this task")).toMatchObject({
+      budget: { durationMs: 60_000, toolCalls: 4, computerActions: 2, delegations: 1, tokens: 10_000 },
+      status: "failed",
+    });
+  });
+
+  it("rejects lossy routine coercions, oversized text, and invalid occurrence queries", async () => {
+    const bot = (await api("GET", "/api/bots")).body.bots[0];
+    expect((await api("POST", "/api/routines", {
+      botId: bot.id,
+      name: "String boolean",
+      prompt: "Must stay disabled",
+      schedule: { kind: "interval", everyMinutes: 30 },
+      enabled: "false",
+    })).status).toBe(400);
+    expect((await api("POST", "/api/routines", {
+      botId: bot.id,
+      name: "String interval",
+      prompt: "Do not coerce this",
+      schedule: { kind: "interval", everyMinutes: "30" },
+    })).status).toBe(400);
+
+    const created = await api("POST", "/api/routines", {
+      botId: bot.id,
+      name: "Strict patch fixture",
+      prompt: "Keep the original task",
+      schedule: { kind: "daily", time: "09:00", timezone: "Europe/Rome" },
+      enabled: false,
+    });
+    expect(created.status).toBe(201);
+    const routineId = created.body.routine.id;
+    expect((await api("PATCH", `/api/routines/${routineId}`, { enabled: "false" })).status).toBe(400);
+    expect((await api("PATCH", `/api/routines/${routineId}`, { name: 123 })).status).toBe(400);
+    expect((await api("PATCH", `/api/routines/${routineId}`, { prompt: "p".repeat(20_001) })).status).toBe(400);
+    expect((await api("PATCH", `/api/routines/${routineId}`, {})).status).toBe(400);
+    expect((await api("GET", "/api/work")).body.workspace.routines.find((routine: any) => routine.id === routineId)).toMatchObject({
+      name: "Strict patch fixture",
+      enabled: false,
+    });
+
+    const invalidQueries = [
+      "from=NaN",
+      "from=8640000000000001&to=8640000000000001",
+      "limit=0",
+      "limit=513",
+      "limit=1.5",
+      "from=100&to=99",
+      `from=0&to=${31 * 24 * 60 * 60_000 + 1}`,
+    ];
+    for (const query of invalidQueries) {
+      expect((await api("GET", `/api/routines/occurrences?${query}`)).status, query).toBe(400);
+    }
+    expect((await api("DELETE", `/api/routines/${routineId}`)).status).toBe(200);
   });
 
   it("persists an answered onboarding card", async () => {
@@ -875,6 +1341,49 @@ describe("harness HTTP API", () => {
     expect(after.body.box).toEqual({ configured: true });
     expect(JSON.stringify(after.body)).not.toContain("tok_secret_value");
 
+    const rejected = await api("PUT", "/api/config", { box: { token: "box_rejected_secret" } });
+    expect(rejected.status).toBe(401);
+    expect(rejected.body).toMatchObject({ code: "invalid-credential" });
+    expect(JSON.stringify(rejected.body)).not.toContain("box_rejected_secret");
+    expect(JSON.stringify(rejected.body)).not.toContain("fixture body must stay private");
+
+    const preserved = await api("GET", "/api/config");
+    expect(preserved.body.box).toEqual({ configured: true });
+    expect(JSON.parse(readFileSync(join(home, ".cumea", "config.json"), "utf8")).box.token).toBe("tok_secret_value");
+
+    const disabled = await api("PATCH", "/api/config", { box: { autoSleepMinutes: false } });
+    expect(disabled.status).toBe(200);
+    expect(disabled.body.box).toEqual({ configured: true });
+    expect(JSON.parse(readFileSync(join(home, ".cumea", "config.json"), "utf8")).box).toEqual({
+      token: "tok_secret_value",
+      autoSleepMinutes: false,
+    });
+    const configured = await api("PATCH", "/api/config", { box: { autoSleepMinutes: 30 } });
+    expect(configured.status).toBe(200);
+    for (const invalid of [0, 1441, "10"]) {
+      expect((await api("PATCH", "/api/config", { box: { autoSleepMinutes: invalid } })).status).toBe(400);
+    }
+    const diskBox = JSON.parse(readFileSync(join(home, ".cumea", "config.json"), "utf8")).box;
+    expect(diskBox).toEqual({ token: "tok_secret_value", autoSleepMinutes: 30 });
+
+    const bot = (await api("GET", "/api/bots")).body.bots[0];
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "cloud" })).status).toBe(200);
+    const localComputer = await api("GET", `/api/bots/${bot.id}/computer`);
+    expect(localComputer.status).toBe(200);
+    expect(localComputer.body.autoSleep).toMatchObject({ enabled: true, idleMs: 30 * 60_000 });
+
+    const session = await api("POST", "/api/pairing/sessions", { ttlMs: 60_000 });
+    const claimed = await (await fetch(`${REMOTE_BASE}/api/pairing/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: session.body.session.id, secret: session.body.session.secret, deviceName: "Idle policy test" }),
+    })).json() as any;
+    const remoteComputer = await fetch(`${REMOTE_BASE}/api/bots/${bot.id}/computer`, {
+      headers: { authorization: `Bearer ${claimed.token}` },
+    });
+    expect(remoteComputer.status).toBe(403);
+    expect(await remoteComputer.text()).not.toContain("autoSleep");
+
     const nothing = await api("PUT", "/api/config", {});
     expect(nothing.status).toBe(400);
   });
@@ -888,9 +1397,82 @@ describe("harness HTTP API", () => {
     expect(after.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com" });
   });
 
+  it("manages local ACP subscription profiles and protects profiles selected by a bot", async () => {
+    const created = await api("POST", "/api/acp-profiles", {
+      label: "Test subscription",
+      executable: "definitely-not-installed-acp-agent",
+      arguments: ["agent", "stdio", "--model", "{model}"],
+      versionArguments: ["--version"],
+      models: [
+        { id: "fast", label: "Fast" },
+        { id: "deep", label: "Deep" },
+      ],
+      defaultModel: "fast",
+      requireAuthentication: false,
+      fullAuto: false,
+      enabled: true,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.profile).toMatchObject({ label: "Test subscription", defaultModel: "fast" });
+    const profileId = created.body.profile.id;
+
+    const listed = await api("GET", "/api/acp-profiles");
+    expect(listed.body.profiles).toContainEqual(expect.objectContaining({ id: profileId, models: expect.any(Array) }));
+    const instances = await api("GET", "/api/instances");
+    expect(instances.body.instances).toContainEqual(expect.objectContaining({
+      instanceId: profileId,
+      driverKind: "customAcp",
+      models: expect.objectContaining({ default: "fast" }),
+    }));
+    expect((await api("GET", "/api/config")).body.acpProfiles).toEqual({ count: 1 });
+
+    const bot = (await api("GET", "/api/bots")).body.bots[0];
+    expect((await api("PATCH", `/api/bots/${bot.id}`, {
+      modelSelection: { instanceId: profileId, model: "fast" },
+    })).status).toBe(200);
+    const inUse = await api("DELETE", `/api/acp-profiles/${profileId}`);
+    expect(inUse.status).toBe(409);
+
+    expect((await api("PATCH", `/api/bots/${bot.id}`, {
+      modelSelection: { instanceId: "ghost", model: "ghost-model" },
+    })).status).toBe(200);
+    expect((await api("DELETE", `/api/acp-profiles/${profileId}`)).status).toBe(200);
+    expect((await api("GET", "/api/acp-profiles")).body.profiles).toEqual([]);
+  });
+
   it("404s unknown routes with the route in the error", async () => {
     const res = await api("GET", "/api/definitely-not-a-route");
     expect(res.status).toBe(404);
     expect(res.body.error).toContain("/api/definitely-not-a-route");
+  });
+
+  it("keeps local skill administration desktop-only with strict bodies and explicit rollback", async () => {
+    const id = `http-skill-${Date.now()}`;
+    const bot = (await api("POST", "/api/bots", { name: "Skill owner" })).body.bot;
+    const version = (value: string) => ({ id, displayName: "HTTP skill", description: "Test workflow", version: value, instructions: `Instructions ${value}`, label: "HTTP test", enabled: true });
+    expect((await api("POST", "/api/skills", version("1.0.0"))).status).toBe(201);
+    expect((await api("POST", `/api/skills/${id}/versions`, version("2.0.0"))).status).toBe(201);
+
+    const malformed = await fetch(`${BASE}/api/skills/${id}/versions`, { method: "POST", headers: { "content-type": "application/json" }, body: "null" });
+    expect(malformed.status).toBe(400);
+    expect((await api("PATCH", `/api/skills/${id}/2.0.0`, [])).status).toBe(400);
+    expect((await api("PUT", `/api/bots/${bot.id}/skills/${id}`, [])).status).toBe(400);
+    expect((await fetch(`${REMOTE_BASE}/api/skills`)).status).toBe(401);
+    const session = await api("POST", "/api/pairing/sessions", { ttlMs: 60_000 });
+    const claimed = await (await fetch(`${REMOTE_BASE}/api/pairing/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: session.body.session.id, secret: session.body.session.secret, deviceName: "Skill privacy test" }),
+    })).json() as any;
+    const remoteAuth = { authorization: `Bearer ${claimed.token}`, "content-type": "application/json" };
+    expect((await fetch(`${REMOTE_BASE}/api/skills`, { headers: remoteAuth })).status).toBe(403);
+    expect((await fetch(`${REMOTE_BASE}/api/bots/${bot.id}/skills/${id}`, { method: "PUT", headers: remoteAuth, body: JSON.stringify({ version: "2.0.0" }) })).status).toBe(403);
+
+    expect((await api("PUT", `/api/bots/${bot.id}/skills/${id}`, { version: "2.0.0" })).status).toBe(200);
+    expect((await api("POST", `/api/bots/${bot.id}/skills/${id}/rollback`, { version: "1.0.0" })).status).toBe(200);
+    expect((await api("POST", `/api/bots/${bot.id}/skills/${id}/rollback`, { version: "2.0.0" })).status).toBe(409);
+    expect((await api("DELETE", `/api/skills/${id}/1.0.0`)).status).toBe(409);
+    expect((await api("DELETE", `/api/bots/${bot.id}/skills/${id}`)).status).toBe(200);
+    expect((await api("DELETE", `/api/skills/${id}/1.0.0`)).status).toBe(200);
   });
 });

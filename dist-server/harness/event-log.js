@@ -22,7 +22,7 @@ export class EventLogWriter {
         this.flushDelayMs = options.flushDelayMs ?? 40;
         this.maxBufferedBytes = options.maxBufferedBytes ?? 64 * 1024;
         this.isThreadActive = options.isThreadActive ?? (() => true);
-        this.onError = options.onError ?? ((error) => console.error("event log flush failed", error));
+        this.onError = options.onError ?? (() => console.error("event log flush failed"));
     }
     append(threadId, event) {
         // Deletion is serialized by the server. Drop diagnostics emitted by a

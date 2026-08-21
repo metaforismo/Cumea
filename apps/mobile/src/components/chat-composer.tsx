@@ -6,18 +6,20 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { PendingAttachment } from "@/host/types";
 import { useNativeDictation } from "@/speech/use-native-dictation";
 import { PressableScale } from "./pressable-scale";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
 
 interface ChatComposerProps {
   agentName: string;
   working: boolean;
   screenFocused?: boolean;
   attachmentsEnabled?: boolean;
+  editing?: { id: string; text: string } | null;
   onSend(text: string, attachments: PendingAttachment[]): Promise<void>;
-  onStop(): Promise<void>;
+  onEdit?(text: string): Promise<void>;
+  onCancelEdit?(): void;
 }
 
-function MicrophoneGlyph({ color = theme.background }: { color?: string }) {
+function MicrophoneGlyph({ color }: { color: string }) {
   return (
     <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ width: 17, height: 21, alignItems: "center" }}>
       <View style={{ width: 8, height: 13, borderRadius: 5, borderWidth: 2, borderColor: color }} />
@@ -27,7 +29,17 @@ function MicrophoneGlyph({ color = theme.background }: { color?: string }) {
   );
 }
 
-export function ChatComposer({ agentName, working, screenFocused = true, attachmentsEnabled = true, onSend, onStop }: ChatComposerProps) {
+export function ChatComposer({
+  agentName,
+  working,
+  screenFocused = true,
+  attachmentsEnabled = true,
+  editing = null,
+  onSend,
+  onEdit,
+  onCancelEdit,
+}: ChatComposerProps) {
+  const { theme } = useCumeaTheme();
   const insets = useSafeAreaInsets();
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -40,13 +52,21 @@ export function ChatComposer({ agentName, working, screenFocused = true, attachm
     screenFocused,
   });
   const canSend = Boolean(text.trim() || attachments.length);
-  const showMicrophone = dictation.active || (!working && !sending && !text.trim() && attachments.length === 0);
+  const showMicrophone = dictation.active || (!sending && !text.trim() && attachments.length === 0);
 
   useEffect(() => {
-    if ((working || sending) && dictation.active) dictation.abort();
-  }, [dictation.active, dictation.abort, sending, working]);
+    if (!editing) return;
+    dictation.abort();
+    setText(editing.text);
+    setAttachments([]);
+  }, [dictation.abort, editing?.id, editing?.text]);
+
+  useEffect(() => {
+    if (sending && dictation.active) dictation.abort();
+  }, [dictation.active, dictation.abort, sending]);
 
   const pick = async () => {
+    if (editing) return;
     if (dictation.active) dictation.abort();
     try {
       const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
@@ -81,7 +101,13 @@ export function ChatComposer({ agentName, working, screenFocused = true, attachm
     setSending(true);
     if (process.env.EXPO_OS === "ios") void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
-      await onSend(outgoingText, outgoingAttachments);
+      if (editing) {
+        if (!onEdit) throw new Error("Editing is not available in this chat.");
+        await onEdit(outgoingText);
+        onCancelEdit?.();
+      } else {
+        await onSend(outgoingText, outgoingAttachments);
+      }
     } catch (error) {
       Alert.alert("Could not send", error instanceof Error ? error.message : String(error));
       setText(outgoingText);
@@ -91,16 +117,29 @@ export function ChatComposer({ agentName, working, screenFocused = true, attachm
     }
   };
 
-  const stop = async () => {
-    try {
-      await onStop();
-    } catch (error) {
-      Alert.alert("Could not stop", error instanceof Error ? error.message : String(error));
-    }
-  };
-
   return (
     <View style={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: Math.max(insets.bottom, 8), backgroundColor: theme.background }}>
+      {editing ? (
+        <View
+          accessibilityLiveRegion="polite"
+          style={{ marginHorizontal: 6, marginBottom: 8, minHeight: 42, flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 12, borderCurve: "continuous", backgroundColor: theme.cardRaised, paddingHorizontal: 12 }}
+        >
+          <Text numberOfLines={1} style={{ flex: 1, color: theme.text, fontSize: 12, fontWeight: "700" }}>Editing this message · a new version will run</Text>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Cancel editing"
+            onPress={() => {
+              dictation.abort();
+              setText("");
+              setAttachments([]);
+              onCancelEdit?.();
+            }}
+            style={{ minWidth: 44, minHeight: 42, alignItems: "center", justifyContent: "center" }}
+          >
+            <Text style={{ color: theme.accent, fontSize: 12, fontWeight: "700" }}>Cancel</Text>
+          </PressableScale>
+        </View>
+      ) : null}
       {dictation.failure ? (
         <View
           accessibilityLiveRegion="assertive"
@@ -148,19 +187,19 @@ export function ChatComposer({ agentName, working, screenFocused = true, attachm
       <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8 }}>
         <PressableScale
           accessibilityRole="button"
-          accessibilityLabel={attachmentsEnabled ? "Add attachment" : "Attachments are available from desktop"}
-          disabled={!attachmentsEnabled}
+          accessibilityLabel={editing ? "Attachments stay on the original message while editing" : attachmentsEnabled ? "Add attachment" : "Attachments are available from desktop"}
+          disabled={!attachmentsEnabled || Boolean(editing)}
           onPress={() => void pick()}
-          style={{ width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: theme.hairline, opacity: attachmentsEnabled ? 1 : 0.38, alignItems: "center", justifyContent: "center" }}
+          style={{ width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: theme.hairline, opacity: attachmentsEnabled && !editing ? 1 : 0.38, alignItems: "center", justifyContent: "center" }}
         >
           <Text style={{ color: theme.text, fontSize: 27, lineHeight: 29 }}>＋</Text>
         </PressableScale>
         <View style={{ flex: 1, minHeight: 46, maxHeight: 140, flexDirection: "row", alignItems: "flex-end", gap: 8, borderRadius: 24, borderCurve: "continuous", borderWidth: 1, borderColor: theme.hairline, backgroundColor: theme.input, paddingLeft: 15, paddingRight: 6, paddingVertical: 5 }}>
           <TextInput
-            accessibilityLabel={`Message ${agentName}`}
+            accessibilityLabel={editing ? `Edit message to ${agentName}` : `Message ${agentName}`}
             value={text}
             onChangeText={dictation.handleTextChange}
-            placeholder={dictation.statusLabel ?? `Ask ${agentName}`}
+            placeholder={dictation.statusLabel ?? (editing ? "Edit and rerun" : working ? `Queue another task for ${agentName}` : `Ask ${agentName}`)}
             placeholderTextColor={theme.textSecondary}
             multiline
             maxLength={20_000}
@@ -169,22 +208,19 @@ export function ChatComposer({ agentName, working, screenFocused = true, attachm
           />
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel={working ? "Stop agent" : dictation.active ? "Stop dictation" : showMicrophone ? "Start dictation" : canSend ? "Send message" : "Add a message before sending attachments"}
+            accessibilityLabel={dictation.active ? "Stop dictation" : showMicrophone ? "Start dictation" : canSend ? editing ? "Save edit and rerun" : working ? "Queue message" : "Send message" : "Add a message before sending attachments"}
             accessibilityHint={showMicrophone && !dictation.active ? "Transcribes speech into this message using the device speech service" : undefined}
             accessibilityState={{ busy: dictation.phase === "requesting" || dictation.phase === "stopping", selected: dictation.active }}
             hitSlop={6}
             disabled={sending || dictation.phase === "stopping"}
             onPress={() => {
-              if (working) void stop();
-              else if (dictation.active) dictation.stop();
+              if (dictation.active) dictation.stop();
               else if (showMicrophone) void dictation.start();
               else void send();
             }}
-            style={{ width: 36, height: 36, borderRadius: 18, opacity: working || canSend || showMicrophone ? 1 : 0.4, alignItems: "center", justifyContent: "center", backgroundColor: dictation.active ? theme.danger : theme.text }}
+            style={{ width: 36, height: 36, borderRadius: 18, opacity: canSend || showMicrophone ? 1 : 0.4, alignItems: "center", justifyContent: "center", backgroundColor: dictation.active ? theme.danger : theme.text }}
           >
-            {working ? (
-              <Text style={{ color: theme.background, fontSize: 16, fontWeight: "800" }}>■</Text>
-            ) : showMicrophone ? (
+            {showMicrophone ? (
               <MicrophoneGlyph color={dictation.active ? theme.text : theme.background} />
             ) : (
               <Text style={{ color: theme.background, fontSize: 20, fontWeight: "800" }}>↑</Text>

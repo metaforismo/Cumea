@@ -4,6 +4,7 @@ import type { RuntimeEvent } from "./contracts.ts";
 import {
   decodeMobileComputerPreview,
   publicMobileBot,
+  publicMobileMessage,
   publicMobileWorkspace,
   sanitizeRemoteSsePayload,
 } from "./mobile.ts";
@@ -35,6 +36,24 @@ function textMessage(index: number): Message {
 }
 
 describe("mobile public projections", () => {
+  it("projects permission decisions as one-shot choices only", () => {
+    const message: Message = {
+      id: "approval-1",
+      role: "bot",
+      kind: "options",
+      at: 1,
+      card: {
+        title: "Approval needed",
+        subtitle: "Run an action",
+        options: ["Always allow", "Allow once", "Never"],
+        requestId: "request-1",
+        requestType: "permission",
+        tool: "shell",
+      },
+    };
+    expect(publicMobileMessage(message)).toMatchObject({ card: { options: ["Allow once", "Deny once"] } });
+  });
+
   it("accepts only bounded PNG/JPEG preview bytes with matching magic", () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
     expect(decodeMobileComputerPreview(png.toString("base64"), "image/png")?.bytes).toEqual(png);
@@ -55,6 +74,88 @@ describe("mobile public projections", () => {
     for (const forbidden of ["modelSelection", "secret-model", "resumeCursors", "secret-session-cursor", "computer", "approvalPolicy"]) {
       expect(encoded).not.toContain(forbidden);
     }
+  });
+
+  it("projects parent links, active leaves, and thread changes without provider state", () => {
+    const root: Message = { id: "root", parentId: null, role: "user", kind: "text", text: "first", at: 1 };
+    const branch: Message = { id: "branch", parentId: "root", role: "user", kind: "text", text: "edited", at: 2 };
+    const projected = publicMobileBot(botFixture(), [root, branch], 50, new Set(["bot-1"]), "branch");
+    expect(projected).toMatchObject({
+      activeLeafId: "branch",
+      messages: [
+        { id: "root", parentId: null },
+        { id: "branch", parentId: "root" },
+      ],
+    });
+    expect(sanitizeRemoteSsePayload({ kind: "thread", threadId: "thread-1", activeLeafId: "branch" })).toEqual({
+      kind: "thread",
+      threadId: "thread-1",
+      activeLeafId: "branch",
+    });
+    expect(sanitizeRemoteSsePayload({ kind: "thread", threadId: "thread-1", activeLeafId: { secret: true } })).toBeNull();
+  });
+
+  it("projects fresh task contexts and queued delivery state without provider routing", () => {
+    const fixture = botFixture();
+    fixture.context = { id: "context-2", label: "Private research", startedAt: 50 };
+    const queued: Message = {
+      id: "queued-message",
+      parentId: "root",
+      role: "user",
+      kind: "text",
+      text: "Run after the current task",
+      delivery: "queued",
+      at: 60,
+    };
+    const projected = publicMobileBot(fixture, [queued], 50, new Set([fixture.id]), "root");
+    expect(projected).toMatchObject({
+      context: { id: "context-2", label: "Private research", startedAt: 50 },
+      messages: [{ id: "queued-message", delivery: "queued" }],
+    });
+  });
+
+  it("keeps only the message correlation id for queued task projections", () => {
+    const projected = publicMobileWorkspace({
+      sections: [],
+      attachments: [],
+      tasks: [{
+        id: "task-queue",
+        botId: "bot-1",
+        title: "secret title",
+        prompt: "secret prompt",
+        source: "message",
+        status: "queued",
+        attachmentIds: [],
+        messageId: "queued-message",
+        createdAt: 10,
+        updatedAt: 10,
+      }],
+      runs: [],
+      routines: [],
+    }, new Set(["bot-1"]));
+    expect(projected.tasks).toEqual([expect.objectContaining({ id: "task-queue", messageId: "queued-message", status: "queued" })]);
+    expect(JSON.stringify(projected)).not.toContain("secret title");
+    expect(JSON.stringify(projected)).not.toContain("secret prompt");
+  });
+
+  it("keeps an older selected branch inside a bounded bootstrap projection", () => {
+    const messages: Message[] = [
+      { id: "root", parentId: null, role: "bot", kind: "text", text: "root", at: 1 },
+      { id: "old-user", parentId: "root", role: "user", kind: "text", text: "old", at: 2 },
+      { id: "old-reply", parentId: "old-user", role: "bot", kind: "text", text: "selected", at: 3 },
+      ...Array.from({ length: 8 }, (_, index): Message => ({
+        id: `new-${index}`,
+        parentId: index === 0 ? "root" : `new-${index - 1}`,
+        role: index % 2 ? "bot" : "user",
+        kind: "text",
+        text: `new ${index}`,
+        at: 10 + index,
+      })),
+    ];
+    const projected = publicMobileBot(botFixture(), messages, 5, new Set(["bot-1"]), "old-reply");
+    const ids = (projected.messages as Array<{ id: string }>).map((message) => message.id);
+    expect(ids).toHaveLength(5);
+    expect(ids).toEqual(expect.arrayContaining(["root", "old-user", "old-reply"]));
   });
 
   it("preserves an explicit lifecycle tombstone so companion clients clear their quick badge", () => {
@@ -160,7 +261,7 @@ describe("mobile public projections", () => {
     expect(safeMessage).toEqual({
       kind: "message",
       threadId: "thread-1",
-      message: { id: "screen-message", role: "bot", kind: "screen", mime: "image/png", at: 1 },
+      message: { id: "screen-message", parentId: null, role: "bot", kind: "screen", mime: "image/png", at: 1 },
     });
     expect(sanitizeRemoteSsePayload({ kind: "screen", png: "secret" })).toBeNull();
     expect(sanitizeRemoteSsePayload({ kind: "config", xai: { key: "secret" } })).toBeNull();
@@ -209,6 +310,9 @@ describe("mobile public projections", () => {
           status: "needs_attention",
           attachmentIds: ["attachment-1"],
           latestRunId: "run-1",
+          verificationStatus: "verified",
+          evidenceRequirements: [{ id: "requirement-1", label: sentinel, createdAt: 4 }],
+          budget: { durationMs: 60_000, toolCalls: 3, tokens: 100 },
           createdAt: 3,
           updatedAt: 4,
         }],
@@ -220,6 +324,8 @@ describe("mobile public projections", () => {
           error: sentinel,
           steps: [{ id: "step-1", kind: "approval", title: sentinel, status: "needs_attention", startedAt: 5 }],
           artifacts: [{ id: "artifact-1", kind: "attachment", label: sentinel, attachmentId: "attachment-1", createdAt: 6 }],
+          evidence: [{ id: "evidence-1", requirementId: "requirement-1", level: "verified", source: "verifier", label: sentinel, digest: "sha256:secret-policy-digest", verifier: { id: sentinel, version: sentinel }, recordedAt: 6 }],
+          budgetUsage: { startedAt: 5, toolCalls: 1, computerActions: 0, delegations: 0, tokens: 50, tokenBaseline: { input: 1000, output: 100 }, exhaustionReason: "tokens", exhaustedAt: 6 },
           startedAt: 5,
         }],
         routines: [{
@@ -252,7 +358,7 @@ describe("mobile public projections", () => {
       },
     });
     const encoded = JSON.stringify(workspace);
-    for (const forbidden of [sentinel, "storedPath", "secret-token", "prompt", "lastError", "error", "title", "label"]) {
+    for (const forbidden of [sentinel, "storedPath", "secret-token", "prompt", "lastError", "error", "title", "label", "evidenceRequirements", "verificationStatus", "digest", "verifier", "budget", "tokenBaseline"]) {
       expect(encoded).not.toContain(forbidden);
     }
   });
@@ -272,5 +378,28 @@ describe("mobile public projections", () => {
       expect.objectContaining({ id: "visible-task", botId: "bot-1", status: "running" }),
     ]);
     expect(JSON.stringify(projected)).not.toContain("hidden-task");
+  });
+
+  it("shows only safe checkpoint availability and never mobile resume administration", () => {
+    const projected = publicMobileWorkspace({
+      tasks: [{ id: "task-interrupted", botId: "bot-1", status: "interrupted", attachmentIds: [], latestRunId: "run-interrupted" }],
+      runs: [{
+        id: "run-interrupted", taskId: "task-interrupted", botId: "bot-1", status: "interrupted",
+        steps: [], artifacts: [], resumeStatus: "available",
+        checkpoint: {
+          id: "checkpoint-secret-id", provider: { instanceId: "provider-secret", model: "model-secret" },
+          cursor: { instanceId: "provider-secret", digest: "sha256:secret-digest" }, activeLeafId: "private-leaf",
+        },
+      }],
+      routines: [], attachments: [], sections: [],
+    }, new Set(["bot-1"]));
+    expect(projected).toMatchObject({
+      tasks: [{ status: "interrupted" }],
+      runs: [{ status: "interrupted", resumeAvailable: true }],
+    });
+    const encoded = JSON.stringify(projected);
+    for (const forbidden of ["checkpoint", "provider-secret", "model-secret", "secret-digest", "private-leaf", "resumeUnsafeReason"]) {
+      expect(encoded).not.toContain(forbidden);
+    }
   });
 });

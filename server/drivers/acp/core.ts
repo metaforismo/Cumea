@@ -13,11 +13,12 @@
 // is never a security contract). session/load REPLAYS history as ordinary
 // session/update notifications, so updates are double-gated: nothing emits
 // before the prompt is sent, and `_meta.isReplay` updates are dropped.
-import { spawn, execFile } from "node:child_process";
 import { homedir } from "node:os";
 
 import type {
   DriverCreateInput,
+  EngineInstall,
+  ModelCatalog,
   ProviderDriver,
   ProviderInstance,
   ProviderSnapshot,
@@ -27,6 +28,8 @@ import type {
 } from "../../contracts.ts";
 import { newEventId, newId } from "../../contracts.ts";
 import { augmentedPath } from "../../env-path.ts";
+import { minimalProviderEnvironment, stripManagedCredentials } from "../../provider-environment.ts";
+import { execCli, killCliTree, spawnCli } from "../../procs.ts";
 import { appendNative } from "../native.ts";
 
 export interface AcpConfig {
@@ -37,28 +40,43 @@ export interface AcpConfig {
 }
 
 /** Per-harness specifics — everything that differs between Grok, Gemini, … */
-export interface AcpSupport {
+export interface AcpSupport<Config extends AcpConfig = AcpConfig> {
   driverKind: string;
   displayName: string;
-  models: { default: string; options: Array<{ id: string; label: string }> };
+  /** Static for built-ins; configurable profiles derive their catalog from
+   * the validated instance config. fallbackModels is the driver-level value
+   * used only when the registry asks for a default before decoding. */
+  models: ModelCatalog | ((config: Config) => ModelCatalog);
+  fallbackModels?: ModelCatalog;
   /** Default CLI binary name if the instance config doesn't override it. */
   defaultCli: string;
   /** Native-protocol log label, e.g. "grok.acp". */
   nativeSource: string;
   /** Message shown when the CLI is present but not signed in. */
   loginNote: string;
+  /** Optional setup path for built-in local CLIs. */
+  install?: EngineInstall;
   /** CLI argv AFTER the binary name to enter ACP stdio mode. */
-  spawnArgs(config: AcpConfig, turn: SendTurnInput): string[];
+  spawnArgs(config: Config, turn: SendTurnInput): string[];
+  /** Override the narrow built-in decoder for a configurable ACP harness. */
+  decodeConfig?(raw: unknown): Config;
+  defaultConfig?(): Config;
+  /** argv used only for the safe availability/version probe. */
+  versionArgs?(config: Config): string[];
   /** Mutate the child env in place (e.g. strip a key). Optional. */
-  transformEnv?(env: Record<string, string | undefined>): void;
+  transformEnv?(env: Record<string, string | undefined>, config: Config): void;
+  /** Custom subscription CLIs get only host discovery variables and never
+   * inherit a legacy per-instance environment. Built-ins retain their
+   * established environment, minus unrelated Cumea-managed credentials. */
+  environmentPolicy?: "inherit" | "minimal";
   /** Pick the ACP authenticate methodId from initialize's advertised
    * authMethods; return null to skip the authenticate step. */
-  pickAuthMethod(authMethods: Array<{ id?: string }>): string | null;
+  pickAuthMethod(authMethods: Array<{ id?: string }>, config: Config): string | null;
   /** "fail": abort the turn if auth is missing/errors (subscription CLIs).
    *  "continue": proceed anyway (CLIs that work off an ambient login). */
-  authFailure: "fail" | "continue";
+  authFailure: "fail" | "continue" | ((config: Config) => "fail" | "continue");
   /** snapshot(): is the CLI signed in? (env already carries the merged config) */
-  isAuthenticated(env: Record<string, string | undefined>): boolean;
+  isAuthenticated(env: Record<string, string | undefined>, config: Config): boolean | undefined;
   /** Compose the session/prompt text. Default prepends the persona. */
   buildPromptText?(turn: SendTurnInput): string;
 }
@@ -78,22 +96,27 @@ function decodeAcpConfig(defaultCli: string) {
   };
 }
 
-export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> {
+export function createAcpDriver<Config extends AcpConfig = AcpConfig>(support: AcpSupport<Config>): ProviderDriver<Config> {
   const DRIVER_KIND = support.driverKind;
   const SOURCE = support.nativeSource;
-  const decodeConfig = decodeAcpConfig(support.defaultCli);
+  const decodeConfig = support.decodeConfig ?? (decodeAcpConfig(support.defaultCli) as (raw: unknown) => Config);
+  const driverModels = typeof support.models === "function"
+    ? (support.fallbackModels ?? { default: "default", options: [{ id: "default", label: "Default" }] })
+    : support.models;
   const DENY_TIMEOUT_NOTE =
     "Cumea: nobody answered this permission request in time. Skip this action and finish what you can without it.";
 
   return {
     driverKind: DRIVER_KIND,
     metadata: { displayName: support.displayName, supportsMultipleInstances: true },
-    models: support.models,
+    install: support.install,
+    models: driverModels,
     decodeConfig,
-    defaultConfig: () => decodeConfig({}),
+    defaultConfig: () => support.defaultConfig?.() ?? decodeConfig({}),
 
-    async create(input: DriverCreateInput<AcpConfig>): Promise<ProviderInstance> {
+    async create(input: DriverCreateInput<Config>): Promise<ProviderInstance> {
       const { instanceId, config } = input;
+      const models = typeof support.models === "function" ? support.models(config) : support.models;
       const listeners = new Set<RuntimeEventListener>();
       interface Turn {
         stop: () => void;
@@ -115,12 +138,14 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       });
 
       const childEnv = () => {
+        const minimal = support.environmentPolicy === "minimal";
         const env: Record<string, string | undefined> = {
-          ...process.env,
-          ...input.environment,
+          ...(minimal ? minimalProviderEnvironment(process.env) : process.env),
+          ...(minimal ? {} : input.environment),
           PATH: augmentedPath(),
         };
-        support.transformEnv?.(env);
+        stripManagedCredentials(env);
+        support.transformEnv?.(env, config);
         return env;
       };
 
@@ -148,6 +173,23 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             env: Object.entries(agents.env).map(([name, value]) => ({ name, value: String(value) })),
           });
         }
+        const memory = turn.integrations?.memory;
+        if (memory) {
+          servers.push({
+            name: "memory",
+            command: memory.command,
+            args: memory.args,
+            env: Object.entries(memory.env).map(([name, value]) => ({ name, value: String(value) })),
+          });
+        }
+        for (const server of turn.integrations?.mcpServers ?? []) {
+          servers.push({
+            name: server.name,
+            command: server.command,
+            args: server.args,
+            env: Object.entries(server.env).map(([name, value]) => ({ name, value: String(value) })),
+          });
+        }
         return servers;
       };
 
@@ -159,11 +201,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const env = childEnv();
         const mcpServers = acpMcpServers(turn);
 
-        const child = spawn(config.cli, support.spawnArgs(config, turn), {
+        const child = spawnCli(config.cli, support.spawnArgs(config, turn), {
           cwd,
           env,
           stdio: ["pipe", "pipe", "pipe"],
-          detached: true,
         });
 
         const state = { settled: false, promptSent: false, text: "" };
@@ -198,13 +239,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           });
 
         const stop = () => {
-          try {
-            process.kill(-child.pid!, "SIGTERM");
-          } catch {
-            try {
-              child.kill("SIGTERM");
-            } catch {}
-          }
+          killCliTree(child);
         };
 
         const settle = (ok: boolean, stopReason: string | null) => {
@@ -409,15 +444,18 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               INIT_TIMEOUT,
             );
             const methods: Array<{ id?: string }> = Array.isArray(init?.authMethods) ? init.authMethods : [];
-            const methodId = support.pickAuthMethod(methods);
+            const methodId = support.pickAuthMethod(methods, config);
+            const authFailure = typeof support.authFailure === "function"
+              ? support.authFailure(config)
+              : support.authFailure;
             if (methodId) {
               try {
                 await request("authenticate", { methodId }, INIT_TIMEOUT);
               } catch {
-                if (support.authFailure === "fail") throw new Error(support.loginNote);
+                if (authFailure === "fail") throw new Error(support.loginNote);
                 // else: proceed on an ambient login
               }
-            } else if (support.authFailure === "fail") {
+            } else if (authFailure === "fail") {
               throw new Error(support.loginNote);
             }
 
@@ -479,12 +517,17 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const snapshot = async (): Promise<ProviderSnapshot> => {
         const env = childEnv();
         const version = await new Promise<string | null>((resolve) => {
-          execFile(config.cli, ["--version"], { timeout: 8000, env }, (err, stdout) =>
+          execCli(config.cli, support.versionArgs?.(config) ?? ["--version"], { timeout: 8000, env }, (err, stdout) =>
             resolve(err ? null : stdout.trim()),
           );
         });
         if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-        return { state: "available", version, authenticated: support.isAuthenticated(env) };
+        const authenticated = support.isAuthenticated(env, config);
+        return {
+          state: "available",
+          version,
+          ...(typeof authenticated === "boolean" ? { authenticated } : {}),
+        };
       };
 
       return {
@@ -492,11 +535,18 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         driverKind: DRIVER_KIND,
         displayName: input.displayName,
         enabled: input.enabled,
-        models: support.models,
+        models,
         snapshot,
         adapter: {
           provider: DRIVER_KIND,
-          capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true, localComputerMcp: true },
+          capabilities: {
+            sessionModelSwitch: "unsupported",
+            sessionResume: true,
+            agentsMcp: true,
+            localComputerMcp: true,
+            customMcp: true,
+            memoryMcp: true,
+          },
           sendTurn,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
           respondToRequest: async (threadId, requestId, decision) => {

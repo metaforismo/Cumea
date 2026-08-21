@@ -74,6 +74,20 @@ describe("EventBus", () => {
     expect(logged[0].type).toBe("turn.started");
   });
 
+  it("sanitizes once before both durable logging and listener fanout", () => {
+    const secret = "unique-provider-secret-123";
+    const bus = new EventBus(
+      new EventLogWriter({ flushDelayMs: 0 }),
+      () => true,
+      (event) => ({ ...event, ...(event.type === "runtime.error" ? { message: event.message.replace(secret, "[REDACTED]") } : {}) }),
+    );
+    const seen: RuntimeEvent[] = [];
+    bus.subscribe((event) => seen.push(event));
+    bus.publish(testEvent({ threadId: "sanitized", type: "runtime.error", message: `HTTP 500 ${secret}` }));
+    expect(JSON.stringify(seen)).not.toContain(secret);
+    expect(readFileSync(join(EVENTS_DIR, "sanitized.ndjson"), "utf8")).not.toContain(secret);
+  });
+
   it("drops rejected stale events before both persistence and listener fanout", () => {
     const bus = new EventBus(new EventLogWriter({ flushDelayMs: 0 }), (event) => event.turnId === "current-turn");
     const seen: RuntimeEvent[] = [];

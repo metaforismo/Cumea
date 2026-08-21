@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeChronological, pagingAfterPage, StreamDeltaBatcher } from "./chat-state.ts";
+import { branchVersions, mergeChronological, newestBranchLeaf, pagingAfterPage, StreamDeltaBatcher, visibleBranch } from "./chat-state.ts";
 import { responseDecision } from "../host/response-decision.ts";
 
 test("mergeChronological keeps live items, deduplicates pages, and sorts oldest first", () => {
@@ -33,6 +33,31 @@ test("pagingAfterPage exposes the opaque cursor and closes pagination at null", 
     hasMore: false,
     loading: false,
   });
+});
+
+test("visibleBranch follows only the selected root-to-leaf conversation", () => {
+  const root = { id: "root", parentId: null, role: "agent", kind: "text", createdAt: 1 };
+  const original = { id: "original", parentId: "root", role: "user", kind: "text", createdAt: 2 };
+  const reply = { id: "reply", parentId: "original", role: "agent", kind: "text", createdAt: 3 };
+  const edit = { id: "edit", parentId: "root", role: "user", kind: "text", createdAt: 4 };
+  const editedReply = { id: "edited-reply", parentId: "edit", role: "agent", kind: "text", createdAt: 5 };
+  const siblingActivity = { id: "activity", parentId: "root", role: "agent", kind: "activity", createdAt: 6 };
+  const all = [root, original, reply, edit, editedReply, siblingActivity];
+
+  assert.deepEqual(visibleBranch(all, "edited-reply").map((item) => item.id), ["root", "edit", "edited-reply"]);
+  assert.deepEqual(visibleBranch(all, "reply").map((item) => item.id), ["root", "original", "reply"]);
+  assert.deepEqual(branchVersions(all, edit).map((item) => item.id), ["original", "edit"]);
+  const queued = { id: "queued", parentId: "root", role: "user", kind: "text", createdAt: 7, delivery: "queued" };
+  const cancelled = { id: "cancelled", parentId: "root", role: "user", kind: "text", createdAt: 8, delivery: "cancelled" };
+  assert.deepEqual(branchVersions([...all, queued, cancelled], edit).map((item) => item.id), ["original", "edit"]);
+  assert.equal(newestBranchLeaf(all, "original"), "reply");
+  assert.equal(newestBranchLeaf(all, "edit"), "edited-reply");
+});
+
+test("visibleBranch stops safely on malformed parent cycles", () => {
+  const first = { id: "a", parentId: "b", createdAt: 1 };
+  const second = { id: "b", parentId: "a", createdAt: 2 };
+  assert.deepEqual(visibleBranch([first, second], "a").map((item) => item.id), ["b", "a"]);
 });
 
 test("StreamDeltaBatcher uses one timer and preserves per-agent token order", () => {
@@ -95,13 +120,11 @@ test("question choices never become permission decisions", () => {
   });
 });
 
-test("only permission choices can remember approval policy", () => {
+test("paired mobile permission choices are always one-shot", () => {
   assert.deepEqual(responseDecision("permission", "Always allow"), {
     behavior: "allow",
-    rememberPolicy: "allow",
   });
   assert.deepEqual(responseDecision("permission", "Never"), {
     behavior: "deny",
-    rememberPolicy: "deny",
   });
 });

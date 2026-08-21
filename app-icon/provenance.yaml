@@ -1,0 +1,9 @@
+name: cumea-a3r1-corrected-safe-area
+generated_at: 2026-08-13
+tool_mode: built-in-imagegen
+approved_concept: concepts/cumea-a3r1-corrected-safe-area.png
+input_roles:
+  - Existing Cumea artwork used as user-owned identity anchor.
+  - Third-party icons were competitive references for broad qualities only and were not reproduced.
+rights_note: Original Cumea direction, imported from the approved PNG into Apple Icon Composer without vector reconstruction.
+status: approved for production

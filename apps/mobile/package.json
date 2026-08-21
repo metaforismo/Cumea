@@ -6,13 +6,13 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "run:android": "expo run:android",
     "run:ios": "expo run:ios",
     "web": "expo start --web",
     "export": "expo export --platform all",
-    "test": "node --experimental-strip-types --test src/state/chat-state.test.mjs src/speech/dictation.test.mjs",
+    "test": "node --experimental-strip-types --test src/state/chat-state.test.mjs src/speech/dictation.test.mjs src/lib/markdown-policy.test.mjs src/host/handoff.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -25,6 +25,7 @@
     "expo-document-picker": "~57.0.1",
     "expo-haptics": "~57.0.1",
     "expo-linking": "~57.0.5",
+    "expo-notifications": "~57.0.10",
     "expo-router": "~57.0.12",
     "expo-secure-store": "~57.0.1",
     "expo-speech-recognition": "56.0.1",

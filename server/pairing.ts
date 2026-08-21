@@ -1,9 +1,10 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
+import { assertPersistenceWritable, loadPersistentJson } from "./persistence-health.ts";
 
 export const MOBILE_DEVICES_FILE = join(DATA_DIR, "mobile-devices.json");
 export const DEFAULT_PAIRING_TTL_MS = 5 * 60_000;
@@ -23,6 +24,11 @@ interface StoredDeviceRecord {
   createdAt: number;
   lastSeenAt: number;
   revokedAt?: number;
+  push?: {
+    token: string;
+    platform: "ios" | "android";
+    updatedAt: number;
+  };
 }
 
 export interface PublicDeviceRecord {
@@ -31,7 +37,17 @@ export interface PublicDeviceRecord {
   createdAt: number;
   lastSeenAt: number;
   revokedAt?: number;
+  pushEnabled: boolean;
+  pushPlatform?: "ios" | "android";
 }
+
+export interface DevicePushTarget {
+  deviceId: string;
+  token: string;
+  platform: "ios" | "android";
+}
+
+const EXPO_PUSH_TOKEN = /^(?:ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]{10,200}\]$/;
 
 export interface PairingSession {
   id: string;
@@ -70,6 +86,8 @@ function publicDevice(device: StoredDeviceRecord): PublicDeviceRecord {
     createdAt: device.createdAt,
     lastSeenAt: device.lastSeenAt,
     ...(device.revokedAt ? { revokedAt: device.revokedAt } : {}),
+    pushEnabled: Boolean(device.push && !device.revokedAt),
+    ...(device.push ? { pushPlatform: device.push.platform } : {}),
   };
 }
 
@@ -94,27 +112,25 @@ export class PairingStore {
   constructor(file = MOBILE_DEVICES_FILE, now: () => number = Date.now) {
     this.file = file;
     this.now = now;
-    try {
-      const parsed = JSON.parse(readFileSync(file, "utf8"));
-      const rows = Array.isArray(parsed) ? parsed : parsed?.devices;
-      if (Array.isArray(rows)) {
-        this.devices = rows.filter(
-          (row): row is StoredDeviceRecord =>
-            row &&
-            typeof row.id === "string" &&
-            typeof row.name === "string" &&
-            typeof row.tokenHash === "string" &&
-            /^[a-f0-9]{64}$/i.test(row.tokenHash) &&
-            Number.isFinite(row.createdAt) &&
-            Number.isFinite(row.lastSeenAt),
-        );
-      }
-    } catch {
-      this.devices = [];
-    }
+    this.devices = loadPersistentJson<StoredDeviceRecord[]>(file, {
+      label: "Paired mobile device credentials", missing: () => [], resetValue: { version: 1, devices: [] }, maxBytes: 4 * 1024 * 1024,
+      validate: (value) => {
+        const document = value && typeof value === "object" && !Array.isArray(value) ? value as { version?: unknown; devices?: unknown } : null;
+        if (document?.version !== undefined && document.version !== 1) throw new Error("unsupported pairing store version");
+        const rows = Array.isArray(value) ? value : document?.devices;
+        if (!Array.isArray(rows) || rows.length > 1_000) throw new Error("invalid pairing store schema");
+        for (const raw of rows) {
+          const row = raw as Partial<StoredDeviceRecord>;
+          if (!row || typeof row !== "object" || typeof row.id !== "string" || typeof row.name !== "string" || typeof row.tokenHash !== "string" || !/^[a-f0-9]{64}$/i.test(row.tokenHash) || !Number.isFinite(row.createdAt) || !Number.isFinite(row.lastSeenAt)) throw new Error("invalid pairing device schema");
+          if (row.push !== undefined && (!row.push || !EXPO_PUSH_TOKEN.test(String(row.push.token ?? "")) || (row.push.platform !== "ios" && row.push.platform !== "android") || !Number.isFinite(row.push.updatedAt))) throw new Error("invalid pairing push schema");
+        }
+        return rows as StoredDeviceRecord[];
+      },
+    });
   }
 
   createSession(hostUrl: string, ttlMs = DEFAULT_PAIRING_TTL_MS): PairingSession {
+    assertPersistenceWritable(this.file);
     if (!Number.isFinite(ttlMs) || ttlMs < 1_000 || ttlMs > 15 * 60_000) {
       throw Object.assign(new Error("pairing TTL must be between 1 second and 15 minutes"), { status: 400 });
     }
@@ -144,6 +160,7 @@ export class PairingStore {
   }
 
   claim(sessionId: string, secret: string, deviceName: unknown): ClaimedDevice {
+    assertPersistenceWritable(this.file);
     const session = this.sessions.get(sessionId);
     if (!session) throw Object.assign(new Error("no such pairing session"), { status: 404 });
     if (session.claimedAt !== undefined) {
@@ -196,7 +213,49 @@ export class PairingStore {
     return this.devices.some((device) => device.id === deviceId && !device.revokedAt);
   }
 
+  setPushRegistration(
+    deviceId: string,
+    registration: { token: string; platform: "ios" | "android" } | null,
+  ): PublicDeviceRecord | null {
+    const device = this.devices.find((candidate) => candidate.id === deviceId && !candidate.revokedAt);
+    if (!device) return null;
+    if (registration) {
+      if (!EXPO_PUSH_TOKEN.test(registration.token)) {
+        throw Object.assign(new Error("invalid Expo push token"), { status: 400 });
+      }
+      device.push = { ...registration, updatedAt: this.now() };
+    } else {
+      delete device.push;
+    }
+    this.save();
+    return publicDevice(device);
+  }
+
+  pushTargets(): DevicePushTarget[] {
+    return this.devices.flatMap((device) =>
+      !device.revokedAt && device.push
+        ? [{ deviceId: device.id, token: device.push.token, platform: device.push.platform }]
+        : [],
+    );
+  }
+
+  /** Active push capabilities are write-only outside the push adapter. */
+  secretValues(): string[] {
+    return this.pushTargets().map((target) => target.token);
+  }
+
+  clearPushToken(token: string): void {
+    let changed = false;
+    for (const device of this.devices) {
+      if (device.push?.token !== token) continue;
+      delete device.push;
+      changed = true;
+    }
+    if (changed) this.save();
+  }
+
   revoke(deviceId: string): PublicDeviceRecord | null {
+    assertPersistenceWritable(this.file);
     const device = this.devices.find((candidate) => candidate.id === deviceId);
     if (!device) return null;
     if (!device.revokedAt) {
@@ -208,6 +267,7 @@ export class PairingStore {
 
   private save() {
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
+    assertPersistenceWritable(this.file);
     writeFileAtomic(this.file, JSON.stringify({ version: 1, devices: this.devices }, null, 2), { mode: 0o600 });
   }
 

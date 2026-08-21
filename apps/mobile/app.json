@@ -6,7 +6,7 @@
     "icon": "./assets/icon.png",
     "platforms": ["ios", "android"],
     "orientation": "default",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
@@ -40,6 +40,7 @@
           "faceIDPermission": "Allow Cumea to protect your host credentials."
         }
       ],
+      "expo-notifications",
       [
         "expo-speech-recognition",
         {

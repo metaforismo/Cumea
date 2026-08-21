@@ -1,7 +1,6 @@
 export interface HostResponseDecision {
   behavior: "allow" | "deny" | "answer";
   message?: string;
-  rememberPolicy?: "allow" | "deny";
 }
 
 /** Provider questions are always answers, even when a provider happens to use
@@ -13,9 +12,7 @@ export function responseDecision(
   if (requestType === "question") return { behavior: "answer", message: choice };
 
   const allow = ["Allow", "Always allow", "Allow once"].includes(choice);
-  return {
-    behavior: allow ? "allow" : "deny",
-    ...(choice === "Always allow" ? { rememberPolicy: "allow" as const } : {}),
-    ...(choice === "Never" ? { rememberPolicy: "deny" as const } : {}),
-  };
+  // A paired device can settle this pending request, but durable authority is
+  // administered only from the desktop host.
+  return { behavior: allow ? "allow" : "deny" };
 }

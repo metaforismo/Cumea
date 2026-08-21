@@ -7,9 +7,13 @@ import { StatusBar } from "expo-status-bar";
 import * as SystemUI from "expo-system-ui";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { CumeaProvider, useCumea } from "@/state/cumea-store";
-import { theme } from "@/theme";
+import { CumeaThemeProvider, useCumeaTheme } from "@/theme";
+import { configurePushPresentation, notificationBotId, Notifications } from "@/notifications/push";
+
+configurePushPresentation();
 
 function NavigationGate() {
+  const { theme, colorScheme } = useCumeaTheme();
   const { state } = useCumea();
   const router = useRouter();
   const segments = useSegments();
@@ -24,9 +28,25 @@ function NavigationGate() {
     if (state.phase === "ready" && group !== "(app)") router.replace("/");
   }, [router, segments, state.phase]);
 
+  useEffect(() => {
+    if (state.phase !== "ready" || state.enrollment?.mode !== "host") return undefined;
+    const open = (response: Notifications.NotificationResponse | null) => {
+      const agentId = notificationBotId(response);
+      if (agentId) router.push({ pathname: "/agents/[agentId]", params: { agentId } });
+    };
+    const subscription = Notifications.addNotificationResponseReceivedListener(open);
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (!response) return;
+      open(response);
+      return Notifications.clearLastNotificationResponseAsync();
+    }).catch(() => {});
+    return () => subscription.remove();
+  }, [router, state.enrollment, state.phase]);
+
   return (
     <View style={{ flex: 1, backgroundColor: theme.background }}>
-      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: theme.background }, animation: "fade" }} />
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: theme.background } }} />
+      <StatusBar style={colorScheme === "light" ? "dark" : "light"} />
       {transitioning ? (
         <View
           accessibilityLabel="Loading Cumea"
@@ -40,16 +60,24 @@ function NavigationGate() {
   );
 }
 
-export default function RootLayout() {
+function ThemedApp() {
+  const { theme } = useCumeaTheme();
   useEffect(() => {
     void SystemUI.setBackgroundColorAsync(theme.background);
-  }, []);
+  }, [theme.background]);
+  return (
+    <CumeaProvider>
+      <NavigationGate />
+    </CumeaProvider>
+  );
+}
+
+export default function RootLayout() {
   return (
     <SafeAreaProvider>
-      <CumeaProvider>
-        <StatusBar style="light" />
-        <NavigationGate />
-      </CumeaProvider>
+      <CumeaThemeProvider>
+        <ThemedApp />
+      </CumeaThemeProvider>
     </SafeAreaProvider>
   );
 }

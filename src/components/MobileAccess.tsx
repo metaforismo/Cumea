@@ -140,7 +140,7 @@ export function MobileAccess() {
             <Smartphone size={17} aria-hidden="true" /> Mobile &amp; hosts
           </div>
           <div className="mt-1 text-[13px] leading-relaxed text-ink-secondary">
-            Pair Cumea Mobile with this desktop or a VM you control. Agent keys and execution stay on the host.
+            Pair Cumea Mobile with this desktop or a VM you control. The pairing credential and Cumea orchestration stay on that host; configured providers keep their existing local or remote data boundaries.
           </div>
         </div>
         <button

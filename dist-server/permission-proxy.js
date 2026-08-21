@@ -14,8 +14,14 @@
 import { connect } from "node:net";
 import { randomUUID } from "node:crypto";
 const socketPath = process.argv[2] ?? "";
+const brokerSecret = process.env.CUMEA_PERMISSION_BROKER_SECRET ?? "";
 const waiting = new Map();
 const conn = connect(socketPath);
+conn.once("connect", () => {
+    if (!brokerSecret)
+        return conn.destroy();
+    conn.write(JSON.stringify({ t: "auth", secret: brokerSecret }) + "\n");
+});
 const dead = () => {
     for (const resolve of waiting.values()) {
         resolve({ behavior: "deny", message: "Cumea: permission broker unavailable — skip this action" });

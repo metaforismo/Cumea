@@ -14,7 +14,7 @@ import Animated, {
 import Svg, { Path } from "react-native-svg";
 import { eyeColorFor, SHAPE_PATHS } from "@/avatar/shapes";
 import type { AgentPresence, AvatarConfig } from "@/host/types";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
 
 interface MoteAvatarProps {
   config: AvatarConfig;
@@ -31,6 +31,7 @@ export const MoteAvatar = memo(function MoteAvatar({
   presence = "idle",
   unread = false,
 }: MoteAvatarProps) {
+  const { theme } = useCumeaTheme();
   const reduceMotion = useReducedMotion();
   const drift = useSharedValue(0);
   const tilt = useSharedValue(0);

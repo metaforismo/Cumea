@@ -57,6 +57,7 @@ export function publicMobileMessage(
 ): Record<string, unknown> {
   const safe: Record<string, unknown> = {
     id: message.id,
+    parentId: message.parentId ?? null,
     role: message.role,
     kind: message.kind,
     at: message.at,
@@ -67,10 +68,13 @@ export function publicMobileMessage(
     safe.attachments = message.attachments.map(publicAttachment).filter((value) => value !== null);
   }
   if (message.card) {
+    const mobileOptions = message.card.requestType === "permission"
+      ? ["Allow once", "Deny once"]
+      : message.card.options;
     safe.card = {
       title: message.card.title,
       subtitle: message.card.subtitle,
-      options: message.card.options,
+      options: mobileOptions,
       ...(message.card.answered !== undefined ? { answered: message.card.answered } : {}),
       ...(message.card.dismissed !== undefined ? { dismissed: message.card.dismissed } : {}),
       ...(message.card.requestId !== undefined ? { requestId: message.card.requestId } : {}),
@@ -99,6 +103,14 @@ export function publicMobileMessage(
       };
     }
   }
+  if (message.context) {
+    safe.context = {
+      id: message.context.id,
+      label: message.context.label,
+      startedAt: message.context.startedAt,
+    };
+  }
+  if (message.delivery) safe.delivery = message.delivery;
   return safe;
 }
 
@@ -109,6 +121,7 @@ export function publicMobileBot(
   messages?: Message[],
   messageLimit = MOBILE_BOOTSTRAP_MESSAGE_LIMIT,
   visibleBotIds?: ReadonlySet<string>,
+  activeLeafId?: string | null,
 ): Record<string, unknown> {
   const safe: Record<string, unknown> = {
     id: bot.id,
@@ -128,10 +141,43 @@ export function publicMobileBot(
       ? { lifecycle: bot.lifecycle ?? null }
       : {}),
     createdAt: bot.createdAt,
+    ...(activeLeafId !== undefined ? { activeLeafId } : {}),
+    ...(bot.context ? {
+      context: {
+        id: bot.context.id,
+        label: bot.context.label,
+        startedAt: bot.context.startedAt,
+      },
+    } : {}),
   };
-  if (messages) safe.messages = messageLimit > 0
-    ? messages.slice(-messageLimit).map((message) => publicMobileMessage(message, visibleBotIds))
-    : [];
+  if (messages) {
+    if (messageLimit <= 0) safe.messages = [];
+    else {
+      // Keep the selected branch usable even when the user switched to an old
+      // version that no longer falls inside the newest-N creation window.
+      // Remaining slots carry recent sibling revisions for version controls.
+      const byId = new Map(messages.map((message) => [message.id, message]));
+      const activePath: Message[] = [];
+      const visited = new Set<string>();
+      let current = activeLeafId ? byId.get(activeLeafId) : undefined;
+      while (current && !visited.has(current.id)) {
+        activePath.push(current);
+        visited.add(current.id);
+        current = current.parentId ? byId.get(current.parentId) : undefined;
+      }
+      const selected = activePath.reverse().slice(-messageLimit);
+      if (selected.length < messageLimit) {
+        const selectedIds = new Set(selected.map((message) => message.id));
+        const recent = messages
+          .filter((message) => !selectedIds.has(message.id))
+          .slice(-(messageLimit - selected.length));
+        selected.push(...recent);
+      }
+      safe.messages = selected
+        .sort((left, right) => left.at === right.at ? left.id.localeCompare(right.id) : left.at - right.at)
+        .map((message) => publicMobileMessage(message, visibleBotIds));
+    }
+  }
   return safe;
 }
 
@@ -160,11 +206,12 @@ function publicRuntimeEvent(event: RuntimeEvent): Record<string, unknown> | null
   }
 }
 
-const TASK_STATUSES = new Set(["queued", "running", "needs_attention", "completed", "failed", "cancelled"]);
-const RUN_STATUSES = new Set(["running", "needs_attention", "completed", "failed", "cancelled"]);
+const TASK_STATUSES = new Set(["queued", "running", "needs_attention", "interrupted", "completed", "failed", "cancelled"]);
+const RUN_STATUSES = new Set(["running", "needs_attention", "interrupted", "completed", "failed", "cancelled"]);
 const STEP_STATUSES = new Set(["running", "needs_attention", "completed", "failed", "denied"]);
 const STEP_KINDS = new Set(["tool", "approval", "handoff"]);
 const ARTIFACT_KINDS = new Set(["attachment", "response", "screen"]);
+const EFFECT_STATES = new Set(["intended", "applying", "applied", "failed", "unknown"]);
 const TASK_SOURCES = new Set(["message", "routine", "handoff"]);
 const ROUTINE_LAST_STATUSES = new Set(["running", "completed", "failed"]);
 
@@ -258,6 +305,7 @@ export function publicMobileWorkspace(
       attachmentIds: Array.isArray(task.attachmentIds)
         ? task.attachmentIds.flatMap((id) => stringValue(id, 100) ?? []).slice(0, 10)
         : [],
+      ...(stringValue(task.messageId, 100) ? { messageId: stringValue(task.messageId, 100) } : {}),
       ...(numberValue(task.createdAt) !== undefined ? { createdAt: numberValue(task.createdAt) } : {}),
       ...(numberValue(task.updatedAt) !== undefined ? { updatedAt: numberValue(task.updatedAt) } : {}),
     }];
@@ -297,6 +345,11 @@ export function publicMobileWorkspace(
         ...(numberValue(artifact.createdAt) !== undefined ? { createdAt: numberValue(artifact.createdAt) } : {}),
       }];
     });
+    const effectStates = (Array.isArray(run.effects) ? run.effects : []).slice(-500).flatMap((value) => {
+      const effect = recordValue(value);
+      const effectState = effect && stringValue(effect.state, 20);
+      return effectState && EFFECT_STATES.has(effectState) ? [effectState] : [];
+    });
     return [{
       id,
       taskId,
@@ -306,6 +359,17 @@ export function publicMobileWorkspace(
       ...(stringValue(run.routineId, 100) ? { routineId: stringValue(run.routineId, 100) } : {}),
       steps,
       artifacts,
+      effectSummary: {
+        count: effectStates.length,
+        unsafe: effectStates.filter((effectState) => effectState === "applying" || effectState === "unknown").length,
+      },
+      ...(recordValue(run.compaction) && typeof recordValue(run.compaction)!.compacted === "boolean"
+        ? { compactionSummary: {
+            compacted: recordValue(run.compaction)!.compacted,
+            omittedMessages: Math.max(0, numberValue(recordValue(run.compaction)!.omittedMessages) ?? 0),
+          } }
+        : {}),
+      resumeAvailable: stringValue(run.resumeStatus, 20) === "available",
       ...(numberValue(run.startedAt) !== undefined ? { startedAt: numberValue(run.startedAt) } : {}),
       ...(numberValue(run.completedAt) !== undefined ? { completedAt: numberValue(run.completedAt) } : {}),
     }];
@@ -329,6 +393,7 @@ export function publicMobileWorkspace(
       ...(numberValue(routine.createdAt) !== undefined ? { createdAt: numberValue(routine.createdAt) } : {}),
       ...(numberValue(routine.updatedAt) !== undefined ? { updatedAt: numberValue(routine.updatedAt) } : {}),
       ...(numberValue(routine.lastRunAt) !== undefined ? { lastRunAt: numberValue(routine.lastRunAt) } : {}),
+      ...(numberValue(routine.lastScheduledFor) !== undefined ? { lastScheduledFor: numberValue(routine.lastScheduledFor) } : {}),
       ...(lastStatus && ROUTINE_LAST_STATUSES.has(lastStatus) ? { lastStatus } : {}),
     }];
   });
@@ -367,6 +432,12 @@ export function sanitizeRemoteSsePayload(
       const bot = envelope.bot as BotRecord | undefined;
       if (!bot || typeof bot.id !== "string") return null;
       return { kind: "bot", bot: publicMobileBot(bot, undefined, MOBILE_BOOTSTRAP_MESSAGE_LIMIT, options.visibleBotIds) };
+    }
+    case "thread": {
+      const threadId = stringValue(envelope.threadId, 100);
+      const activeLeafId = envelope.activeLeafId === null ? null : stringValue(envelope.activeLeafId, 100);
+      if (!threadId || activeLeafId === undefined) return null;
+      return { kind: "thread", threadId, activeLeafId };
     }
     case "workspace":
       return { kind: "workspace", workspace: publicMobileWorkspace(envelope.workspace, options.visibleBotIds) };

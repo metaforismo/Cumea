@@ -21,11 +21,13 @@ The current source includes:
 - in-app QR scanning, explicit paste, and manual pairing paths;
 - SecureStore persistence for the returned device bearer token;
 - agent-list home, search, pull-to-refresh, and per-agent chat;
-- text/file send, stop, permanent or 24-hour Quick bot creation, mark-read, and
-  approval/question responses;
+- text/file send, durable per-agent queueing while work is active, queue cancellation, fresh task
+  contexts, stop, non-destructive message editing with conversation-version navigation, permanent
+  or 24-hour Quick bot creation, mark-read, and approval/question responses;
 - native iOS and Android dictation with live partial transcripts and editable results;
 - “Needs you” and routine-status screens;
 - native Mote avatars and reduced-motion behavior;
+- system light/dark appearance with an uncluttered agent-list-first home;
 - an explicit local demo mode for interface review.
 
 Demo data never proves that an agent or routine ran on a real host.
@@ -59,6 +61,17 @@ pauses while inactive, and reconnects unexpected closures with bounded
 exponential backoff. The host removes provider reasoning, credentials, raw
 computer frames, and unknown event kinds before they reach the companion.
 There are no push or background notifications yet.
+
+Conversation transcripts can contain multiple durable branches. The host sends an opaque active
+leaf plus parent IDs; mobile renders only that root-to-leaf path while retaining loaded siblings
+for version controls. Editing a user message creates a sibling, preserves its audited attachments,
+invalidates the old provider continuation, and starts a new run from the surviving history.
+
+Sending while an agent is working creates a bounded durable FIFO item instead of interrupting the
+active turn. Queued rows stay outside the active conversation branch until dispatch, are visible in
+the compact “Up next” shelf, and can be cancelled. “New task” keeps the same named agent but starts
+a marked context boundary, clears provider continuation cursors, and excludes earlier messages from
+the next provider transcript; it is available only when the agent and queue are idle.
 
 ## Current limits
 

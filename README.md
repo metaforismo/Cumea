@@ -25,29 +25,55 @@ Most assistants are a single chat attached to a single model. Cumea treats agent
 visible team:
 
 - one thread and persona per agent;
+- editable user messages with non-destructive conversation branches and accessible version
+  switching on desktop and mobile;
+- a durable FIFO queue per agent, so another handoff can be added while a long task is running,
+  plus explicit “Fresh context” boundaries that keep the named agent while starting a clean
+  provider session;
 - Claude Code, Codex, Grok, and Gemini CLI adapters behind one driver contract;
 - agent-to-agent delegation with recursion limits;
-- explicit per-action approval cards, with remembered Ask / Always / Never policies per bot;
+- explicit per-action approval cards, with revocable remembered rules scoped to one tool and,
+  for command tools, one normalized program;
 - optional local or cloud computer use;
 - optional connected-app tools through Composio;
-- sections, real sidebar search, file attachments, clickable agent output paths with safe Markdown,
-  PDF, and DOCX previews, reusable routines, and a “Needs you” inbox;
+- sections, real sidebar search, picker/drop/paste file attachments, clickable agent output paths
+  with safe Markdown, PDF, DOCX, and static isolated HTML previews, reusable routines, and a
+  “Needs you” inbox;
 - permanent agents plus 24-hour Quick bots that expire only after work, routines, and live approval
   requests are safely settled, with an explicit “Keep permanently” action;
 - persistent Mote-based bot avatars with shape, palette, upload, semantic activity states, and
   reduced-motion behavior;
-- an agent-first Expo companion for pairing, search, chat, stop, approvals, and routine status;
-- durable tasks, runs, tool steps, handoffs, artifacts, transcripts, configuration, and event logs.
+- an agent-first Expo companion for pairing, search, queued chat, clean task contexts, stop,
+  approvals, and routine status, with native system light/dark appearance;
+- durable tasks, runs, tool steps, handoffs, artifacts, transcripts, configuration, and event logs;
+- explicit acceptance-evidence requirements whose claimed, observed, and independently verified states
+  remain separate from ordinary task completion;
+- durable fail-safe receipts for controlled external effects, with unknown outcomes blocked from
+  automatic replay and resolved only from the local desktop.
 
 The product name comes from the Sibyl of Cumae: one interface that gives a clear voice to a council
 of agents.
+
+## Product screenshots
+
+Every image below was captured from Cumea itself with synthetic demo data; no Grok Bot, OpenMausBot,
+Rakazo, provider, or customer screenshot is embedded in the repository.
+
+<p align="center">
+  <img src="docs/screenshots/hero.png" width="760" alt="Cumea desktop showing named agents and a conversation" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/mobile-agents.png" width="260" alt="Cumea mobile agent-first home in light mode" />
+  <img src="docs/screenshots/mobile-chat.png" width="260" alt="Cumea mobile conversation with an executive assistant" />
+</p>
 
 ## Desktop host and mobile companion
 
 | Surface | Current responsibility |
 |---|---|
 | Desktop or user-owned VM | Provider authentication, agent configuration, computer/app access, attachments, task/run history, routine creation and scheduling, pairing, and device revocation |
-| Mobile companion | Onboarding and secure pairing, agent-list home, search, per-agent chat, text/file send and stop, permanent/Quick bot creation, “Needs you” responses, routine status, Mote avatar state, and optional read-only computer preview |
+| Mobile companion | Onboarding and secure pairing, agent-list home, search, per-agent queued chat and branch editing, clean task contexts, text/file send and stop, permanent/Quick bot creation, “Needs you” responses, bounded routine editing/status, Mote avatar state, and optional read-only computer preview |
 
 Mobile does not run providers on the phone and Cumea does not supply a managed VM. For work to
 continue after a laptop is closed, the user must keep the same Cumea harness running on an
@@ -55,8 +81,8 @@ authenticated machine they control. The mobile client consumes a narrowed authen
 reconciles a fresh bootstrap snapshot after each connection, pauses in the background, and reconnects
 unexpected closures with bounded backoff.
 
-Push/background notifications, paired-host routine editing, and signed physical-device acceptance
-are not complete. Mobile dictation is implemented through the native iOS/Android speech service,
+Push/background notification acceptance and signed mobile distribution are not complete.
+Mobile dictation is implemented through the native iOS/Android speech service,
 but its microphone and permission flow has not yet been accepted on physical devices. Demo mode is
 explicitly local sample data and is not evidence that a provider task ran.
 
@@ -87,6 +113,9 @@ explicitly local sample data and is not evidence that a provider task ran.
 - The remote transcript, workspace, and SSE surfaces use explicit allowlists: hidden bots, provider
   errors, prompts, reasoning, raw screen frames, configuration, and credential-shaped fields stay
   local.
+- Active runs interrupted by a restart are never silently completed or resumed. Explicit desktop
+  recovery uses bounded provider-neutral checkpoints and blocks while an external effect is unknown.
+  See [resumable run checkpoints](docs/resumable-checkpoints.md).
 - A remotely reachable host requires HTTPS terminated by the user's reverse proxy, secure tunnel,
   or private-network gateway. The raw Node HTTP listener must not be exposed to the public internet.
 - Remote computer preview is off by default. If explicitly enabled, it exposes only the latest
@@ -96,9 +125,20 @@ explicitly local sample data and is not evidence that a provider task ran.
 - External links are limited to HTTPS, with HTTP allowed only for loopback development URLs.
 - Agents do not receive blanket approval by default. Provider modes that bypass consent remain an
   explicit user choice.
+- Questions always wait for a person. Durable allow rules never cover destructive or secret access,
+  privilege escalation, command interpreters, transfer utilities, or unparseable/encoded commands;
+  a paired phone can answer the current request but cannot create or revoke a durable rule.
 
 Third-party services are contacted only when you configure or invoke them. Their own terms, data
 handling, subscriptions, and usage charges still apply.
+
+The desktop **Settings → Privacy & data** view derives a safe, live inventory from the host's
+current provider, connector, MCP, Local VM, push, and pairing state. It shows the categories of data
+that may cross each boundary and the applicable trigger/consent mode without exposing tokens,
+endpoints, paths, prompts, filenames, provider-instance labels, or device identities. “Available”
+means local prerequisites are detected; it does not claim a third-party account or network is
+healthy. Separately installed CLIs and MCP processes may forward or retain data in ways Cumea cannot
+observe, so their own documentation and configuration remain authoritative.
 
 See [SECURITY.md](SECURITY.md) for the reporting policy and threat boundaries.
 
@@ -132,6 +172,14 @@ Desktop local-computer control and desktop dictation remain explicitly macOS-onl
 companion targets native iOS and Android dictation in a development or distribution build; Expo Go
 does not contain the speech module. Cloud computers, chat, tasks, routines, sections, attachments,
 and supported provider CLIs degrade independently.
+
+On Windows, Cumea resolves native CLIs directly and unwraps recognized npm `.cmd` shims to their
+executable or `node` entrypoint without invoking a shell. Ambiguous command scripts and `.bat` files
+are rejected instead of passing provider arguments through `cmd.exe`. It uses `taskkill /T` for
+provider process trees, with a direct-child fallback, and carries permission asks over an
+authenticated named pipe. These paths are covered by simulated contract tests and the
+cross-platform CI matrix, but a real Windows package/install smoke is still required before Windows
+is called supported.
 
 ```sh
 git clone https://github.com/metaforismo/Cumea.git
@@ -185,12 +233,22 @@ the in-app QR scanner, explicit paste, or manual fields—not from operating-sys
 ## Current provider capability matrix
 
 The model picker is multi-provider, but tool mounting follows each CLI's verified protocol instead
-of pretending every provider can do everything. Settings show unsupported switches as unavailable.
+of pretending every provider can do everything. In App Settings, a local **CLI subscriptions &
+ACP** editor can register any ACP-compatible executable, its exact argument vector, and the models
+available to that subscription. The CLI remains responsible for its own sign-in, subscription
+terms, quotas, and billing; Cumea neither receives the credentials nor turns a non-ACP CLI into an
+ACP agent. Each bot may select a different profile/model.
+
+Compatible agents receive Cumea's `list_bots` and `ask_bot` MCP tools automatically. That is the
+common collaboration surface: an agent can discover another visible bot, delegate a bounded ask,
+and receive its reply without Cumea pretending that two unrelated provider-native protocols are
+directly interoperable. See [configurable ACP profiles](docs/acp-profiles.md) for the contract and
+security boundary.
 
 | Runtime | Chat | Bot handoff | Connected apps | Local computer | Cloud computer |
 |---|---:|---:|---:|---:|---:|
 | Claude Agent | yes | yes | yes | macOS | yes |
-| Grok / Gemini ACP | yes | yes | not yet | macOS | not yet |
+| Grok / Gemini / custom ACP | yes | yes | not yet | macOS | not yet |
 | Codex app-server | yes | not yet | not yet | not yet | not yet |
 | Box cloud agent | yes | not yet | not yet | no | yes |
 
@@ -231,7 +289,8 @@ Preview.
 | `server/document-preview.ts` | fail-closed Markdown/PDF identification and semantic DOCX parsing |
 | `server/temporary-bots.ts` | bounded Quick-bot lifecycle and safe expiry eligibility |
 | `server/contracts.ts` | provider driver and canonical event contracts |
-| `server/drivers/` | Claude, Codex, Grok, Gemini, computer, and peer-agent adapters |
+| `server/procs.ts` | cross-platform CLI resolution, spawning, process-tree cleanup, and broker paths |
+| `server/drivers/` | Claude, Codex, built-in/configurable ACP, computer, and peer-agent adapters |
 | `server/harness/` | provider registry, event bus, and bounded batched event-log persistence |
 | `electron/` | desktop shell, native permissions, dictation, and local computer use |
 | `apps/mobile/` | Expo Router companion, agent-list home, pairing, chat, approvals, and routines |

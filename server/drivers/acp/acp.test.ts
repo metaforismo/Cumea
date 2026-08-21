@@ -15,11 +15,28 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDirs } from "../../config.ts";
 import type { ProviderInstance } from "../../contracts.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
+import { SecretCatalog } from "../../secret-egress.ts";
+import { EventBus } from "../../harness/bus.ts";
 import { GrokAgentDriver } from "./grok.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
+import {
+  CustomAcpDriver,
+  customAcpInstance,
+  decodeCustomAcpConfig,
+  decodeCustomAcpProfileInput,
+  publicCustomAcpProfile,
+} from "./custom.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
 const posixOnly = describe.skipIf(process.platform === "win32");
+const RESTORED_ENV_KEYS = [
+  "BOX_TOKEN",
+  "COMPOSIO_API_KEY",
+  "EXPO_ACCESS_TOKEN",
+  "HTTP_PROXY",
+  "SSH_AUTH_SOCK",
+  "XAI_API_KEY",
+] as const;
 
 describe("ACP decodeConfig", () => {
   it("grok defaults to the grok binary", () => {
@@ -32,12 +49,57 @@ describe("ACP decodeConfig", () => {
     expect(GrokAgentDriver.decodeConfig({ fullAuto: "yes" }).fullAuto).toBe(false);
     expect(GrokAgentDriver.decodeConfig({ fullAuto: true }).fullAuto).toBe(true);
   });
+
+  it("validates a custom ACP subscription without accepting shell or secret environment fields", () => {
+    const profile = decodeCustomAcpProfileInput({
+      label: "My subscription",
+      executable: "/usr/local/bin/my-agent",
+      arguments: ["agent", "stdio", "--model", "{model}"],
+      versionArguments: ["version"],
+      models: [
+        { id: "fast", label: "Fast" },
+        { id: "deep", label: "Deep" },
+      ],
+      defaultModel: "deep",
+      authMethod: "cached_token",
+      requireAuthentication: true,
+      workspace: process.cwd(),
+      fullAuto: false,
+      enabled: true,
+    });
+    expect(profile).not.toHaveProperty("environment");
+    const instance = customAcpInstance(profile);
+    expect(publicCustomAcpProfile("acp-local", instance)).toMatchObject({
+      id: "acp-local",
+      label: "My subscription",
+      executable: "/usr/local/bin/my-agent",
+      defaultModel: "deep",
+      requireAuthentication: true,
+    });
+    expect(decodeCustomAcpConfig(instance.config).models.options).toHaveLength(2);
+    expect(() => decodeCustomAcpProfileInput({
+      ...profile,
+      environment: { TOKEN: "must-not-be-accepted" },
+    })).toThrow(/authenticate with the CLI/i);
+  });
+
+  it("rejects unknown argv placeholders and mismatched default models", () => {
+    const base = {
+      label: "Unsafe",
+      executable: "agent",
+      models: [{ id: "one", label: "One" }],
+      defaultModel: "one",
+    };
+    expect(() => decodeCustomAcpProfileInput({ ...base, arguments: ["--token", "{secret}"] })).toThrow(/placeholder/i);
+    expect(() => decodeCustomAcpProfileInput({ ...base, defaultModel: "two" })).toThrow(/defaultModel/i);
+  });
 });
 
 posixOnly("ACP turns (fake CLI)", () => {
   let instance: ProviderInstance;
   let recorder: EventRecorder;
   let scratch: string;
+  let previousEnvironment: Record<string, string | undefined>;
 
   const create = async (driver = GrokAgentDriver, mode?: string) => {
     if (mode) process.env.FAKE_ACP_MODE = mode;
@@ -52,6 +114,7 @@ posixOnly("ACP turns (fake CLI)", () => {
   };
 
   beforeEach(() => {
+    previousEnvironment = Object.fromEntries(RESTORED_ENV_KEYS.map((key) => [key, process.env[key]]));
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
     scratch = mkdtempSync(join(tmpdir(), "cumea-acp-test-"));
@@ -60,7 +123,12 @@ posixOnly("ACP turns (fake CLI)", () => {
   afterEach(async () => {
     delete process.env.FAKE_ACP_MODE;
     delete process.env.FAKE_ACP_DUMP;
-    delete process.env.XAI_API_KEY;
+    for (const key of RESTORED_ENV_KEYS) {
+      const previous = previousEnvironment[key];
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
+    delete process.env.FAKE_ACP_REFLECT_SECRET;
     recorder?.stop();
     await instance?.dispose();
     rmSync(scratch, { recursive: true, force: true });
@@ -98,11 +166,12 @@ posixOnly("ACP turns (fake CLI)", () => {
     expect(instance.adapter.hasSession("t-happy")).toBe(false);
   });
 
-  it("passes ACP stdio flags and strips XAI_API_KEY from the child env", async () => {
+  it("passes ACP stdio flags and strips unrelated managed credentials from the child env", async () => {
     await create();
     const dump = join(scratch, "dump.json");
     process.env.FAKE_ACP_DUMP = dump;
     process.env.XAI_API_KEY = "xai-should-not-leak";
+    process.env.BOX_TOKEN = "box-should-not-leak";
 
     await instance.adapter.sendTurn({ threadId: "t-hygiene", text: "go" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -112,6 +181,131 @@ posixOnly("ACP turns (fake CLI)", () => {
     expect(seen.argv).toContain("stdio");
     expect(seen.argv).toContain("--permission-mode");
     expect(seen.env.XAI_API_KEY).toBeUndefined();
+    expect(seen.env.BOX_TOKEN).toBeUndefined();
+  });
+
+  it("keeps Gemini auth compatibility but withholds Cumea integration credentials", async () => {
+    await create(GeminiAgentDriver, "no-auth");
+    const dump = join(scratch, "gemini-env.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    process.env.GEMINI_API_KEY = "gemini-owned-key";
+    process.env.XAI_API_KEY = "xai-unrelated";
+    process.env.BOX_TOKEN = "box-unrelated";
+
+    await instance.adapter.sendTurn({ threadId: "t-gemini-env", text: "go" });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.env.GEMINI_API_KEY).toBe("gemini-owned-key");
+    expect(seen.env.XAI_API_KEY).toBeUndefined();
+    expect(seen.env.BOX_TOKEN).toBeUndefined();
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  it("runs a configurable subscription profile with exact argv and model expansion", async () => {
+    const dump = join(scratch, "custom-dump.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    const config = decodeCustomAcpConfig({
+      cli: FAKE_CLI,
+      args: ["--cumea-test-dump", dump, "agent", "stdio", "--model", "{model}"],
+      versionArgs: ["--version"],
+      models: {
+        default: "custom-fast",
+        options: [
+          { id: "custom-fast", label: "Fast" },
+          { id: "custom-deep", label: "Deep" },
+        ],
+      },
+      authFailure: "continue",
+      fullAuto: false,
+    });
+    instance = await CustomAcpDriver.create({
+      instanceId: "custom-subscription",
+      displayName: "Custom subscription",
+      environment: {},
+      enabled: true,
+      config,
+    });
+    recorder = recordEvents(instance.adapter);
+    expect(instance.models.default).toBe("custom-fast");
+    expect(instance.adapter.capabilities.agentsMcp).toBe(true);
+
+    await instance.adapter.sendTurn({ threadId: "t-custom", text: "go", model: "custom-deep" });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toEqual(["agent", "stdio", "--model", "custom-deep"]);
+  });
+
+  it("gives custom ACP only a minimal host environment while keeping MCP credentials scoped", async () => {
+    const dump = join(scratch, "custom-minimal-env.json");
+    process.env.BOX_TOKEN = "ambient-box-secret";
+    process.env.XAI_API_KEY = "ambient-xai-secret";
+    process.env.COMPOSIO_API_KEY = "ambient-composio-secret";
+    process.env.EXPO_ACCESS_TOKEN = "ambient-expo-secret";
+    process.env.SSH_AUTH_SOCK = "/tmp/ambient-agent.sock";
+    process.env.HTTP_PROXY = "https://name:password@proxy.example";
+
+    const config = decodeCustomAcpConfig({
+      cli: FAKE_CLI,
+      args: ["--cumea-test-dump", dump, "agent", "stdio"],
+      versionArgs: ["--version"],
+      models: { default: "default", options: [{ id: "default", label: "Default" }] },
+      authFailure: "continue",
+      fullAuto: false,
+    });
+    instance = await CustomAcpDriver.create({
+      instanceId: "custom-minimal",
+      displayName: "Custom minimal",
+      environment: {
+        BOX_TOKEN: "legacy-box-secret",
+        XAI_API_KEY: "legacy-xai-secret",
+        CUSTOM_SECRET: "legacy-custom-secret",
+        CUMEA_BROKER_CAPABILITY: "legacy-capability",
+      },
+      enabled: true,
+      config,
+    });
+    recorder = recordEvents(instance.adapter);
+
+    await instance.adapter.sendTurn({
+      threadId: "t-custom-minimal",
+      text: "go",
+      integrations: {
+        memory: { command: "/tmp/memory-proxy", args: [], env: { CUMEA_MEMORY_CAPABILITY: "memory-only" } },
+        mcpServers: [{ name: "private", command: "/tmp/private-mcp", args: [], env: { PRIVATE_TOKEN: "mcp-only" } }],
+      },
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.env.PATH).toBeTruthy();
+    expect(seen.env.HOME).toBe(process.env.HOME);
+    for (const key of [
+      "BOX_TOKEN",
+      "XAI_API_KEY",
+      "COMPOSIO_API_KEY",
+      "EXPO_ACCESS_TOKEN",
+      "SSH_AUTH_SOCK",
+      "HTTP_PROXY",
+      "CUSTOM_SECRET",
+      "CUMEA_BROKER_CAPABILITY",
+      "CUMEA_MEMORY_CAPABILITY",
+      "PRIVATE_TOKEN",
+    ]) expect(seen.env[key]).toBeUndefined();
+    const sessionNew = seen.calls.find((call: any) => call.method === "session/new");
+    expect(sessionNew.params.mcpServers).toContainEqual({
+      name: "memory",
+      command: "/tmp/memory-proxy",
+      args: [],
+      env: [{ name: "CUMEA_MEMORY_CAPABILITY", value: "memory-only" }],
+    });
+    expect(sessionNew.params.mcpServers).toContainEqual({
+      name: "private",
+      command: "/tmp/private-mcp",
+      args: [],
+      env: [{ name: "PRIVATE_TOKEN", value: "mcp-only" }],
+    });
   });
 
   it("mounts a local computer MCP server when the harness supplies one", async () => {
@@ -136,6 +330,44 @@ posixOnly("ACP turns (fake CLI)", () => {
       args: ["mcp"],
       env: [{ name: "CUA_TEST", value: "1" }],
     });
+  });
+
+  it("mounts only the local MCP servers assigned by the harness", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_ACP_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-custom-mcp",
+      text: "use the assigned integration",
+      integrations: {
+        memory: { command: "/tmp/memory-proxy", args: [], env: { CUMEA_MEMORY_CAPABILITY: "opaque" } },
+        mcpServers: [{
+          name: "local_0123456789abcdef0123",
+          command: "/tmp/private-mcp",
+          args: ["--stdio"],
+          env: { PRIVATE_TOKEN: "secret" },
+        }],
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const sessionNew = seen.calls?.find((call: any) => call.method === "session/new");
+    expect(sessionNew?.params?.mcpServers).toContainEqual({
+      name: "local_0123456789abcdef0123",
+      command: "/tmp/private-mcp",
+      args: ["--stdio"],
+      env: [{ name: "PRIVATE_TOKEN", value: "secret" }],
+    });
+    expect(sessionNew?.params?.mcpServers).toContainEqual({
+      name: "memory",
+      command: "/tmp/memory-proxy",
+      args: [],
+      env: [{ name: "CUMEA_MEMORY_CAPABILITY", value: "opaque" }],
+    });
+    expect(instance.adapter.capabilities.customMcp).toBe(true);
+    expect(instance.adapter.capabilities.memoryMcp).toBe(true);
   });
 
   it("surfaces a permission ask as request.opened and completes once allowed", async () => {
@@ -192,6 +424,34 @@ posixOnly("ACP turns (fake CLI)", () => {
     const done = await recorder.until((e) => e.type === "turn.completed");
     expect(done).toMatchObject({ ok: false });
     expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(true);
+  });
+
+  it("redacts prompt fields before the adapter and reflected provider failures before fanout", async () => {
+    const secret = "configured-secret-sentinel-987";
+    process.env.FAKE_ACP_REFLECT_SECRET = secret;
+    await create(GrokAgentDriver, "reflect-secret");
+    const dump = join(scratch, "redaction-dump.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    const catalog = new SecretCatalog();
+    catalog.replace([secret]);
+    const bus = new EventBus(undefined, () => true, (event) => catalog.redactValue(event) as typeof event);
+    bus.attach([instance]);
+    const seen: unknown[] = [];
+    bus.subscribe((event) => seen.push(event));
+
+    await instance.adapter.sendTurn(catalog.redactProviderInput({
+      threadId: "t-secret-egress",
+      text: `typed ${secret}`,
+      system: `memory ${secret}`,
+      transcript: [{ role: "user", text: `legacy ${secret}` }],
+    }));
+    await recorder.until((event) => event.type === "turn.completed");
+
+    const calls = JSON.stringify(JSON.parse(readFileSync(dump, "utf8")).calls);
+    expect(calls).not.toContain(secret);
+    expect(JSON.stringify(seen)).not.toContain(secret);
+    expect(JSON.stringify(seen)).toContain("[REDACTED]");
+    bus.detachAll();
   });
 });
 

@@ -9,6 +9,9 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Added
 
+- Editable user messages with durable conversation branches, accessible version navigation,
+  legacy-transcript migration, provider-session rewind protection, and synchronized desktop/mobile
+  branch state.
 - 24-hour Quick bots with conservative expiry gates and one-click conversion to a permanent agent
   on desktop or a paired phone.
 - Clickable agent workspace paths and attachment cards backed by short-lived opaque capabilities,
@@ -18,12 +21,29 @@ All notable changes to Cumea are documented here. This project follows
 - An accessible jump-to-latest affordance in mobile chat when new messages arrive while someone is
   reading older history.
 - An Opencrew-inspired, source-first landing page for the self-hosted project.
+- Local configurable ACP profiles with per-agent model catalogs and automatic peer-agent MCP tools.
+- Best-effort local text drafts preserved independently for each agent across switches and restarts.
+- Durable per-agent FIFO message queues with cancellation, automatic next-task dispatch, and
+  explicit context boundaries that clear provider continuations without cloning the agent.
+- Native system light/dark mobile surfaces with a quieter agent-list home and compact queued-work
+  controls beside the composer.
+- Bounded long-paste text attachments and drag-and-drop file upload through the same audited,
+  rollback-capable attachment pipeline as the file picker.
 
 ### Changed
 
+- Centralized provider CLI spawning across platforms: Windows npm `.cmd`/`.bat` shims run through
+  `cmd.exe`, native executables remain direct, process trees use `taskkill`, permission brokers use
+  authenticated named pipes, and the Electron shell reserves native Windows title-bar controls.
+- Hardened Box-agent protocol decoding for current `promptRun`, `finished`, nested event-content,
+  and result/output response shapes without mistaking a Box ID for a prompt ID.
 - Batched high-frequency streaming deltas and event-log writes while retaining ordered flushes at
   message and turn boundaries; mobile chat keeps cursor pagination and anchored rendering instead
   of adding an unproven virtualization dependency.
+- Moved desktop token deltas out of the durable global store and refined chat typography, message
+  contrast, spacing, and date separators against live reference measurements.
+- Kept completed tool noise and raw reasoning out of the conversational transcript while retaining
+  in-progress/error feedback, Stop controls, durable run steps, and the Activity surface.
 - Strengthened desktop speech-session cleanup so late native-helper output cannot enter a newer
   composer session.
 - Expanded the release SBOM to inventory the exact Electron runtime used by the packaged desktop
@@ -31,6 +51,8 @@ All notable changes to Cumea are documented here. This project follows
 
 ### Security
 
+- Authenticated every Claude permission-broker connection with a per-turn 256-bit secret; a named
+  pipe or Unix socket name is never treated as an authorization boundary.
 - Confined file previews to validated per-agent workspaces, same-origin capability URLs, bounded
   snapshots, non-executable document parsing, and atomic bot/file lifecycle handling.
 - Added ZIP metadata, decompressed-byte, CRC, and active-content checks to the semantic DOCX parser.

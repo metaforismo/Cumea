@@ -1,14 +1,20 @@
 import type { ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
+import {
+  closeUnterminatedMarkdownFence,
+  DESKTOP_MARKDOWN_LINK_POLICY,
+  safeMarkdownExternalUrl,
+} from "../../shared/markdown-policy";
 
 interface SafeMarkdownProps {
   text: string;
   className?: string;
   onOpenFile?: (path: string) => void;
+  streaming?: boolean;
 }
 
-const FILE_EXTENSION = /\.(?:md|markdown|mdown|pdf|docx)$/i;
+const FILE_EXTENSION = /\.(?:md|markdown|mdown|pdf|docx|html|htm)$/i;
 
 export function isPreviewableFileName(value: string): boolean {
   return FILE_EXTENSION.test(value.trim().split(/[?#]/, 1)[0] ?? "");
@@ -75,8 +81,8 @@ function inline(text: string, keyBase: string, onOpenFile?: (path: string) => vo
       const path = onOpenFile ? safeFilePath(target) : null;
       if (path) {
         output.push(<PathButton key={`${keyBase}-link-${index++}`} path={path} label={label} onOpenFile={onOpenFile!} />);
-      } else if (/^https:\/\/[^\s]+$/i.test(target)) {
-        output.push(<a key={`${keyBase}-url-${index++}`} href={target} target="_blank" rel="noreferrer noopener" className="break-all text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent">{label}</a>);
+      } else if (safeMarkdownExternalUrl(target, DESKTOP_MARKDOWN_LINK_POLICY)) {
+        output.push(<a key={`${keyBase}-url-${index++}`} href={target.trim()} target="_blank" rel="noreferrer noopener" className="break-all text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent">{label}</a>);
       } else {
         output.push(value);
       }
@@ -96,16 +102,18 @@ function inline(text: string, keyBase: string, onOpenFile?: (path: string) => vo
 }
 
 /** A deliberately small Markdown renderer: React text nodes only, never HTML. */
-export function SafeMarkdown({ text, className, onOpenFile }: SafeMarkdownProps) {
+export function SafeMarkdown({ text, className, onOpenFile, streaming = false }: SafeMarkdownProps) {
   const rows: ReactNode[] = [];
-  const lines = text.replace(/\r\n?/g, "\n").split("\n");
-  let fence: { language: string; lines: string[]; start: number } | null = null;
+  const source = streaming ? closeUnterminatedMarkdownFence(text) : text;
+  const lines = source.replace(/\r\n?/g, "\n").split("\n");
+  let fence: { marker: "`" | "~"; length: number; language: string; lines: string[]; start: number } | null = null;
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    const fenceStart = line.match(/^\s*```\s*([\w.+-]*)\s*$/);
-    if (fenceStart) {
-      if (fence) {
+    const fenceLine = line.match(/^ {0,3}(`{3,}|~{3,})\s*([\w.+-]*)\s*$/);
+    if (fenceLine) {
+      const marker = fenceLine[1][0] as "`" | "~";
+      if (fence && marker === fence.marker && fenceLine[1].length >= fence.length && !fenceLine[2]) {
         rows.push(
           <pre key={`code-${fence.start}`} className="my-2 overflow-x-auto rounded-xl bg-inset p-3 text-[12px] leading-relaxed">
             {fence.language && <div className="mb-2 text-[10px] uppercase tracking-wide text-ink-secondary">{fence.language}</div>}
@@ -113,8 +121,10 @@ export function SafeMarkdown({ text, className, onOpenFile }: SafeMarkdownProps)
           </pre>,
         );
         fence = null;
+      } else if (!fence) {
+        fence = { marker, length: fenceLine[1].length, language: fenceLine[2], lines: [], start: index };
       } else {
-        fence = { language: fenceStart[1], lines: [], start: index };
+        fence.lines.push(line);
       }
       continue;
     }
@@ -125,12 +135,12 @@ export function SafeMarkdown({ text, className, onOpenFile }: SafeMarkdownProps)
     const heading = line.match(/^(#{1,6})\s+(.*)$/);
     if (heading) {
       const level = heading[1].length;
-      rows.push(<div key={index} role="heading" aria-level={level} className={cn("mt-3 font-semibold", level === 1 ? "text-xl" : level === 2 ? "text-lg" : "text-[1em]")}>{inline(heading[2], `h${index}`, onOpenFile)}</div>);
+      rows.push(<div key={index} role="heading" aria-level={level} className={cn("mt-2.5 font-semibold tracking-[-0.18px]", level === 1 ? "text-[18px] leading-6" : level === 2 ? "text-[16px] leading-[22px]" : "text-[14px] leading-5")}>{inline(heading[2], `h${index}`, onOpenFile)}</div>);
       continue;
     }
     const bullet = line.match(/^\s*[-+*•]\s+(.*)$/);
     if (bullet) {
-      rows.push(<div key={index} className="flex gap-2 pl-1"><span aria-hidden className="text-ink-secondary">•</span><span className="min-w-0">{inline(bullet[1], `b${index}`, onOpenFile)}</span></div>);
+      rows.push(<div key={index} className="flex gap-2 pl-0.5"><span aria-hidden className="text-ink-secondary">•</span><span className="min-w-0">{inline(bullet[1], `b${index}`, onOpenFile)}</span></div>);
       continue;
     }
     const numbered = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
@@ -147,7 +157,7 @@ export function SafeMarkdown({ text, className, onOpenFile }: SafeMarkdownProps)
       rows.push(<hr key={index} className="my-3 border-hairline" />);
       continue;
     }
-    if (!line.trim()) rows.push(<div key={index} className="h-2.5" aria-hidden />);
+    if (!line.trim()) rows.push(<div key={index} className="h-2" aria-hidden />);
     else rows.push(<div key={index}>{inline(line, `p${index}`, onOpenFile)}</div>);
   }
   if (fence) {

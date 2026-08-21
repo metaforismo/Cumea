@@ -8,7 +8,7 @@ import { PressableScale } from "@/components/pressable-scale";
 import { parsePairingUri } from "@/host/host-client";
 import type { PairingClaimInput } from "@/host/types";
 import { useCumea } from "@/state/cumea-store";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
 
 type EntryMode = "paste" | "manual";
 const avatar = { version: 1 as const, kind: "mote" as const, shapeId: "drop" as const, color: "#f56a16", motion: "playful" as const };
@@ -34,6 +34,7 @@ function Field({
   placeholder: string;
   secret?: boolean;
 }) {
+  const { theme } = useCumeaTheme();
   return (
     <View style={{ gap: 7 }}>
       <Text style={{ color: theme.textSecondary, fontSize: 12, fontWeight: "700" }}>{label}</Text>
@@ -56,6 +57,7 @@ function Field({
 }
 
 export default function PairScreen() {
+  const { theme } = useCumeaTheme();
   const { state, actions } = useCumea();
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [mode, setMode] = useState<EntryMode>("paste");

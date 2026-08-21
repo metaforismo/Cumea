@@ -30,6 +30,13 @@ extraResources:
     to: ui
   - from: dist-server
     to: server
+  # The compiled DOCX preview imports JSZip at runtime. Stage its exact,
+  # lockfile-resolved dependency closure beside the server so Electron's Node
+  # can resolve it on a clean installation.
+  - from: build/server-runtime/node_modules
+    to: server/node_modules
+  - from: build/server-runtime/manifest.json
+    to: server/runtime-manifest.json
   - from: LICENSE
     to: LICENSE
   - from: THIRD_PARTY_NOTICES.md
@@ -43,6 +50,8 @@ mac:
       arch: arm64
     - target: zip
       arch: arm64
+  # Electron consumes ICNS. It is generated from the user-approved rounded
+  # macOS export; the Icon Composer document remains the editable Apple source.
   icon: build/icon.icns
   category: public.app-category.productivity
   hardenedRuntime: true

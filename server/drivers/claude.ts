@@ -8,16 +8,16 @@
 //   - Composio Connect (connected apps → tools) over streamable HTTP
 //   - the bot's cloud computer (box.ascii.dev) via server/computer-proxy.ts
 //     — screenshot/exec/open_url, the CUA-on-the-box bridge
-import { spawn } from "node:child_process";
-import { execFile } from "node:child_process";
-import { existsSync, unlinkSync } from "node:fs";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DATA_DIR } from "../config.ts";
 import { augmentedPath } from "../env-path.ts";
+import { stripManagedCredentials } from "../provider-environment.ts";
+import { brokerSocketPath, execCli, killCliTree, spawnCli } from "../procs.ts";
 
 import type {
   DriverCreateInput,
@@ -36,6 +36,39 @@ const DRIVER_KIND = "claudeAgent";
 export interface ClaudeConfig {
   cli: string;
   permissionMode: "acceptEdits" | "auto" | "bypassPermissions";
+}
+
+function claudeCliEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    PATH: augmentedPath(),
+    NPM_CONFIG_LOGLEVEL: "error",
+  };
+  // This driver deliberately uses the user's Claude subscription login. An
+  // inherited API key would change billing, while nested-session markers can
+  // make an otherwise valid standalone auth probe fail.
+  delete env.ANTHROPIC_API_KEY;
+  delete env.CLAUDECODE;
+  delete env.CLAUDE_CODE_ENTRYPOINT;
+  stripManagedCredentials(env);
+  return env;
+}
+
+/** Parse only the documented boolean from `claude auth status`. Unknown or
+ * future output stays unknown instead of falsely blocking a valid login. */
+export function parseClaudeAuthStatus(output: string): boolean | undefined {
+  const trimmed = output.trim();
+  if (!trimmed) return undefined;
+  const candidates = [trimmed, ...trimmed.split(/\r?\n/).reverse()];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as Record<string, unknown>;
+      if (typeof parsed.loggedIn === "boolean") return parsed.loggedIn;
+    } catch {
+      // Wrappers may print a warning before the JSON line; try the next line.
+    }
+  }
+  return undefined;
 }
 
 // model catalog ported from upstream packages/contracts/src/model.ts
@@ -92,23 +125,37 @@ function askSummary(ask: Ask): string {
 
 function permissionSocketPath(threadId: string) {
   const tag = threadId.replace(/[^\w-]/g, "").slice(0, 8);
-  return join(DATA_DIR, `perm-${tag}.sock`);
+  // Darwin limits Unix-domain socket paths to roughly 104 bytes. DATA_DIR can
+  // be arbitrarily deep, so keep this path short. The endpoint is random,
+  // chmod 0600, and still requires a separate 256-bit handshake secret.
+  return brokerSocketPath("/tmp", `${tag}-${randomBytes(12).toString("hex")}`);
 }
 
-function createPermissionBroker(opts: {
+function secretsEqual(actual: unknown, expected: string): boolean {
+  if (typeof actual !== "string") return false;
+  const left = Buffer.from(actual);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+export function createPermissionBroker(opts: {
   socketPath: string;
+  secret: string;
   onAsk: (ask: Ask) => void;
   onResolve: (resolved: Ask & { behavior: string; source: string }) => void;
   timeoutMs?: number;
 }) {
   const timeoutMs = opts.timeoutMs ?? 15 * 60_000;
   const pending = new Map<string, { ask: Ask; finish: (behavior: string, message: string | undefined, source: string) => void }>();
-  try {
-    unlinkSync(opts.socketPath);
-  } catch {}
+  if (process.platform !== "win32") {
+    try {
+      unlinkSync(opts.socketPath);
+    } catch {}
+  }
   const server = createNetServer((conn) => {
     conn.on("error", () => {});
     let buf = "";
+    let authenticated = false;
     conn.on("data", (chunk) => {
       buf += chunk;
       let nl;
@@ -119,6 +166,14 @@ function createPermissionBroker(opts: {
         try {
           msg = JSON.parse(line);
         } catch {
+          continue;
+        }
+        if (!authenticated) {
+          if (msg.t !== "auth" || !secretsEqual(msg.secret, opts.secret)) {
+            conn.destroy();
+            return;
+          }
+          authenticated = true;
           continue;
         }
         if (msg.t !== "ask") continue;
@@ -147,7 +202,14 @@ function createPermissionBroker(opts: {
     });
   });
   const ready = new Promise<void>((resolve, reject) => {
-    server.once("listening", resolve);
+    server.once("listening", () => {
+      if (process.platform !== "win32") {
+        try {
+          chmodSync(opts.socketPath, 0o600);
+        } catch {}
+      }
+      resolve();
+    });
     server.once("error", reject);
   });
   server.on("error", () => {});
@@ -170,9 +232,11 @@ function createPermissionBroker(opts: {
       try {
         server.close();
       } catch {}
-      try {
-        unlinkSync(opts.socketPath);
-      } catch {}
+      if (process.platform !== "win32") {
+        try {
+          unlinkSync(opts.socketPath);
+        } catch {}
+      }
     },
   };
 }
@@ -203,6 +267,16 @@ function firstText(content: unknown): string {
 export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "Claude", supportsMultipleInstances: true },
+  install: {
+    command: {
+      darwin: "npm install -g @anthropic-ai/claude-code",
+      linux: "npm install -g @anthropic-ai/claude-code",
+      win32: "npm install -g @anthropic-ai/claude-code",
+    },
+    docsUrl: "https://code.claude.com/docs/en/setup",
+    signInCommand: "claude",
+    needsNode: true,
+  },
   models: MODELS,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),
@@ -277,14 +351,30 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         mcpServers.agents = { ...turn.integrations.agents };
         allowed.push("mcp__agents");
       }
+      if (turn.integrations?.memory) {
+        mcpServers.memory = { ...turn.integrations.memory };
+        // Persistent memory writes are deliberately not blanket-approved.
+        // The ordinary permission broker remains the consent boundary.
+      }
+      for (const server of turn.integrations?.mcpServers ?? []) {
+        mcpServers[server.name] = {
+          command: server.command,
+          args: server.args,
+          env: server.env,
+        };
+        // Arbitrary local MCP tools are mounted but never blanket-approved;
+        // Claude's permission broker remains the consent boundary.
+      }
       // permission broker: anything acceptEdits would silently deny becomes
       // an Allow/Deny card in chat, and the agent gets ask_user. Skipped in
       // bypassPermissions (fullAuto) — nothing would ever ask.
       let broker: ReturnType<typeof createPermissionBroker> | undefined;
       if (config.permissionMode !== "bypassPermissions") {
         const socketPath = permissionSocketPath(threadId);
+        const brokerSecret = randomBytes(32).toString("base64url");
         broker = createPermissionBroker({
           socketPath,
+          secret: brokerSecret,
           onAsk: (ask) =>
             emit({
               ...base(threadId, turnId),
@@ -311,7 +401,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           throw error;
         }
         args.push("--permission-prompt-tool", "mcp__cumea__approve");
-        mcpServers.cumea = { command: process.execPath, args: [PERM_PROXY_PATH, socketPath], env: { ...NODE_ENV_FLAG } };
+        mcpServers.cumea = {
+          command: process.execPath,
+          args: [PERM_PROXY_PATH, socketPath],
+          env: { ...NODE_ENV_FLAG, CUMEA_PERMISSION_BROKER_SECRET: brokerSecret },
+        };
         allowed.push("mcp__cumea");
       }
       if (Object.keys(mcpServers).length) {
@@ -319,18 +413,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         args.push("--allowedTools", allowed.join(","));
       }
 
-      const env: Record<string, string | undefined> = { ...process.env, PATH: augmentedPath(), NPM_CONFIG_LOGLEVEL: "error" };
-      // subscription users get billed pay-as-you-go if this leaks through;
-      // and a nested CLI must not inherit this session's identity (agentcal)
-      delete env.ANTHROPIC_API_KEY;
-      delete env.CLAUDECODE;
-      delete env.CLAUDE_CODE_ENTRYPOINT;
+      const env = claudeCliEnv();
 
-      const child = spawn(config.cli, args, {
+      const child = spawnCli(config.cli, args, {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],
-        detached: true, // own process group: killing -pid reaps child MCP servers
       });
 
       let settled = false;
@@ -428,13 +516,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
 
       const stop = () => {
-        try {
-          process.kill(-child.pid!, "SIGTERM");
-        } catch {
-          try {
-            child.kill("SIGTERM");
-          } catch {}
-        }
+        killCliTree(child);
       };
       active.set(threadId, { stop, turnId, broker });
       emit({ ...base(threadId, turnId), type: "turn.started" });
@@ -449,14 +531,23 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     };
 
     const snapshot = async (): Promise<ProviderSnapshot> => {
+      const env = claudeCliEnv();
       const version = await new Promise<string | null>((resolve) => {
-        execFile(config.cli, ["--version"], { timeout: 8000, env: { ...process.env, PATH: augmentedPath() } }, (err, stdout) =>
+        execCli(config.cli, ["--version"], { timeout: 8_000, env }, (err, stdout) =>
           resolve(err ? null : stdout.trim()),
         );
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-      const authenticated = existsSync(join(homedir(), ".claude", ".credentials.json"));
-      return { state: "available", version, authenticated };
+      const authenticated = await new Promise<boolean | undefined>((resolve) => {
+        execCli(config.cli, ["auth", "status"], { timeout: 5_000, env }, (_err, stdout) => {
+          resolve(parseClaudeAuthStatus(stdout));
+        });
+      });
+      return {
+        state: "available",
+        version,
+        ...(authenticated === undefined ? {} : { authenticated }),
+      };
     };
 
     return {
@@ -470,10 +561,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         provider: DRIVER_KIND,
         capabilities: {
           sessionModelSwitch: "in-session",
+          sessionResume: true,
           agentsMcp: true,
           composioMcp: true,
           localComputerMcp: true,
           cloudComputerMcp: true,
+          customMcp: true,
+          memoryMcp: true,
         },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
@@ -496,10 +590,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       },
       generateText: (prompt: string) =>
         new Promise((resolve, reject) => {
-          execFile(
+          execCli(
             config.cli,
             ["-p", prompt, "--model", "claude-haiku-4-5", "--output-format", "text"],
-            { timeout: 60_000, env: { ...process.env, PATH: augmentedPath() } },
+            { timeout: 60_000, env: claudeCliEnv() },
             (err, stdout) => (err ? reject(err) : resolve(stdout.trim())),
           );
         }),

@@ -5,11 +5,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { MoteAvatar } from "@/components/mote-avatar";
 import { PressableScale } from "@/components/pressable-scale";
 import { useCumea } from "@/state/cumea-store";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
 
 const preview = { version: 1 as const, kind: "mote" as const, shapeId: "orb" as const, color: "#19ae7a", motion: "playful" as const };
 
 export default function NewAgentScreen() {
+  const { theme } = useCumeaTheme();
   const router = useRouter();
   const { state, actions } = useCumea();
   const [name, setName] = useState("");

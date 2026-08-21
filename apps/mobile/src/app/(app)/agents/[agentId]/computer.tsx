@@ -6,9 +6,10 @@ import { PressableScale } from "@/components/pressable-scale";
 import { HostClient } from "@/host/host-client";
 import type { ComputerPreview } from "@/host/types";
 import { useCumea } from "@/state/cumea-store";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
 
 export default function ComputerPreviewScreen() {
+  const { theme } = useCumeaTheme();
   const router = useRouter();
   const params = useLocalSearchParams<{ agentId: string }>();
   const agentId = Array.isArray(params.agentId) ? params.agentId[0] : params.agentId;

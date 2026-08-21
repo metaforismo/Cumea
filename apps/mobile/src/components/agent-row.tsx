@@ -2,7 +2,7 @@ import { Text, View } from "react-native";
 import type { AgentSummary } from "@/host/types";
 import { MoteAvatar } from "./mote-avatar";
 import { PressableScale } from "./pressable-scale";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
 
 function relativeTime(timestamp: number): string {
   const elapsed = Math.max(0, Date.now() - timestamp);
@@ -13,6 +13,7 @@ function relativeTime(timestamp: number): string {
 }
 
 export function AgentRow({ agent, onPress }: { agent: AgentSummary; onPress(): void }) {
+  const { theme } = useCumeaTheme();
   const quickLabel = agent.lifecycle
     ? `Quick bot, expires ${new Date(agent.lifecycle.expiresAt).toLocaleString()}. `
     : "";
@@ -21,12 +22,12 @@ export function AgentRow({ agent, onPress }: { agent: AgentSummary; onPress(): v
       accessibilityRole="button"
       accessibilityLabel={`${agent.name}, ${agent.role}. ${quickLabel}${agent.needsYou ? "Needs you. " : ""}${agent.preview}`}
       onPress={onPress}
-      style={{ flexDirection: "row", alignItems: "center", gap: 13, paddingHorizontal: 20, paddingVertical: 11, minHeight: 72 }}
+      style={{ flexDirection: "row", alignItems: "center", gap: 15, paddingHorizontal: 27, paddingVertical: 10, minHeight: 88 }}
     >
       <MoteAvatar config={agent.avatar} size={48} label={agent.name} presence={agent.presence} unread={agent.unread} />
-      <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+      <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.text, fontSize: 17, fontWeight: "700", letterSpacing: -0.2 }}>
+          <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.text, fontSize: 18, fontWeight: "700", letterSpacing: -0.28 }}>
             {agent.name}
           </Text>
           {agent.lifecycle ? (
@@ -34,19 +35,18 @@ export function AgentRow({ agent, onPress }: { agent: AgentSummary; onPress(): v
               <Text style={{ color: theme.accent, fontSize: 10, fontWeight: "800" }}>Quick</Text>
             </View>
           ) : null}
-          <View style={{ maxWidth: 128, backgroundColor: theme.cardRaised, borderRadius: 7, paddingHorizontal: 7, paddingVertical: 3 }}>
-            <Text numberOfLines={1} style={{ color: theme.textSecondary, fontSize: 11, fontWeight: "600" }}>{agent.role}</Text>
-          </View>
           <Text style={{ marginLeft: "auto", color: theme.textSecondary, fontSize: 12, fontVariant: ["tabular-nums"] }}>
             {relativeTime(agent.updatedAt)}
           </Text>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-          <Text numberOfLines={1} style={{ flex: 1, color: theme.textSecondary, fontSize: 14 }}>{agent.preview}</Text>
+          <Text numberOfLines={1} style={{ flex: 1, color: theme.textSecondary, fontSize: 15.5, lineHeight: 20 }}>{agent.preview}</Text>
           {agent.needsYou ? (
             <View style={{ borderRadius: 9, backgroundColor: `${theme.warning}22`, paddingHorizontal: 7, paddingVertical: 3 }}>
               <Text style={{ color: theme.warning, fontSize: 10, fontWeight: "700" }}>Needs you</Text>
             </View>
+          ) : agent.queuedCount ? (
+            <Text accessibilityLabel={`${agent.queuedCount} queued tasks`} style={{ color: theme.textSecondary, fontSize: 10, fontWeight: "700" }}>{agent.queuedCount} queued</Text>
           ) : agent.unread ? (
             <View accessibilityLabel="Unread" style={{ width: 8, height: 8, borderRadius: 8, backgroundColor: theme.accent }} />
           ) : null}

@@ -1,6 +1,7 @@
 node_modules
 .pnpm-store/
 .vercel/
+.playwright-cli/
 dist
 dist-electron
 *.local
@@ -9,6 +10,7 @@ dist-electron
 electron/resources/speech-helper
 build/.swift-module-cache
 build/cua-driver/
+build/server-runtime/
 release
 apps/mobile/.expo
 apps/mobile/dist

@@ -2,11 +2,12 @@ import { Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { OnboardingFrame } from "@/components/onboarding-frame";
 import { useCumea } from "@/state/cumea-store";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
 
 const tools = ["Browser", "Terminal", "Email", "Calendar", "CRM", "Files"];
 
 export default function IntegrationsScreen() {
+  const { theme } = useCumeaTheme();
   const router = useRouter();
   const { actions } = useCumea();
   const finish = async () => {

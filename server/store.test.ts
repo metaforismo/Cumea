@@ -28,7 +28,8 @@ describe("Store", () => {
     expect(messages[1].kind).toBe("options");
     expect(messages[1].card?.options.length).toBeGreaterThan(1);
     expect(bot.modelSelection).toEqual(selection());
-    expect(bot).toMatchObject({ appsEnabled: true, collaborationEnabled: true, approvalPolicy: "ask" });
+    expect(bot).toMatchObject({ appsEnabled: true, collaborationEnabled: true });
+    expect(bot).not.toHaveProperty("approvalPolicy");
     expect(bot.avatar).toMatchObject({ kind: "mote", shapeId: "orb", motion: "playful" });
   });
 
@@ -37,6 +38,36 @@ describe("Store", () => {
     const first = store.createBot();
     const second = store.createBot();
     expect(first.color).not.toBe(second.color);
+  });
+
+  it("migrates legacy global approval authority to ask with no durable grant", () => {
+    const first = new Store(selection);
+    const bot = first.createBot();
+    const botsPath = join(DATA_DIR, "bots.json");
+    const rows = JSON.parse(readFileSync(botsPath, "utf8"));
+    rows[0].approvalPolicy = "allow";
+    writeFileSync(botsPath, JSON.stringify(rows));
+
+    const migrated = new Store(selection).bot(bot.id)!;
+    expect(migrated).not.toHaveProperty("approvalPolicy");
+    expect(readFileSync(botsPath, "utf8")).not.toContain("approvalPolicy");
+  });
+
+  it("keeps the Coordinator role exclusive and collaboration-enabled across restart", () => {
+    const store = new Store(selection);
+    const first = store.createBot();
+    const second = store.createBot();
+
+    store.patchBot(first.id, { coordinator: true, collaborationEnabled: false });
+    expect(store.bot(first.id)).toMatchObject({ coordinator: true, collaborationEnabled: true });
+
+    store.patchBot(second.id, { coordinator: true });
+    expect(store.bot(first.id)).not.toHaveProperty("coordinator");
+    expect(store.bot(second.id)).toMatchObject({ coordinator: true, collaborationEnabled: true });
+
+    const reloaded = new Store(selection);
+    expect(reloaded.bots.filter((bot) => bot.coordinator === true)).toHaveLength(1);
+    expect(reloaded.bot(second.id)).toMatchObject({ coordinator: true, collaborationEnabled: true });
   });
 
   it("persists bots and messages across a restart, resetting busy", () => {
@@ -56,6 +87,93 @@ describe("Store", () => {
     expect(back.avatar).toEqual({ kind: "mote", shapeId: "ripple", color: "#7651d6", motion: "kinetic" });
     const messages = reloaded.messagesFor(bot.threadId);
     expect(messages.at(-1)).toMatchObject({ role: "user", text: "hi there" });
+  });
+
+  it("migrates legacy flat transcripts into one durable parent chain", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const file = join(DATA_DIR, `messages-${bot.threadId}.json`);
+    const legacy = [
+      { id: "legacy-1", at: 1, role: "user", kind: "text", text: "one" },
+      { id: "legacy-2", at: 2, role: "bot", kind: "text", text: "two" },
+      { id: "legacy-3", at: 3, role: "user", kind: "text", text: "three" },
+    ];
+    writeFileSync(file, JSON.stringify(legacy));
+
+    const reloaded = new Store(selection);
+    expect(reloaded.activePath(bot.threadId).map((message) => [message.id, message.parentId])).toEqual([
+      ["legacy-1", null],
+      ["legacy-2", "legacy-1"],
+      ["legacy-3", "legacy-2"],
+    ]);
+    reloaded.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "four" });
+    const persisted = JSON.parse(readFileSync(file, "utf8"));
+    expect(persisted).toMatchObject({ activeLeafId: expect.any(String), messages: expect.any(Array) });
+    expect(persisted.messages.at(-1).parentId).toBe("legacy-3");
+  });
+
+  it("creates sibling edits and switches complete visible branches across restart", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const original = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Original" });
+    const originalReply = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "Original reply" });
+    const edited = store.branchMessage(bot.threadId, original.id, "Edited");
+    expect(edited).not.toBeNull();
+    const editedReply = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "Edited reply" });
+
+    expect(store.activePath(bot.threadId).map((message) => message.id)).toEqual([
+      ...store.activePath(bot.threadId).slice(0, -2).map((message) => message.id),
+      edited!.id,
+      editedReply.id,
+    ]);
+    expect(store.setActiveLeaf(bot.threadId, original.id)).toBe(originalReply.id);
+    expect(store.activePath(bot.threadId).at(-2)?.id).toBe(original.id);
+    expect(store.activePath(bot.threadId).at(-1)?.id).toBe(originalReply.id);
+
+    const reloaded = new Store(selection);
+    expect(reloaded.activeLeaf(bot.threadId)).toBe(originalReply.id);
+    expect(reloaded.messagesFor(bot.threadId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: edited!.id, parentId: original.parentId, text: "Edited" }),
+      expect.objectContaining({ id: editedReply.id, parentId: edited!.id }),
+    ]));
+  });
+
+  it("does not let an append caller splice an arbitrary parent into the active branch", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const active = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Active" });
+    const appended = store.appendMessage(bot.threadId, {
+      role: "bot",
+      kind: "text",
+      text: "Reply",
+      parentId: "attacker-selected-parent",
+    });
+
+    expect(appended.parentId).toBe(active.id);
+    expect(store.activePath(bot.threadId).at(-1)?.id).toBe(appended.id);
+  });
+
+  it("keeps queued messages detached until their turn begins", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const before = store.activeLeaf(bot.threadId);
+    const queued = store.appendDetachedMessage(bot.threadId, {
+      role: "user",
+      kind: "text",
+      text: "Do this next",
+      delivery: "queued",
+    });
+    expect(store.activeLeaf(bot.threadId)).toBe(before);
+    expect(store.activePath(bot.threadId).some((message) => message.id === queued.id)).toBe(false);
+
+    const currentReply = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "Current work finished" });
+    const dispatched = store.patchMessage(bot.threadId, queued.id, {
+      parentId: store.activeLeaf(bot.threadId),
+      delivery: "sent",
+    })!;
+    store.setActiveLeaf(bot.threadId, dispatched.id);
+
+    expect(store.activePath(bot.threadId).slice(-2).map((message) => message.id)).toEqual([currentReply.id, queued.id]);
   });
 
   it("persists temporary lifecycle across restart and converts atomically to permanent", () => {

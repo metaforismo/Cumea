@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { ScrollView, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { PressableScale } from "./pressable-scale";
-import { theme } from "@/theme";
+import { useCumeaTheme } from "@/theme";
 
 interface OnboardingFrameProps {
   step: number;
@@ -27,6 +27,7 @@ export function OnboardingFrame({
   secondaryLabel,
   onSecondary,
 }: OnboardingFrameProps) {
+  const { theme } = useCumeaTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const compact = width < 390;

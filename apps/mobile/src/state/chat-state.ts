@@ -47,6 +47,67 @@ export function mergeChronological<T extends ChronologicalEntity>(
   );
 }
 
+export interface BranchEntity extends ChronologicalEntity {
+  parentId?: string | null;
+  role?: string;
+  kind?: string;
+  delivery?: "queued" | "sent" | "cancelled" | "failed";
+}
+
+/** Returns only the root-to-leaf path selected by the host. Malformed or
+ * cyclic parent data fails closed at the first repeated/missing ancestor. */
+export function visibleBranch<T extends BranchEntity>(
+  messages: readonly T[],
+  activeLeafId?: string | null,
+): T[] {
+  if (!messages.length) return [];
+  const byId = new Map(messages.map((message) => [message.id, message]));
+  const path: T[] = [];
+  const visited = new Set<string>();
+  let current = byId.get(activeLeafId ?? messages.at(-1)?.id ?? "");
+  while (current && !visited.has(current.id)) {
+    path.push(current);
+    visited.add(current.id);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return path.reverse();
+}
+
+/** Sibling revisions of one message, ordered deterministically for version
+ * navigation. The original message and every edit share the same parent. */
+export function branchVersions<T extends BranchEntity>(messages: readonly T[], message: T): T[] {
+  return messages
+    .filter((candidate) =>
+      (candidate.parentId ?? null) === (message.parentId ?? null)
+      && candidate.role === message.role
+      && candidate.kind === message.kind
+      && candidate.delivery !== "queued"
+      && candidate.delivery !== "cancelled"
+      && candidate.delivery !== "failed",
+    )
+    .sort((left, right) => left.createdAt === right.createdAt
+      ? left.id.localeCompare(right.id)
+      : left.createdAt - right.createdAt);
+}
+
+/** Select the newest descendant of a version so switching a user revision
+ * restores its complete answer path rather than stopping at the user row. */
+export function newestBranchLeaf<T extends BranchEntity>(messages: readonly T[], messageId: string): string | null {
+  if (!messages.some((message) => message.id === messageId)) return null;
+  const visited = new Set<string>();
+  let current = messageId;
+  while (!visited.has(current)) {
+    visited.add(current);
+    const children = messages.filter((message) => message.parentId === current && !visited.has(message.id));
+    if (!children.length) break;
+    current = children.reduce((latest, candidate) => candidate.createdAt > latest.createdAt
+      || (candidate.createdAt === latest.createdAt && candidate.id.localeCompare(latest.id) > 0)
+      ? candidate
+      : latest).id;
+  }
+  return current;
+}
+
 type TimerHandle = ReturnType<typeof setTimeout>;
 type Schedule = (callback: () => void, delayMs: number) => TimerHandle;
 type Cancel = (handle: TimerHandle) => void;
