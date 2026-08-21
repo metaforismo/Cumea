@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowRight, Bug, Check, Download, FileText, ListChecks, Loader2, Monitor, Square, X } from "lucide-react";
 import { api, useStore, formatTime, type Bot, type Message } from "@/state/store";
 import { CumeaAvatar } from "./Avatar";
@@ -34,7 +34,10 @@ function checkedFileCapability(value: unknown): FileCapabilityView {
   };
 }
 
-function Bubble({ message, onOpenPath, onOpenAttachment }: { message: Message; onOpenPath: (path: string) => void; onOpenAttachment: (id: string) => void }) {
+// Rows are memoized: message references survive streamDelta dispatches, so
+// during token streaming only the streaming bubble re-renders — this is what
+// makes the transcript window's mounted-rows guarantee pay off.
+const Bubble = memo(function Bubble({ message, onOpenPath, onOpenAttachment }: { message: Message; onOpenPath: (path: string) => void; onOpenAttachment: (id: string) => void }) {
   const user = message.role === "user";
   return (
     <div className={cn("flex w-full", user ? "justify-end" : "justify-start")}>
@@ -56,9 +59,9 @@ function Bubble({ message, onOpenPath, onOpenAttachment }: { message: Message; o
       </div>
     </div>
   );
-}
+});
 
-function HandoffCard({ message }: { message: Message }) {
+const HandoffCard = memo(function HandoffCard({ message }: { message: Message }) {
   const handoff = message.handoff;
   if (!handoff) return null;
   return (
@@ -73,9 +76,9 @@ function HandoffCard({ message }: { message: Message }) {
       </div>
     </div>
   );
-}
+});
 
-function ActivityChip({ message }: { message: Message }) {
+const ActivityChip = memo(function ActivityChip({ message }: { message: Message }) {
   const tool = message.tool;
   if (!tool) return null;
   const failed = tool.ok === false;
@@ -87,13 +90,13 @@ function ActivityChip({ message }: { message: Message }) {
       </div>
     </div>
   );
-}
+});
 
-function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
+const ScreenFrame = memo(function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
   return <div className="flex justify-start"><img src={`data:${mime ?? "image/png"};base64,${png}`} alt="Bot's screen" className="max-w-[70%] rounded-2xl border border-hairline/40" /></div>;
-}
+});
 
-function StreamingBubble({ text, onOpenPath }: { text: string; onOpenPath: (path: string) => void }) {
+const StreamingBubble = memo(function StreamingBubble({ text, onOpenPath }: { text: string; onOpenPath: (path: string) => void }) {
   return (
     <div className="flex w-full justify-start">
       <div className="max-w-[70%] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
@@ -102,7 +105,7 @@ function StreamingBubble({ text, onOpenPath }: { text: string; onOpenPath: (path
       </div>
     </div>
   );
-}
+});
 
 export function ChatView({ bot, inspectorOpen = false, onToggleInspector }: { bot: Bot; inspectorOpen?: boolean; onToggleInspector?: () => void }) {
   const { state, dispatch } = useStore();

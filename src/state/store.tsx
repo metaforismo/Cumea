@@ -969,9 +969,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message });
           break;
         case "bot": {
-          const bot = frame.bot as Partial<Bot> & { id: string };
+          // patch a copy: mutating the parsed frame would alias any
+          // subscriber that retained the previous bot object
+          let bot = frame.bot as Partial<Bot> & { id: string };
           if (bot.unread && bot.id === stateRef.current.selectedId) {
-            bot.unread = false;
+            bot = { ...bot, unread: false };
             fetch(`/api/bots/${bot.id}`, {
               method: "PATCH",
               headers: { "content-type": "application/json" },

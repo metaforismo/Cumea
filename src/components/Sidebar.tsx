@@ -472,17 +472,22 @@ export function Sidebar() {
       .filter((bot) => !needle || `${bot.name} ${bot.title} ${bot.description} ${preview(bot)}`.toLowerCase().includes(needle))
       .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
   }, [query, state.bots]);
-  const groups = [
+  // memoized on the bots/sections identity: streamDelta dispatches replace
+  // neither, so these stay O(0) while a turn streams
+  const groups = useMemo(() => [
     ...state.workspace.sections.map((section) => ({
       id: section.id,
       name: section.name,
       bots: visibleBots.filter((bot) => bot.sectionId === section.id),
     })),
     { id: "unsectioned", name: state.workspace.sections.length ? "Bots" : "", bots: visibleBots.filter((bot) => !bot.sectionId) },
-  ].filter((group) => group.bots.length > 0);
-  const attentionCount = state.bots.reduce(
-    (count, bot) => count + bot.messages.filter((message) => message.kind === "options" && message.card && !message.card.answered && !message.card.dismissed).length,
-    0,
+  ].filter((group) => group.bots.length > 0), [state.workspace.sections, visibleBots]);
+  const attentionCount = useMemo(
+    () => state.bots.reduce(
+      (count, bot) => count + bot.messages.filter((message) => message.kind === "options" && message.card && !message.card.answered && !message.card.dismissed).length,
+      0,
+    ),
+    [state.bots],
   );
   const attentionLabel = attentionCount === 0
     ? "Needs you, no pending items"
