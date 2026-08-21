@@ -7,6 +7,7 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app } from "electron";
+import { createSpeechOutputHandler, speechExitReason } from "./speech-contract.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(__dirname, "resources", "speech-helper.swift");
@@ -16,7 +17,13 @@ const BIN = app.isPackaged
   ? path.join(process.resourcesPath, "speech-helper")
   : path.join(__dirname, "resources", "speech-helper");
 
-let child = null;
+let activeSession = null;
+
+function send(win, channel, value) {
+  if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+    win.webContents.send(channel, value);
+  }
+}
 
 function ensureBuilt() {
   if (app.isPackaged) return; // pre-built at package time
@@ -29,42 +36,72 @@ function ensureBuilt() {
 export function startSpeech(win) {
   stopSpeech();
   if (process.platform !== "darwin") {
-    if (!win.isDestroyed()) win.webContents.send("speech:end", { code: 1 });
-    return;
+    send(win, "speech:end", { code: 1, reason: "unsupported-platform" });
+    return { started: false };
   }
-  ensureBuilt();
-  const proc = spawn(BIN, [], { stdio: ["ignore", "pipe", "pipe"] });
-  child = proc;
+  try {
+    ensureBuilt();
+  } catch {
+    send(win, "speech:end", { code: 1, reason: "helper-unavailable" });
+    return { started: false };
+  }
 
-  let buf = "";
-  proc.stdout.on("data", (chunk) => {
-    buf += chunk;
-    let nl;
-    while ((nl = buf.indexOf("\n")) !== -1) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line) continue;
-      try {
-        if (!win.isDestroyed()) win.webContents.send("speech:transcript", JSON.parse(line));
-      } catch {
-        /* non-JSON noise on stdout — ignore */
-      }
-    }
+  let proc;
+  try {
+    proc = spawn(BIN, [], { stdio: ["ignore", "pipe", "pipe"] });
+  } catch {
+    send(win, "speech:end", { code: 1, reason: "helper-unavailable" });
+    return { started: false };
+  }
+  const session = {
+    proc,
+    win,
+    failureReason: null,
+    finished: false,
+    suppressEnd: false,
+    cleanupOutput: null,
+  };
+  activeSession = session;
+
+  const finish = (info) => {
+    if (session.finished) return;
+    session.finished = true;
+    session.cleanupOutput?.();
+    if (activeSession === session) activeSession = null;
+    if (!session.suppressEnd) send(win, "speech:end", info);
+  };
+
+  const isCurrent = () => (
+    activeSession === session
+    && !session.finished
+    && !session.suppressEnd
+  );
+  const onStdout = createSpeechOutputHandler({
+    isCurrent,
+    onTranscript: (value) => send(win, "speech:transcript", value),
+    onFailure: (reason) => {
+      session.failureReason = reason;
+    },
   });
+  proc.stdout.on("data", onStdout);
+  session.cleanupOutput = () => proc.stdout.removeListener("data", onStdout);
   proc.on("close", (code) => {
-    if (child === proc) child = null;
-    if (!win.isDestroyed()) win.webContents.send("speech:end", { code });
+    finish({ code, reason: speechExitReason(code, session.failureReason) });
   });
   proc.on("error", () => {
-    if (child === proc) child = null;
-    if (!win.isDestroyed()) win.webContents.send("speech:end", { code: 1 });
+    finish({ code: 1, reason: "helper-unavailable" });
   });
+  return { started: true };
 }
 
 export function stopSpeech() {
-  if (!child) return;
+  const session = activeSession;
+  if (!session) return;
+  activeSession = null;
+  session.suppressEnd = true;
+  session.finished = true;
+  session.cleanupOutput?.();
   try {
-    child.kill("SIGTERM");
+    session.proc.kill("SIGTERM");
   } catch {}
-  child = null;
 }
