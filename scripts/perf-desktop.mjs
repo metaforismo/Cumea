@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import { constants as fsConstants } from "node:fs";
 import {
   access,
@@ -15,7 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { performanceSummaryMarkdown, summarizePerformanceReports } from "./perf-lib.mjs";
+import { aggregateResourceSamples, performanceSummaryMarkdown, summarizePerformanceReports } from "./perf-lib.mjs";
 
 export const DESKTOP_RUN_SCHEMA = "cumea.desktop-performance-run";
 export const DESKTOP_RUN_VERSION = 1;
@@ -283,6 +284,55 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export const RESOURCE_SAMPLE_INTERVAL_MS = 250;
+const execFileAsync = promisify(execFile);
+
+/** Parse one `ps -o rss=,%cpu=` output into a numeric sample. */
+export function parseResourceSampleLine(stdout) {
+  const line = String(stdout ?? "")
+    .split("\n")
+    .map((entry) => entry.trim())
+    .find(Boolean);
+  if (!line) return null;
+  const [rss, cpu] = line.split(/\s+/);
+  const rssKb = Number.parseInt(rss, 10);
+  const cpuPercent = Number.parseFloat(cpu);
+  if (!Number.isFinite(rssKb) || rssKb < 0 || !Number.isFinite(cpuPercent) || cpuPercent < 0) return null;
+  return { rssKb, cpuPercent };
+}
+
+/** Poll the launch's root process RSS/CPU while it runs (darwin/linux via
+ * ps; Windows has no ps, so it collects nothing rather than guessing).
+ * Sampling is diagnostic footprint evidence alongside timings — the docs
+ * keep it separate from startup-latency claims. */
+export function startResourceSampling(
+  pid,
+  { platform = process.platform, intervalMs = RESOURCE_SAMPLE_INTERVAL_MS, sampleImpl = execFileAsync } = {},
+) {
+  const samples = [];
+  if (platform === "win32" || !(pid > 0)) {
+    return { samples, stop: async () => samples };
+  }
+  const sample = async () => {
+    try {
+      const { stdout } = await sampleImpl("ps", ["-o", "rss=,%cpu=", "-p", String(pid)]);
+      const parsed = parseResourceSampleLine(stdout);
+      if (parsed) samples.push(parsed);
+    } catch {
+      // the process tree may exit between ticks; remaining samples stand
+    }
+  };
+  const timer = setInterval(() => void sample(), intervalMs);
+  timer.unref?.();
+  return {
+    samples,
+    stop: async () => {
+      clearInterval(timer);
+      return samples;
+    },
+  };
+}
+
 async function terminateProcessTree(child, platform = process.platform) {
   if (!child.pid) return;
   if (platform === "win32") {
@@ -335,6 +385,7 @@ export async function runProcess({
   redactions = [],
   platform = process.platform,
   spawnImpl = spawn,
+  resourceSampling = false,
 }) {
   await mkdir(path.dirname(logFile), { recursive: true, mode: 0o700 });
   const startedAt = Date.now();
@@ -362,6 +413,7 @@ export async function runProcess({
   });
   child.stdout?.on("data", (data) => append("stdout", data));
   child.stderr?.on("data", (data) => append("stderr", data));
+  const sampler = resourceSampling ? startResourceSampling(child.pid, { platform }) : null;
 
   let timedOut = false;
   let settled = false;
@@ -384,12 +436,14 @@ export async function runProcess({
       resolve({ code, signal });
     });
   }).catch(async (error) => {
+    if (sampler) await sampler.stop();
     const output = redactText(Buffer.concat(chunks).toString("utf8"), redactions);
     await writeFile(logFile, `${output}${logTruncated ? "\n[log truncated]\n" : ""}`, {
       mode: 0o600,
     });
     throw error;
   });
+  if (sampler) await sampler.stop();
 
   const output = redactText(Buffer.concat(chunks).toString("utf8"), redactions);
   await writeFile(logFile, `${output}${logTruncated ? "\n[log truncated]\n" : ""}`, {
@@ -402,7 +456,12 @@ export async function runProcess({
       `Process exited with ${result.code ?? result.signal ?? "unknown status"}; see ${path.basename(logFile)}`,
     );
   }
-  return { ...result, wallDurationMs, logTruncated };
+  return {
+    ...result,
+    wallDurationMs,
+    logTruncated,
+    ...(sampler ? { resources: aggregateResourceSamples(sampler.samples) } : {}),
+  };
 }
 
 export function benchmarkEnvironment({
@@ -641,6 +700,7 @@ export async function runDesktopPerformance(
         logFile,
         redactions: [...redactions, userDataDir, dataDir],
         platform,
+        resourceSampling: true,
       });
       const report = await readValidatedReport(reportFile, {
         expectedMark: expectedMark(options.profile, clearCacheOnly),
@@ -657,6 +717,7 @@ export async function runDesktopPerformance(
         log: artifactPath(runDirectory, logFile),
         wallDurationMs: processResult.wallDurationMs,
         logTruncated: processResult.logTruncated,
+        ...(processResult.resources ? { resources: processResult.resources } : {}),
       });
       await writeJsonAtomic(manifestFile, manifest);
       return report;

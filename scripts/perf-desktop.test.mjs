@@ -8,12 +8,45 @@ import {
   benchmarkEnvironment,
   machineEvidence,
   parseDesktopPerformanceArgs,
+  parseResourceSampleLine,
   resolvePackagedExecutable,
   runDesktopPerformance,
   runProcess,
   sanitizeLabel,
+  startResourceSampling,
   validatePerformanceReport,
 } from "./perf-desktop.mjs";
+
+test("resource sample lines parse or reject cleanly", () => {
+  assert.deepEqual(parseResourceSampleLine(" 123456 7.5 "), { rssKb: 123_456, cpuPercent: 7.5 });
+  assert.deepEqual(parseResourceSampleLine("123456 7.5\n99999 1.0\n"), { rssKb: 123_456, cpuPercent: 7.5 });
+  assert.equal(parseResourceSampleLine(""), null);
+  assert.equal(parseResourceSampleLine("abc def"), null);
+  assert.equal(parseResourceSampleLine("-5 3"), null);
+});
+
+test("resource sampling collects ps output and stops on demand", async () => {
+  let calls = 0;
+  const sampler = startResourceSampling(4242, {
+    platform: "darwin",
+    intervalMs: 10,
+    sampleImpl: async () => {
+      calls += 1;
+      return { stdout: `${100_000 + calls} ${calls}.5` };
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const samples = await sampler.stop();
+  assert.ok(samples.length >= 2, `expected several samples, got ${samples.length}`);
+  assert.deepEqual(samples[0], { rssKb: 100_001, cpuPercent: 1.5 });
+});
+
+test("resource sampling is a no-op on Windows and invalid pids", async () => {
+  for (const [platform, pid] of [["win32", 4242], ["darwin", 0], ["darwin", undefined]]) {
+    const sampler = startResourceSampling(pid, { platform });
+    assert.deepEqual(await sampler.stop(), []);
+  }
+});
 
 test("desktop arguments keep profile and cache semantics distinct", () => {
   assert.equal(
