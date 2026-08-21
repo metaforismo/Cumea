@@ -959,8 +959,48 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const MAX_BUFFERED_FRAMES = 2_048;
 
+    // Stream deltas arrive one SSE frame per token chunk; coalescing them
+    // into one dispatch per flush window caps dispatch (and re-render) cost
+    // regardless of token rate. Any other frame flushes first so per-thread
+    // ordering is preserved.
+    const STREAM_FLUSH_MS = 50;
+    let pendingStreamDeltas = new Map<string, string>();
+    let streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const flushStreamDeltas = () => {
+      if (streamFlushTimer) {
+        clearTimeout(streamFlushTimer);
+        streamFlushTimer = null;
+      }
+      if (!pendingStreamDeltas.size) return;
+      const batches = [...pendingStreamDeltas];
+      pendingStreamDeltas = new Map();
+      for (const [threadId, delta] of batches) rawDispatch({ type: "streamDelta", threadId, delta });
+    };
+
+    const queueStreamDelta = (threadId: string, delta: string) => {
+      pendingStreamDeltas.set(threadId, (pendingStreamDeltas.get(threadId) ?? "") + delta);
+      if (!streamFlushTimer) {
+        streamFlushTimer = setTimeout(() => {
+          streamFlushTimer = null;
+          flushStreamDeltas();
+        }, STREAM_FLUSH_MS);
+      }
+    };
+
+    const dropPendingStreamDeltas = () => {
+      if (streamFlushTimer) {
+        clearTimeout(streamFlushTimer);
+        streamFlushTimer = null;
+      }
+      pendingStreamDeltas = new Map();
+    };
+
     const applyFrame = (cursorFrame: CursorFrame) => {
       const frame = cursorFrame as any;
+      const isAssistantDelta =
+        frame.kind === "runtime" && frame.event?.type === "content.delta" && frame.event?.streamKind === "assistant_text";
+      if (!isAssistantDelta) flushStreamDeltas();
       switch (frame.kind) {
         case "message":
           rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
@@ -986,8 +1026,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "runtime": {
           const event = frame.event;
           if (event.type === "content.delta" && event.streamKind === "assistant_text") {
-            rawDispatch({ type: "streamDelta", threadId: event.threadId, delta: event.delta });
+            queueStreamDelta(event.threadId, event.delta);
           } else if (event.type === "turn.completed") {
+            flushStreamDeltas();
             rawDispatch({ type: "streamClear", threadId: event.threadId });
           }
           break;
@@ -1041,6 +1082,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       syncing = true;
       buffered = [];
       bufferOverflow = false;
+      // a resync replaces transcript state wholesale — queued token deltas
+      // from the dropped connection would only corrupt ordering
+      dropPendingStreamDeltas();
       if (retryTimer) {
         clearTimeout(retryTimer);
         retryTimer = null;
@@ -1135,6 +1179,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       alive = false;
       syncGeneration += 1;
       if (retryTimer) clearTimeout(retryTimer);
+      dropPendingStreamDeltas();
       es.close();
     };
   }, []);
