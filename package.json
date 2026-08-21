@@ -47,6 +47,8 @@
     "release:sbom": "node scripts/generate-sbom.mjs",
     "release:checksums": "node scripts/generate-checksums.mjs --directory release --output release/SHA256SUMS",
     "release:verify-package": "node scripts/verify-package-contents.mjs",
+    "release:verify-package:linux": "node scripts/verify-package-platform.mjs linux",
+    "release:verify-package:win": "node scripts/verify-package-platform.mjs win",
     "test:performance": "node --check electron/main.mjs && node --check electron/cua.mjs && node --check electron/preload.cjs && node --check electron/desktop-gateway.mjs && node --check electron/harness-process.mjs && node --check scripts/perf-desktop.mjs && node --test electron/performance.test.mjs electron/desktop-gateway.test.mjs electron/harness-process.test.mjs scripts/perf-lib.test.mjs scripts/perf-desktop.test.mjs",
     "perf:budget": "node scripts/check-performance-budget.mjs",
     "perf:desktop": "node scripts/perf-desktop.mjs",
