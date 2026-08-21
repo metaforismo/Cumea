@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowRight, Bug, Check, Download, FileText, ListChecks, Loader2, Monitor, Square, X } from "lucide-react";
 import { api, useStore, formatTime, type Bot, type Message } from "@/state/store";
 import { CumeaAvatar } from "./Avatar";
 import { expressionForBot } from "@/lib/mascot";
+import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow } from "@/lib/bottom-follow";
+import { TRANSCRIPT_WINDOW_SIZE, expandWindowStart, focusWindowRange, resolveTranscriptWindow, tailWindowStart } from "@/lib/transcript-window";
 import { avatarForBot, avatarStateForBot } from "@/lib/mote";
 import { OptionCard } from "./OptionCard";
 import { Composer } from "./Composer";
@@ -114,11 +116,58 @@ export function ChatView({ bot, inspectorOpen = false, onToggleInspector }: { bo
   const streaming = state.streaming[bot.threadId];
   const provisioning = state.provisioning[bot.id];
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
+  const messages = bot.messages;
 
+  // Windowed transcript: only a tail of the thread mounts (screenshots make
+  // full threads DOM-heavy). The boundary is anchored per thread; a
+  // render-phase reset re-tails it on switch so the old thread's boundary
+  // never flashes into the new one.
+  const transcriptKey = `${bot.id}:${bot.threadId}`;
+  const [transcriptWindow, setTranscriptWindow] = useState<{ key: string; start: number; end: number | null }>(() => ({
+    key: transcriptKey,
+    start: tailWindowStart(messages.length),
+    end: null,
+  }));
+  if (transcriptWindow.key !== transcriptKey) {
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length), end: null });
+  }
+  const { visible: windowedMessages, hiddenCount, laterCount, endIndex } = useMemo(
+    () => resolveTranscriptWindow(messages, transcriptWindow.start, TRANSCRIPT_WINDOW_SIZE, transcriptWindow.end),
+    [messages, transcriptWindow.start, transcriptWindow.end],
+  );
+
+  // Scroll pinning: follow the bottom while the user hasn't scrolled away.
+  // Follow breaks ONLY on an upward user gesture (wheel/touch/keyboard),
+  // never on scroll position checks — streamed content growth flickers "at
+  // bottom" false for a frame, and breaking there kills follow permanently.
+  // Scrolling back down to the end re-arms it.
+  const [follow, setFollow] = useState(true);
+  const followRef = useRef(true);
+  const previousScrollTop = useRef(0);
+  const touchY = useRef(0);
+  const setBottomFollow = useCallback((next: boolean) => {
+    followRef.current = next;
+    setFollow(next);
+  }, []);
+  useEffect(() => setBottomFollow(true), [bot.id, setBottomFollow]);
+
+  // A search result may sit before the mounted tail. Open a bounded window
+  // around it first; the focus effect below scrolls to the row once React
+  // commits that window.
+  const appliedFocus = useRef<string | null>(null);
   useEffect(() => {
-    if (focus) return;
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [bot.id, bot.messages.length, streaming, bot.busy, focus]);
+    if (!focus) {
+      appliedFocus.current = null;
+      return;
+    }
+    if (appliedFocus.current === focus.messageId) return;
+    const targetIndex = messages.findIndex((m) => m.id === focus.messageId);
+    if (targetIndex < 0) return;
+    appliedFocus.current = focus.messageId;
+    const range = focusWindowRange(messages.length, targetIndex);
+    setBottomFollow(false);
+    setTranscriptWindow({ key: transcriptKey, start: range.start, end: range.end });
+  }, [focus, messages, setBottomFollow, transcriptKey]);
 
   useEffect(() => {
     if (!focus) return;
@@ -127,10 +176,66 @@ export function ChatView({ bot, inspectorOpen = false, onToggleInspector }: { bo
       focusRef.current?.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [focus?.messageId, bot.messages.length]);
+  }, [focus?.messageId, bot.messages.length, transcriptWindow.start, transcriptWindow.end]);
+
+  // deps track the FULL messages.length, so expanding the window (which only
+  // changes windowedMessages) can never re-trigger this bottom scrollTo
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !followRef.current) return;
+    el.scrollTo({ top: el.scrollHeight });
+    previousScrollTop.current = el.scrollTop;
+  }, [bot.id, messages.length, streaming, bot.busy, follow]);
+
+  // Expanding prepends rows: capture the height first, then after the commit
+  // shift scrollTop by the growth so the message under the cursor stays put
+  // (browser scroll anchoring is disabled on this container).
+  const preExpandHeight = useRef<number | null>(null);
+  const showEarlier = () => {
+    preExpandHeight.current = scrollRef.current?.scrollHeight ?? null;
+    setBottomFollow(false);
+    setTranscriptWindow((w) => ({ ...w, start: expandWindowStart(w.start) }));
+  };
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (preExpandHeight.current === null || !el) return;
+    el.scrollTop += el.scrollHeight - preExpandHeight.current;
+    preExpandHeight.current = null;
+    previousScrollTop.current = el.scrollTop;
+  }, [transcriptWindow.start]);
+
+  const showLater = () => {
+    setBottomFollow(false);
+    const nextEnd = Math.min(messages.length, endIndex + TRANSCRIPT_WINDOW_SIZE);
+    setTranscriptWindow((w) => ({ ...w, end: nextEnd >= messages.length ? null : nextEnd }));
+  };
+
+  // keyboard is a scroll gesture too: PageUp/Home break follow like an
+  // upward wheel; the at-end onScroll check re-arms it
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "PageUp" || (e.key === "Home" && !(e.target instanceof HTMLTextAreaElement))) setBottomFollow(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setBottomFollow]);
+
+  const atEnd = () => {
+    const el = scrollRef.current;
+    return !el || el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_FOLLOW_THRESHOLD;
+  };
+  const jumpToLatest = () => {
+    setBottomFollow(true);
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length), end: null });
+    requestAnimationFrame(() => {
+      const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: reduced ? "auto" : "smooth" });
+    });
+  };
 
   const returnToLatest = async () => {
     setReturningLatest(true);
+    setBottomFollow(true);
     try {
       const page = await api(`/api/bots/${encodeURIComponent(bot.id)}/messages?limit=80`);
       dispatch({ type: "latestMessages", threadId: bot.threadId, messages: page.messages ?? [] });
@@ -199,11 +304,44 @@ export function ChatView({ bot, inspectorOpen = false, onToggleInspector }: { bo
 
       {state.error && <div className="mx-auto w-full max-w-[900px] px-5"><div className="mb-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">{state.error}</div></div>}
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-5">
-        <div className="mx-auto flex max-w-[900px] flex-col gap-3 pb-4">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto px-5 [overflow-anchor:none]"
+        onWheel={(e) => {
+          if (e.deltaY < 0) setBottomFollow(false);
+          else if (atEnd()) setBottomFollow(true);
+        }}
+        onTouchStart={(e) => { touchY.current = e.touches[0]?.clientY ?? 0; }}
+        onTouchMove={(e) => {
+          const y = e.touches[0]?.clientY ?? 0;
+          if (y > touchY.current + 4) setBottomFollow(false);
+          else if (atEnd()) setBottomFollow(true);
+        }}
+        onScroll={() => {
+          const el = scrollRef.current;
+          if (!el) return;
+          const scrollTop = el.scrollTop;
+          const resume = shouldResumeBottomFollow({
+            following: followRef.current,
+            previousScrollTop: previousScrollTop.current,
+            scrollTop,
+            distanceFromBottom: el.scrollHeight - scrollTop - el.clientHeight,
+          });
+          previousScrollTop.current = scrollTop;
+          if (resume) setBottomFollow(true);
+        }}
+      >
+        <div className="mx-auto flex max-w-[900px] flex-col gap-3 pb-4" role="log" aria-live="polite" aria-label={`Conversation with ${bot.name}`}>
+          {hiddenCount > 0 && (
+            <div className="flex justify-center pt-2">
+              <button onClick={showEarlier} className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink">
+                Show earlier messages ({hiddenCount} more)
+              </button>
+            </div>
+          )}
           {first && <div className="py-3 text-center text-[13px] text-ink-secondary">Today {formatTime(first.at)}</div>}
           {focus?.hasMoreAfter && <div className="sticky top-2 z-10 flex justify-center py-1"><button onClick={() => void returnToLatest()} disabled={returningLatest} className="flex items-center gap-1.5 rounded-full border border-hairline/50 bg-panel/95 px-3 py-1.5 text-[12px] font-medium text-ink shadow-sm backdrop-blur hover:bg-raised disabled:opacity-60">{returningLatest ? <Loader2 size={13} className="animate-spin" /> : <ArrowDown size={13} />}Return to latest</button></div>}
-          {bot.messages.map((m) => {
+          {windowedMessages.map((m) => {
             let content: React.ReactNode = null;
             switch (m.kind) {
               case "options": content = <OptionCard botId={bot.id} message={m} />; break;
@@ -216,10 +354,23 @@ export function ChatView({ bot, inspectorOpen = false, onToggleInspector }: { bo
             const focused = focus?.messageId === m.id;
             return <div key={m.id} ref={focused ? focusRef : undefined} data-message-id={m.id} className={cn("scroll-my-20 rounded-2xl transition-shadow", focused && "ring-2 ring-accent/55 ring-offset-2 ring-offset-app")}>{content}</div>;
           })}
+          {laterCount > 0 && (
+            <div className="flex justify-center">
+              <button onClick={showLater} className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink">
+                Show later messages ({laterCount} more)
+              </button>
+            </div>
+          )}
           {provisioning && <div className="flex justify-start"><div className="flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary"><Loader2 size={13} className="animate-spin" />Setting up this bot's computer…</div></div>}
           {streaming ? <StreamingBubble text={streaming} onOpenPath={openPath} /> : bot.busy && <div className="flex justify-start"><div className="flex items-center gap-1.5 rounded-2xl bg-raised px-4 py-3"><span className="size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:0ms]" /><span className="size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:150ms]" /><span className="size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:300ms]" /></div></div>}
         </div>
       </div>
+
+      {!follow && (
+        <button onClick={jumpToLatest} aria-label="Jump to latest messages" className="absolute bottom-24 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[12.5px] font-medium text-ink shadow-lg backdrop-blur hover:bg-raised">
+          <ArrowDown size={13} />Jump to latest
+        </button>
+      )}
 
       <Composer bot={bot} />
       {fileViewer && <FileViewer file={fileViewer} onClose={() => setFileViewer(null)} />}
