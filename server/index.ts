@@ -31,6 +31,8 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { threadEventKey, threadEventPrefix } from "./event-key.ts";
 import { createAnswerGate } from "./request-answer-gate.ts";
 import { dismissOrphanedApprovals } from "./approval-reconciliation.ts";
+import { decideDeadReconciliation } from "./dead-run-reconciliation.ts";
+import { createScreenActivityMonitor } from "./screen-activity.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import {
@@ -412,7 +414,7 @@ bus.subscribe((event: RuntimeEvent) => {
           broadcastWorkspace();
         }
         // the bot just finished acting — refresh its screen preview now
-        pokeScreenPoller(bot.id);
+        screenActivity.poke(bot.id);
       }
       break;
     case "item.started":
@@ -527,7 +529,7 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       // the last live frame becomes a settled inline screen message —
       // the screenshot-in-chat moment
-      const frame = stopScreenPoller(bot.id);
+      const frame = screenActivity.stop(bot.id);
       if (frame && usedComputerByThread.has(event.threadId)) {
         const message = pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
         const runId = activeRunByThread.get(event.threadId);
@@ -562,49 +564,20 @@ bus.subscribe((event: RuntimeEvent) => {
 // ── live screen: poll the bot's box while it works ────────────────────
 // Frames stream to clients as SSE {kind:'screen'} (the "Bot's screen"
 // panel); the final frame is folded into the transcript on turn end.
-type Frame = { png: string; mime: string; capturedAt: number };
-const screenPollers = new Map<
-  string,
-  { timer: ReturnType<typeof setInterval>; capture: () => Promise<void>; last: Frame | null }
->();
+const screenActivity = createScreenActivityMonitor(
+  {
+    configured: () => box.boxConfigured(cfg),
+    screenshot: (botId) => box.screenshotBox(cfg, botId),
+  },
+  { onFrame: ({ botId, png, mime }) => broadcast({ kind: "screen", botId, png, mime }) },
+);
 
-function startScreenPoller(botId: string) {
-  if (screenPollers.has(botId) || !box.boxConfigured(cfg)) return;
-  let inFlight = false;
-  const capture = async () => {
-    if (inFlight) return;
-    inFlight = true;
-    try {
-      const { png, format } = await box.screenshotBox(cfg, botId);
-      const frame = { png, mime: format === "jpeg" ? "image/jpeg" : "image/png", capturedAt: Date.now() };
-      entry.last = frame;
-      broadcast({ kind: "screen", botId, png: frame.png, mime: frame.mime });
-    } catch {
-      /* box asleep or mid-command — try again next tick */
-    } finally {
-      inFlight = false;
-    }
-  };
-  const entry = {
-    timer: setInterval(capture, 4000),
-    capture,
-    last: null as Frame | null,
-  };
-  screenPollers.set(botId, entry);
-}
-
-/** Event-driven refresh: capture NOW (the bot just acted on its screen)
- * instead of waiting for the next interval tick. */
-function pokeScreenPoller(botId: string) {
-  void screenPollers.get(botId)?.capture();
-}
-
-function stopScreenPoller(botId: string): Frame | null {
-  const entry = screenPollers.get(botId);
-  if (!entry) return null;
-  clearInterval(entry.timer);
-  screenPollers.delete(botId);
-  return entry.last;
+/** Full screen-capture teardown for a thread whose run ended off the normal
+ * turn.completed path — provider reload, watchdog settlement, bot deletion.
+ * Mirrors the delete-path cleanup: stop the poller, drop the frames. */
+function stopScreenActivity(threadId: string) {
+  const bot = store.botByThread(threadId);
+  if (bot) screenActivity.stop(bot.id);
 }
 
 // Local computer-use contract written by Electron main on startup
@@ -908,7 +881,7 @@ async function startTurn(botId: string, text: string, opts: TurnOptions = {}) {
         workspace.bindTurn(runId, started.turnId);
         broadcastWorkspace();
       }
-      if (integrations.computer) startScreenPoller(bot.id);
+      if (integrations.computer) screenActivity.start(bot.id);
     } catch (e) {
       try { opts.onDispatchFailed?.(e); } catch (callbackError) { console.error("steering failure callback failed", callbackError); }
       const message = e instanceof Error ? e.message : String(e);
@@ -964,6 +937,9 @@ async function reloadProviders() {
       activeSteeringByThread.delete(bot.threadId);
     }
     if (bot.busy) {
+      // disposeAll killed this turn's engine — its screen poller must die
+      // with it, not keep capturing until some later turn completes.
+      stopScreenActivity(bot.threadId);
       store.patchBot(bot.id, { busy: false });
       const runId = activeRunByThread.get(bot.threadId);
       if (runId) {
@@ -1025,10 +1001,67 @@ async function dispatchDueRoutines() {
 const routineTimer = setInterval(() => void dispatchDueRoutines(), 30_000);
 routineTimer.unref();
 
+// ── dead-run reconciliation ───────────────────────────────────────────
+// The watchdog only projects state; something must still settle a run whose
+// engine died without emitting turn.completed, or the bot stays busy with
+// no live engine until restart/reload/delete. The consecutive-dead-tick
+// accounting lives here (not in the watchdog) so the watchdog stays a pure
+// projector. Run ids are strings, so this cannot be a WeakMap.
+const deadTicksByRun = new Map<string, number>();
+
+function isActiveRun(projection: RunLifecycleProjection) {
+  return activeRunByThread.get(projection.threadId) === projection.runId && Boolean(store.botByThread(projection.threadId));
+}
+
+/** Settle a twice-projected-dead run through the same failure path a real
+ * turn.completed failure uses: final screen frame, run completed-as-failed,
+ * steering delivery failed, bot unbusy. No transcript activity is invented. */
+function reconcileDeadRun(projection: RunLifecycleProjection) {
+  const bot = store.botByThread(projection.threadId);
+  if (!bot) return;
+  const frame = screenActivity.stop(bot.id);
+  if (frame && usedComputerByThread.has(projection.threadId)) {
+    const message = store.appendMessage(projection.threadId, { role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
+    broadcast({ kind: "message", threadId: projection.threadId, message });
+    workspace.addArtifact(projection.runId, { kind: "screen", label: "Final screen", messageId: message.id, mime: frame.mime });
+  }
+  workspace.completeRun(projection.runId, false, "Agent stopped responding — no runtime signal.");
+  activeRunByThread.delete(projection.threadId);
+  lifecycleWatchdog.stop(projection.threadId);
+  deadTicksByRun.delete(projection.runId);
+  broadcastWorkspace();
+  const steeringMessageIds = activeSteeringByThread.get(projection.threadId);
+  if (steeringMessageIds?.length) {
+    try {
+      patchSteeringDelivery(projection.threadId, steeringMessageIds, "failed");
+    } catch (error) {
+      console.error("settled steering delivery state could not be persisted", error);
+    } finally {
+      activeSteeringByThread.delete(projection.threadId);
+    }
+  }
+  store.patchBot(bot.id, { busy: false, unread: true });
+  broadcast({ kind: "bot", bot: store.bot(bot.id) });
+  clearThreadEventState(projection.threadId);
+  scheduleSteeringDrain(bot.id);
+}
+
 const lifecycleTimer = setInterval(() => {
   const { projections, alerts } = lifecycleWatchdog.tick();
   let changed = false;
+  const projected = new Set<string>();
   for (const value of projections) {
+    projected.add(value.runId);
+    const decision = decideDeadReconciliation({
+      deadTicks: deadTicksByRun.get(value.runId) ?? 0,
+      tick: value.state === "dead",
+    });
+    if (decision.deadTicks > 0) deadTicksByRun.set(value.runId, decision.deadTicks);
+    else deadTicksByRun.delete(value.runId);
+    if (decision.settle && isActiveRun(value)) {
+      reconcileDeadRun(value);
+      continue;
+    }
     const current = workspace.run(value.runId)?.lifecycle;
     const semanticChange =
       !current ||
@@ -1037,6 +1070,9 @@ const lifecycleTimer = setInterval(() => {
       current.reason !== value.reason;
     if (semanticChange) changed = workspace.setRunLifecycle(value.runId, value) || changed;
   }
+  // a run that left the watchdog (completed/stopped elsewhere) can neither
+  // recover nor accumulate dead ticks — forget it
+  for (const runId of deadTicksByRun.keys()) if (!projected.has(runId)) deadTicksByRun.delete(runId);
   for (const alert of alerts) changed = workspace.markLifecycleAttention(alert.runId, alert) || changed;
   if (changed) broadcastWorkspace();
 }, 15_000);
@@ -1762,7 +1798,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       const operationId = /^[\w-]{1,100}$/.test(rawOperationId) ? rawOperationId : undefined;
       // a running turn dies with its bot
       await registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId).catch(() => {});
-      stopScreenPoller(bot.id);
+      stopScreenActivity(bot.threadId);
       const runId = activeRunByThread.get(bot.threadId);
       if (runId) {
         workspace.completeRun(runId, false, "interrupted");
@@ -2018,7 +2054,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, surface:
       if (!REMOTE_SCREEN_PREVIEW) return json(res, 403, { error: "computer preview is disabled" });
       const bot = store.bot(m[1]);
       if (!bot || bot.hidden) return json(res, 404, { error: "no such bot" });
-      const cached = screenPollers.get(bot.id)?.last;
+      const cached = screenActivity.peek(bot.id);
       const transcript = [...store.messagesFor(bot.threadId)]
         .reverse()
         .find((message) => message.kind === "screen" && message.png);

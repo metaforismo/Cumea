@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
 
@@ -106,8 +106,10 @@ function inline(text: string, keyBase: string, onOpenFile?: (path: string) => vo
   return output;
 }
 
-/** Deliberately small renderer: React text nodes only, never raw model/file HTML. */
-export function SafeMarkdown({ text, className, onOpenFile }: SafeMarkdownProps) {
+/** Deliberately small renderer: React text nodes only, never raw model/file HTML.
+ * Memoized: settled bubbles re-parse nothing when a parent re-renders around
+ * them (e.g. every stream delta). */
+export const SafeMarkdown = memo(function SafeMarkdown({ text, className, onOpenFile }: SafeMarkdownProps) {
   const rows: ReactNode[] = [];
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   let fence: { language: string; lines: string[]; start: number } | null = null;
@@ -169,4 +171,4 @@ export function SafeMarkdown({ text, className, onOpenFile }: SafeMarkdownProps)
     rows.push(<pre key={`code-${fence.start}`} className="my-2 overflow-x-auto rounded-xl bg-inset p-3 text-[12px] leading-relaxed"><code>{fence.lines.join("\n")}</code></pre>);
   }
   return <div className={className}>{rows}</div>;
-}
+});
