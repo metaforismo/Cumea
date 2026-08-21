@@ -22,9 +22,9 @@ import { CumeaAvatar, InitialsAvatar } from "./Avatar";
 import { expressionForBot } from "@/lib/mascot";
 import { avatarForBot, avatarStateForBot } from "@/lib/mote";
 import { cn } from "@/lib/cn";
+import { currentPlatformCapabilities } from "@/lib/platform-capabilities";
 
-const electronPlatform = window.cumea?.platform;
-const isElectron = Boolean(electronPlatform);
+const { platform: electronPlatform, desktop: isElectron } = currentPlatformCapabilities();
 const isMacElectron = electronPlatform === "darwin";
 
 interface TranscriptSearchHit {
