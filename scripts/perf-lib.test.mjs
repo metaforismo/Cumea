@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { collectFiles, evaluateBudget } from "./check-performance-budget.mjs";
 import {
+  aggregateResourceSamples,
   comparePerformanceSummaries,
   performanceComparisonMarkdown,
   performanceSummaryMarkdown,
@@ -34,6 +35,22 @@ test("percentiles use deterministic linear interpolation", () => {
   assert.equal(percentile([40, 10, 30, 20], 0.5), 25);
   assert.equal(percentile([10, 20], 0.95), 19.5);
   assert.equal(percentile([], 0.5), null);
+});
+
+test("resource samples aggregate to a footprint or nothing", () => {
+  assert.equal(aggregateResourceSamples([]), null);
+  assert.equal(aggregateResourceSamples(undefined), null);
+  assert.equal(aggregateResourceSamples([{ rssKb: Number.NaN, cpuPercent: 1 }]), null);
+  const aggregate = aggregateResourceSamples([
+    { rssKb: 100_000, cpuPercent: 5 },
+    { rssKb: 200_000, cpuPercent: 15 },
+    { rssKb: 150_000, cpuPercent: 10 },
+    { rssKb: -3, cpuPercent: 10 }, // invalid rows are dropped
+  ]);
+  assert.deepEqual(
+    { samples: aggregate.samples, rssKb: aggregate.rssKb, cpuPercentMax: aggregate.cpuPercent.max },
+    { samples: 3, rssKb: { median: 150_000, max: 200_000 }, cpuPercentMax: 15 },
+  );
 });
 
 test("summaries and comparisons retain sample evidence", () => {

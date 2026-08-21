@@ -21,6 +21,19 @@ For packaged startup phase semantics and the P0.03 split, see
 
 ## Run the packaged benchmark
 
+### Resource footprint sampling
+
+Alongside timings, every launch sample polls the root process RSS and CPU
+every 250 ms (`ps` on macOS/Linux; Windows collects nothing rather than
+guessing) and records an aggregate per run in the run manifest:
+`resources: { samples, rssKb: {median, max}, cpuPercent: {median, max} }`.
+
+This is diagnostic footprint evidence for a fixed machine, the same caveat
+as the timing numbers above — it says what one packaged launch consumed,
+not what users will see on arbitrary hardware. It measures the root
+process only; helper children (harness, speech helper) are covered
+indirectly at best.
+
 On macOS, the default command builds an unsigned directory package and then measures five returning-
 profile warm launches:
 

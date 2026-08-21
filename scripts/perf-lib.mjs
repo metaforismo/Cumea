@@ -23,6 +23,28 @@ export function percentile(values, fraction) {
   return round(sorted[lower] * (1 - weight) + sorted[upper] * weight);
 }
 
+/** Aggregate {rssKb, cpuPercent} samples from a launch into one footprint.
+ * Returns null when nothing usable was collected, so reports from platforms
+ * without a sampler stay schema-identical to older ones. */
+export function aggregateResourceSamples(samples) {
+  const valid = (samples ?? []).filter(
+    (sample) =>
+      sample &&
+      Number.isFinite(sample.rssKb) &&
+      sample.rssKb >= 0 &&
+      Number.isFinite(sample.cpuPercent) &&
+      sample.cpuPercent >= 0,
+  );
+  if (!valid.length) return null;
+  const rssKb = valid.map((sample) => sample.rssKb);
+  const cpuPercent = valid.map((sample) => sample.cpuPercent);
+  return {
+    samples: valid.length,
+    rssKb: { median: percentile(rssKb, 0.5), max: Math.round(Math.max(...rssKb)) },
+    cpuPercent: { median: percentile(cpuPercent, 0.5), max: round(Math.max(...cpuPercent)) },
+  };
+}
+
 function environmentValues(reports, key) {
   return Array.from(
     new Set(
